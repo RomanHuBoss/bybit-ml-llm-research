@@ -1,0 +1,355 @@
+from __future__ import annotations
+
+import re
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any
+from urllib.parse import quote_plus, urlparse
+
+import requests
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+from .config import settings
+from .db import execute_many_values, fetch_all
+from .features import load_market_frame
+from .llm import classify_news_with_llm
+
+_analyzer = SentimentIntensityAnalyzer()
+
+
+SYMBOL_ALIASES: dict[str, str] = {
+    "BTC": "bitcoin OR BTC",
+    "ETH": "ethereum OR ETH",
+    "SOL": "solana OR SOL",
+    "XRP": "ripple OR XRP",
+    "DOGE": "dogecoin OR DOGE",
+    "BNB": "bnb OR binance coin",
+    "ADA": "cardano OR ADA",
+    "SUI": "sui blockchain OR SUI",
+    "AAVE": "aave OR AAVE",
+    "LINK": "chainlink OR LINK",
+    "AVAX": "avalanche crypto OR AVAX",
+    "LTC": "litecoin OR LTC",
+    "NEAR": "near protocol OR NEAR",
+    "PEPE": "pepe coin OR PEPE",
+    "HYPE": "hyperliquid OR HYPE",
+}
+
+
+def _safe_get_json(url: str, params: dict[str, Any] | None = None, timeout: int = 30) -> dict[str, Any]:
+    response = requests.get(url, params=params, timeout=timeout, headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"})
+    response.raise_for_status()
+    return response.json()
+
+
+def _safe_get_text(url: str, timeout: int = 30) -> str:
+    response = requests.get(url, timeout=timeout, headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"})
+    response.raise_for_status()
+    return response.text
+
+
+def _base_symbol(symbol: str) -> str:
+    base = symbol.upper().replace("USDT", "")
+    if base.startswith("1000"):
+        base = base[4:]
+    return base
+
+
+def _symbol_query(symbol: str) -> str:
+    base = _base_symbol(symbol)
+    return SYMBOL_ALIASES.get(base, f"{base} cryptocurrency")
+
+
+def _label_from_score(score: float) -> str:
+    if score <= -0.55:
+        return "strong_bearish"
+    if score <= -0.15:
+        return "bearish"
+    if score >= 0.55:
+        return "strong_bullish"
+    if score >= 0.15:
+        return "bullish"
+    return "neutral"
+
+
+def _parse_source_def(raw: str) -> tuple[str, str]:
+    if "|" in raw:
+        url, name = raw.split("|", 1)
+        return url.strip(), name.strip()
+    url = raw.strip()
+    host = urlparse(url).netloc.replace("www.", "") or "rss"
+    return url, host
+
+
+def _parse_rss_date(text: str | None) -> datetime | None:
+    if not text:
+        return None
+    try:
+        parsed = parsedate_to_datetime(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _title_matches_symbol(title: str, symbol: str) -> bool:
+    base = _base_symbol(symbol)
+    if base in {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA"}:
+        pattern = rf"\b({re.escape(base)}|{_symbol_query(symbol).replace(' OR ', '|')})\b"
+    else:
+        pattern = rf"\b{re.escape(base)}\b"
+    return bool(re.search(pattern, title, flags=re.IGNORECASE))
+
+
+def sync_fear_greed(limit: int = 30) -> int:
+    if not settings.use_fear_greed:
+        return 0
+    payload = _safe_get_json("https://api.alternative.me/fng/", params={"limit": limit, "format": "json"})
+    rows = []
+    for item in payload.get("data", []):
+        day = datetime.fromtimestamp(int(item["timestamp"]), tz=timezone.utc).date()
+        value = float(item["value"])
+        score = (value - 50.0) / 50.0
+        rows.append((day, "alternative_fng", "MARKET", score, item.get("value_classification"), item))
+    return execute_many_values(
+        """
+        INSERT INTO sentiment_daily(day, source, symbol, score, label, raw_json)
+        VALUES %s
+        ON CONFLICT(day, source, symbol)
+        DO UPDATE SET score=EXCLUDED.score, label=EXCLUDED.label, raw_json=EXCLUDED.raw_json
+        """,
+        rows,
+    )
+
+
+def fetch_gdelt_news(symbol: str, days: int = 2, maxrecords: int = 75) -> list[dict[str, Any]]:
+    if not settings.use_gdelt:
+        return []
+    query = quote_plus(f"({_symbol_query(symbol)}) crypto market")
+    timespan = f"{max(1, days)}d"
+    url = f"https://api.gdeltproject.org/api/v2/doc/doc?query={query}&mode=artlist&format=json&maxrecords={maxrecords}&timespan={timespan}"
+    try:
+        payload = _safe_get_json(url, timeout=40)
+        return payload.get("articles", [])
+    except Exception:
+        return []
+
+
+def _insert_news(rows: list[tuple]) -> int:
+    return execute_many_values(
+        """
+        INSERT INTO news_items(source, symbol, published_at, title, url, source_domain, sentiment_score, llm_score, llm_label, raw_json)
+        VALUES %s
+        ON CONFLICT(source, url)
+        DO UPDATE SET sentiment_score=EXCLUDED.sentiment_score, llm_score=EXCLUDED.llm_score, llm_label=EXCLUDED.llm_label, raw_json=EXCLUDED.raw_json
+        """,
+        rows,
+    )
+
+
+def _aggregate_news_daily(symbol: str, source: str, rows: list[tuple]) -> int:
+    if not rows:
+        return 0
+    by_day: dict[Any, list[float]] = {}
+    for _, _, published_at, _, _, _, vader_score, llm_score, _, _ in rows:
+        day = (published_at or datetime.now(timezone.utc)).date()
+        score = float(llm_score if llm_score is not None else vader_score)
+        by_day.setdefault(day, []).append(score)
+    daily_rows = [
+        (day, source, symbol.upper(), sum(vals) / len(vals), "news_avg", {"n": len(vals)})
+        for day, vals in by_day.items()
+    ]
+    return execute_many_values(
+        """
+        INSERT INTO sentiment_daily(day, source, symbol, score, label, raw_json)
+        VALUES %s
+        ON CONFLICT(day, source, symbol)
+        DO UPDATE SET score=EXCLUDED.score, label=EXCLUDED.label, raw_json=EXCLUDED.raw_json
+        """,
+        daily_rows,
+    )
+
+
+def sync_gdelt_news(symbol: str, days: int = 2, use_llm: bool = False) -> int:
+    articles = fetch_gdelt_news(symbol, days=days)
+    rows = []
+    for article in articles:
+        title = article.get("title") or ""
+        if not title:
+            continue
+        vader_score = float(_analyzer.polarity_scores(title)["compound"])
+        llm_score = None
+        llm_label = None
+        if use_llm:
+            llm = classify_news_with_llm(title, symbol)
+            llm_score = llm["score"]
+            llm_label = llm["label"]
+        published = article.get("seendate")
+        published_at = None
+        if published:
+            try:
+                published_at = datetime.strptime(published[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            except Exception:
+                published_at = None
+        rows.append(("gdelt", symbol.upper(), published_at, title, article.get("url"), article.get("domain"), vader_score, llm_score, llm_label, article))
+    inserted = _insert_news(rows)
+    _aggregate_news_daily(symbol, "gdelt_news", rows)
+    return inserted
+
+
+def sync_rss_news(symbols: list[str], use_llm: bool = False) -> dict[str, int]:
+    if not settings.use_rss:
+        return {s.upper(): 0 for s in symbols}
+    symbols = [s.upper() for s in symbols]
+    per_symbol: dict[str, list[tuple]] = {s: [] for s in symbols}
+    market_rows: list[tuple] = []
+    for raw_source in settings.rss_urls:
+        url, name = _parse_source_def(raw_source)
+        if not url:
+            continue
+        try:
+            xml = _safe_get_text(url, timeout=35)
+            root = ET.fromstring(xml)
+        except Exception:
+            continue
+        items = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
+        for item in items[:120]:
+            title = item.findtext("title") or item.findtext("{http://www.w3.org/2005/Atom}title") or ""
+            title = " ".join(title.split())
+            if not title:
+                continue
+            link = item.findtext("link") or ""
+            if not link:
+                link_node = item.find("{http://www.w3.org/2005/Atom}link")
+                link = link_node.attrib.get("href", "") if link_node is not None else ""
+            published_at = _parse_rss_date(item.findtext("pubDate") or item.findtext("published") or item.findtext("updated"))
+            vader_score = float(_analyzer.polarity_scores(title)["compound"])
+            llm_score = None
+            llm_label = None
+            if use_llm:
+                llm = classify_news_with_llm(title, "MARKET")
+                llm_score = llm["score"]
+                llm_label = llm["label"]
+            raw = {"rss_source": name, "url": url}
+            row = (f"rss:{name}", "MARKET", published_at, title, link or f"rss://{name}/{hash(title)}", urlparse(link).netloc, vader_score, llm_score, llm_label, raw)
+            market_rows.append(row)
+            for symbol in symbols:
+                if _title_matches_symbol(title, symbol):
+                    per_symbol[symbol].append((f"rss:{name}", symbol, published_at, title, link or f"rss://{name}/{hash(title)}", urlparse(link).netloc, vader_score, llm_score, llm_label, raw))
+    inserted_market = _insert_news(market_rows)
+    result: dict[str, int] = {"MARKET": inserted_market}
+    _aggregate_news_daily("MARKET", "rss_news", market_rows)
+    for symbol, rows in per_symbol.items():
+        result[symbol] = _insert_news(rows)
+        _aggregate_news_daily(symbol, "rss_news", rows)
+    return result
+
+
+def sync_cryptopanic(symbol: str, use_llm: bool = False) -> int:
+    if not settings.use_cryptopanic or not settings.cryptopanic_token:
+        return 0
+    base = _base_symbol(symbol)
+    params = {"auth_token": settings.cryptopanic_token, "currencies": base, "filter": "hot", "public": "true"}
+    try:
+        payload = _safe_get_json("https://cryptopanic.com/api/developer/v2/posts/", params=params, timeout=40)
+    except Exception:
+        return 0
+    rows = []
+    for item in payload.get("results", []):
+        title = item.get("title") or ""
+        if not title:
+            continue
+        vader_score = float(_analyzer.polarity_scores(title)["compound"])
+        llm_score = None
+        llm_label = None
+        if use_llm:
+            llm = classify_news_with_llm(title, symbol)
+            llm_score = llm["score"]
+            llm_label = llm["label"]
+        published_at = None
+        if item.get("published_at"):
+            try:
+                published_at = datetime.fromisoformat(item["published_at"].replace("Z", "+00:00"))
+            except Exception:
+                published_at = None
+        rows.append(("cryptopanic", symbol.upper(), published_at, title, item.get("url"), None, vader_score, llm_score, llm_label, item))
+    inserted = _insert_news(rows)
+    _aggregate_news_daily(symbol, "cryptopanic_news", rows)
+    return inserted
+
+
+def sync_market_sentiment(symbol: str, category: str = "linear", interval: str = "60", limit: int = 500) -> int:
+    if not settings.use_market_sentiment:
+        return 0
+    df = load_market_frame(category, symbol, interval, limit=limit)
+    if df.empty or len(df) < 80:
+        return 0
+    rows = []
+    for _, row in df.tail(240).iterrows():
+        ret_24 = float(row.get("ret_24", 0) or 0)
+        oi_chg = float(row.get("oi_change_24", 0) or 0)
+        funding = float(row.get("funding_rate", 0) or 0)
+        vol_z = float(row.get("volume_z", 0) or 0)
+        trend = float(row.get("ema20_50_gap", 0) or 0)
+        score = 0.0
+        score += max(-0.4, min(0.4, ret_24 * 8.0))
+        score += max(-0.25, min(0.25, trend * 10.0))
+        score += max(-0.20, min(0.20, oi_chg * 4.0))
+        # Crowded funding is contrarian, so very positive funding lowers score and negative funding raises score.
+        score += max(-0.20, min(0.20, -funding * 180.0))
+        score += max(-0.10, min(0.10, vol_z * 0.025))
+        score = max(-1.0, min(1.0, score))
+        components = {"ret_24": ret_24, "oi_change_24": oi_chg, "funding_rate": funding, "volume_z": vol_z, "ema20_50_gap": trend}
+        rows.append((row["start_time"], "market_microstructure", symbol.upper(), interval, score, _label_from_score(score), components))
+    return execute_many_values(
+        """
+        INSERT INTO sentiment_intraday(ts, source, symbol, interval, score, label, components)
+        VALUES %s
+        ON CONFLICT(ts, source, symbol, interval)
+        DO UPDATE SET score=EXCLUDED.score, label=EXCLUDED.label, components=EXCLUDED.components
+        """,
+        rows,
+    )
+
+
+def sync_sentiment_bundle(symbols: list[str], days: int, use_llm: bool = False, category: str = "linear", interval: str = "60") -> dict[str, Any]:
+    symbols = [s.upper() for s in symbols]
+    result: dict[str, Any] = {
+        "fear_greed": sync_fear_greed(limit=max(30, days + 5)),
+        "rss_news": sync_rss_news(symbols, use_llm=use_llm),
+        "symbols": {},
+        "cryptopanic_enabled": bool(settings.use_cryptopanic and settings.cryptopanic_token),
+    }
+    for symbol in symbols:
+        gdelt = sync_gdelt_news(symbol, days=min(max(days, 1), 7), use_llm=use_llm)
+        cp = sync_cryptopanic(symbol, use_llm=use_llm)
+        market_micro = sync_market_sentiment(symbol, category=category, interval=interval)
+        result["symbols"][symbol] = {"gdelt_news": gdelt, "cryptopanic_news": cp, "market_microstructure": market_micro}
+    return result
+
+
+def sentiment_summary(symbol: str = "BTCUSDT", limit: int = 20) -> dict[str, Any]:
+    symbol = symbol.upper()
+    daily = fetch_all(
+        """
+        SELECT day, source, symbol, score, label
+        FROM sentiment_daily
+        WHERE symbol IN (%s, 'MARKET')
+        ORDER BY day DESC, source
+        LIMIT %s
+        """,
+        (symbol, limit),
+    )
+    intraday = fetch_all(
+        """
+        SELECT ts, source, symbol, interval, score, label, components
+        FROM sentiment_intraday
+        WHERE symbol=%s
+        ORDER BY ts DESC, source
+        LIMIT %s
+        """,
+        (symbol, limit),
+    )
+    return {"daily": daily, "intraday": intraday}

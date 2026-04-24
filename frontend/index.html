@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bybit ML/LLM Research Lab</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Bybit ML/LLM Research Lab</h1>
+      <p>Локальный аналитический стенд: Bybit + ML + LLM + бесплатный sentiment pipeline + paper research</p>
+    </div>
+    <div class="status" id="statusBox">Проверка...</div>
+  </header>
+
+  <main class="layout">
+    <section class="panel controls">
+      <h2>Управление</h2>
+      <label>Символы <input id="symbols" value="BTCUSDT,ETHUSDT,SOLUSDT" /></label>
+      <label>Категория <input id="category" value="linear" /></label>
+      <label>Интервал <input id="interval" value="60" /></label>
+      <label>Дней истории <input id="days" type="number" value="120" min="1" max="1000" /></label>
+      <label>Universe mode
+        <select id="universeMode">
+          <option>hybrid</option>
+          <option>core</option>
+          <option>dynamic</option>
+        </select>
+      </label>
+      <label>Стратегия
+        <select id="strategy">
+          <option>regime_adaptive_combo</option>
+          <option>donchian_atr_breakout</option>
+          <option>ema_pullback_trend</option>
+          <option>bollinger_rsi_reversion</option>
+          <option>funding_extreme_contrarian</option>
+          <option>oi_trend_confirmation</option>
+          <option>volatility_squeeze_breakout</option>
+          <option>sentiment_fear_reversal</option>
+          <option>sentiment_greed_reversal</option>
+        </select>
+      </label>
+      <div class="button-grid">
+        <button id="syncUniverseBtn">Sync universe</button>
+        <button id="syncMarketBtn">Sync market</button>
+        <button id="syncSentimentBtn">Sync sentiment</button>
+        <button id="buildSignalsBtn">Build signals</button>
+        <button id="rankBtn">Rank candidates</button>
+        <button id="backtestBtn">Backtest</button>
+        <button id="trainBtn">Train ML</button>
+        <button id="predictBtn">ML latest</button>
+      </div>
+      <pre id="log" class="log"></pre>
+    </section>
+
+    <section class="panel kpis">
+      <div class="kpi"><span>Свечей</span><strong id="kpiCandles">—</strong></div>
+      <div class="kpi"><span>Universe</span><strong id="kpiUniverse">—</strong></div>
+      <div class="kpi"><span>Live trading</span><strong>OFF</strong></div>
+      <div class="kpi"><span>Режим</span><strong>Research</strong></div>
+      <div class="kpi"><span>Sentiment</span><strong id="kpiSentiment">Free</strong></div>
+      <div class="kpi"><span>ML/LLM</span><strong>Local</strong></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Dynamic / Hybrid universe</h2>
+      <div class="table-wrap">
+        <table id="universeTable">
+          <thead><tr><th>#</th><th>Символ</th><th>Reason</th><th>Liquidity</th><th>Spread %</th><th>Turnover 24h</th><th>OI value</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Research ranking</h2>
+      <div class="table-wrap">
+        <table id="rankTable">
+          <thead><tr><th>Score</th><th>Символ</th><th>Стратегия</th><th>Dir</th><th>Conf</th><th>PF</th><th>Sharpe</th><th>DD</th><th>ROC AUC</th><th>Spread</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Последние сигналы</h2>
+      <div class="table-wrap">
+        <table id="signalsTable">
+          <thead>
+            <tr>
+              <th>ID</th><th>Время</th><th>Символ</th><th>Стратегия</th><th>Направление</th><th>Confidence</th><th>Entry</th><th>SL</th><th>TP</th><th>LLM</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel chart-panel">
+      <h2>Equity curve последнего бэктеста</h2>
+      <canvas id="equityCanvas" width="900" height="320"></canvas>
+    </section>
+
+    <section class="panel">
+      <h2>Последние новости / сентимент</h2>
+      <div id="sentimentBox" class="sentiment-box"></div>
+      <div id="newsList" class="news-list"></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>LLM brief</h2>
+      <pre id="briefBox" class="brief">Выберите сигнал и нажмите LLM.</pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
