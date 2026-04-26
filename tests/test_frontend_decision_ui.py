@@ -37,6 +37,9 @@ def test_frontend_keeps_technical_data_secondary():
     assert '<details class="panel technical-details">' in html
     assert '<details class="ops-drawer">' in html
     assert "Операции с данными" in html
+    assert "context-tab" in html
+    assert "Review context" in html
+    assert "right-rail" not in html
 
 
 def test_frontend_logic_contains_operator_trade_guards():
@@ -47,6 +50,7 @@ def test_frontend_logic_contains_operator_trade_guards():
         "function decisionFor",
         "function riskReward",
         "function operatorProtocol",
+        "function setContextTab",
         "Красных пунктов",
         "НЕТ ВХОДА",
         "К ПРОВЕРКЕ",

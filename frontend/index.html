@@ -12,7 +12,7 @@
       <div class="brand-mark">BR</div>
       <div class="brand-copy">
         <h1>Рабочее место оператора</h1>
-        <p>Intraday MTF · 15m entry · 60m bias · 240m veto · <b>LIVE OFF</b></p>
+        <p>15m entry · 60m bias · 240m regime veto · <b>LIVE OFF</b></p>
       </div>
     </div>
     <div class="top-status" aria-label="Состояние сервисов">
@@ -26,7 +26,7 @@
 
   <main class="terminal-shell">
     <aside class="left-rail">
-      <section class="panel kpi-panel">
+      <section class="panel kpi-panel" aria-label="Сводка данных">
         <div class="kpi-row">
           <div><span>Свечи</span><b id="kpiCandles">—</b></div>
           <div><span>Universe</span><b id="kpiUniverse">—</b></div>
@@ -37,12 +37,12 @@
       <section class="panel queue-panel">
         <div class="panel-head compact-head">
           <div>
-            <p class="eyebrow">Queue</p>
-            <h2>Кандидаты</h2>
+            <p class="eyebrow">Candidate queue</p>
+            <h2>Очередь решений</h2>
           </div>
           <button id="refreshAllBtn" class="icon-button primary" title="Обновить экран">↻</button>
         </div>
-        <div class="queue-filters segmented">
+        <div class="queue-filters segmented" role="tablist" aria-label="Фильтр кандидатов">
           <button class="filter active" data-filter="all">Все</button>
           <button class="filter" data-filter="review">Вход</button>
           <button class="filter" data-filter="watch">Watch</button>
@@ -106,10 +106,10 @@
       </details>
     </aside>
 
-    <section class="center-stack">
+    <section class="workspace">
       <article class="decision-board panel" id="decisionBoard">
         <div class="decision-copy">
-          <p class="eyebrow">Decision</p>
+          <p class="eyebrow">Primary decision</p>
           <h2 id="decisionTitle">Нет выбранного сетапа</h2>
           <p id="decisionSubtitle">Обновите данные и постройте рекомендации. По умолчанию вход запрещён.</p>
         </div>
@@ -119,29 +119,98 @@
         </div>
       </article>
 
-      <article class="panel mtf-panel" id="mtfPanel">
-        <div class="panel-head compact-head">
-          <div>
-            <p class="eyebrow">MTF consensus</p>
-            <h2>15m entry · 60m bias · 240m veto</h2>
+      <section class="review-grid" aria-label="Разбор выбранного кандидата">
+        <article class="panel ticket">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="eyebrow">Trade sheet</p>
+              <h2 id="ticketTitle">Сетап не выбран</h2>
+            </div>
           </div>
-        </div>
-        <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
-      </article>
+          <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди слева.</div>
+        </article>
 
-      <article class="ticket panel">
-        <div class="panel-head compact-head">
-          <div>
-            <p class="eyebrow">Trade ticket</p>
-            <h2 id="ticketTitle">Сетап не выбран</h2>
+        <article class="panel mtf-panel" id="mtfPanel">
+          <div class="panel-head compact-head">
+            <div>
+              <p class="eyebrow">MTF consensus</p>
+              <h2>Entry / bias / regime</h2>
+            </div>
           </div>
-          <button id="briefBtn" class="ghost">Обновить LLM сейчас</button>
+          <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
+        </article>
+      </section>
+
+      <article class="panel context-panel">
+        <div class="context-head">
+          <div>
+            <p class="eyebrow">Review context</p>
+            <h2>Проверка сетапа</h2>
+          </div>
+          <div class="context-tabs" role="tablist" aria-label="Панели проверки">
+            <button class="context-tab active" data-tab="risk">Risk</button>
+            <button class="context-tab" data-tab="evidence">Evidence</button>
+            <button class="context-tab" data-tab="llm">LLM</button>
+            <button class="context-tab" data-tab="news">News</button>
+            <button class="context-tab" data-tab="protocol">Protocol</button>
+          </div>
         </div>
-        <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди слева.</div>
+
+        <section class="context-tab-panel active" data-panel="risk">
+          <div class="panel-subhead">
+            <div>
+              <h3>Risk gate</h3>
+              <p>Красный пункт = отмена входа.</p>
+            </div>
+          </div>
+          <div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div>
+        </section>
+
+        <section class="context-tab-panel" data-panel="evidence">
+          <div class="panel-subhead">
+            <div>
+              <h3>Доказательства</h3>
+              <p>Почему сетап попал в очередь и где слабые места.</p>
+            </div>
+          </div>
+          <div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div>
+        </section>
+
+        <section class="context-tab-panel" data-panel="llm">
+          <div class="panel-subhead">
+            <div>
+              <h3>LLM risk review</h3>
+              <p>Независимый риск-разбор, не торговый приказ.</p>
+            </div>
+            <button id="briefBtn" class="ghost">Обновить LLM сейчас</button>
+          </div>
+          <pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre>
+        </section>
+
+        <section class="context-tab-panel" data-panel="news">
+          <div class="panel-subhead">
+            <div>
+              <h3>Новости / sentiment</h3>
+              <p>Контекст по выбранному символу.</p>
+            </div>
+            <span id="sentimentSummary" class="muted">—</span>
+          </div>
+          <div id="newsList" class="news-list empty-state">Новостей пока нет.</div>
+        </section>
+
+        <section class="context-tab-panel" data-panel="protocol">
+          <div class="panel-subhead">
+            <div>
+              <h3>Operator protocol</h3>
+              <p>Минимальная ручная процедура перед созданием бота.</p>
+            </div>
+          </div>
+          <div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div>
+        </section>
       </article>
 
       <details class="panel technical-details">
-        <summary>Технические детали и журнал</summary>
+        <summary>Технические детали и журнал / сырые данные</summary>
         <div class="details-grid">
           <section>
             <h3>Последний бэктест</h3>
@@ -161,59 +230,6 @@
         </div>
       </details>
     </section>
-
-    <aside class="right-rail">
-      <article class="checklist panel">
-        <div class="panel-head compact-head">
-          <div>
-            <p class="eyebrow">Risk gate</p>
-            <h2>Красный пункт = отмена</h2>
-          </div>
-        </div>
-        <div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div>
-      </article>
-
-      <article class="panel reasons">
-        <div class="panel-head compact-head">
-          <div>
-            <p class="eyebrow">Evidence</p>
-            <h2>Доказательства</h2>
-          </div>
-        </div>
-        <div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div>
-      </article>
-
-      <article class="panel brief-panel">
-        <div class="panel-head compact-head">
-          <div>
-            <p class="eyebrow">LLM risk review</p>
-            <h2>Фоновая оценка</h2>
-          </div>
-        </div>
-        <pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre>
-      </article>
-
-      <article class="panel news-panel">
-        <div class="panel-head compact-head">
-          <div>
-            <p class="eyebrow">Context</p>
-            <h2>Новости / sentiment</h2>
-          </div>
-          <span id="sentimentSummary" class="muted">—</span>
-        </div>
-        <div id="newsList" class="news-list empty-state">Новостей пока нет.</div>
-      </article>
-
-      <article class="panel protocol">
-        <div class="panel-head compact-head">
-          <div>
-            <p class="eyebrow">Operator protocol</p>
-            <h2>Ручная проверка</h2>
-          </div>
-        </div>
-        <div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div>
-      </article>
-    </aside>
   </main>
 
   <script src="/static/app.js"></script>

@@ -15,6 +15,7 @@ const state = {
   backtestStatus: null,
   backtestSummary: null,
   signalStatus: null,
+  contextTab: 'risk',
 };
 
 const STRATEGY_LABELS = {
@@ -243,6 +244,17 @@ function renderMtfMatrix(s) {
       ${tfCell('BIAS', s.mtf_bias)}
       ${tfCell('REGIME', s.mtf_regime)}
     </div>`;
+}
+
+
+function setContextTab(tabName) {
+  state.contextTab = tabName || 'risk';
+  document.querySelectorAll('.context-tab').forEach((button) => {
+    button.classList.toggle('active', button.dataset.tab === state.contextTab);
+  });
+  document.querySelectorAll('.context-tab-panel').forEach((panel) => {
+    panel.classList.toggle('active', panel.dataset.panel === state.contextTab);
+  });
 }
 
 function llmStateText(s) {
@@ -495,7 +507,7 @@ function renderTicket(s) {
   if (!s) {
     $('ticketTitle').textContent = 'Сетап не выбран';
     $('ticketBody').className = 'ticket-body empty-state';
-    $('ticketBody').textContent = 'Выберите кандидата из очереди ниже.';
+    $('ticketBody').textContent = 'Выберите кандидата из очереди слева.';
     return;
   }
   const rr = riskReward(s);
@@ -948,6 +960,7 @@ function bindControls() {
   };
 
   $('briefBtn').onclick = async () => {
+    setContextTab('llm');
     await runOperation('LLM background refresh requested', async () => {
       const data = await api('/api/llm/background/run-now', { method: 'POST' });
       await refreshLlmStatus();
@@ -955,6 +968,10 @@ function bindControls() {
       return data.status;
     });
   };
+
+  document.querySelectorAll('.context-tab').forEach((button) => {
+    button.addEventListener('click', () => setContextTab(button.dataset.tab));
+  });
 
   document.querySelectorAll('.filter').forEach((button) => {
     button.addEventListener('click', () => {
@@ -967,6 +984,7 @@ function bindControls() {
 }
 
 bindControls();
+setContextTab(state.contextTab);
 refreshAll();
 setInterval(async () => {
   try {
