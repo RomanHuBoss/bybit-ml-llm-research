@@ -610,22 +610,20 @@ function renderQueue() {
       <article class="candidate ${s.decision.level} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}">
         <div class="candidate-head">
           <div>
-            <div class="symbol">${escapeHtml(s.symbol)} · ${escapeHtml(s.interval || '—')}</div>
+            <div class="symbol">${escapeHtml(s.symbol)} <span>${escapeHtml(s.interval || '—')}m</span></div>
             <div class="candidate-meta"><span class="direction-${escapeHtml(s.direction)}">${escapeHtml(String(s.direction || 'flat').toUpperCase())}</span> · ${escapeHtml(STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия')}</div>
           </div>
           <span class="badge ${s.decision.level}">${escapeHtml(s.decision.label)}</span>
         </div>
         <div class="candidate-line">
           <span class="chip">#<b>${index + 1}</b></span>
-          <span class="chip">TF <b>${escapeHtml(s.interval || '—')}</b></span>
-          <span class="chip mtf-chip ${mtfSeverity(s)}">MTF <b>${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || mtfLabel(s))}</b></span>
           <span class="chip">Score <b>${s.decision.score}</b></span>
+          <span class="chip mtf-chip ${mtfSeverity(s)}"><b>${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || mtfLabel(s))}</b></span>
           <span class="chip">Conf <b>${pct(s.confidence, 0)}</b></span>
           <span class="chip">R/R <b>${rr ? rr.ratio.toFixed(2) : '—'}</b></span>
-          <span class="chip">Spread <b>${pctRaw(s.spread_pct, 3)}</b></span>
-          <span class="chip">${escapeHtml(llmStateText(s))}</span>
+          <span class="chip">Spr <b>${pctRaw(s.spread_pct, 3)}</b></span>
         </div>
-        <div class="candidate-meta">${escapeHtml(mtfLabel(s))} · ${escapeHtml(decisionFor(s).subtitle)}</div>
+        <div class="candidate-note">${escapeHtml(mtfLabel(s))} · ${escapeHtml(s.mtf_reason || llmStateText(s))}</div>
       </article>`;
   }).join('');
   queue.querySelectorAll('.candidate').forEach((card) => {

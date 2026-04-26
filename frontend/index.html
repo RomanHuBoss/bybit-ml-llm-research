@@ -10,209 +10,135 @@
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark">BR</div>
-      <div>
+      <div class="brand-copy">
         <h1>Рабочее место оператора</h1>
-        <p>Intraday MTF cockpit: 15m вход, 60m направление, 240m режимный veto. LIVE OFF.</p>
+        <p>Intraday MTF · 15m entry · 60m bias · 240m veto · <b>LIVE OFF</b></p>
       </div>
     </div>
-    <div class="top-status">
+    <div class="top-status" aria-label="Состояние сервисов">
       <span class="safe-mode">LIVE OFF</span>
-      <span id="statusBox" class="status">Подключение...</span>
-      <span id="signalStatusBox" class="status">Signals: проверка...</span>
-      <span id="backtestStatusBox" class="status">Backtest: проверка...</span>
-      <span id="llmStatusBox" class="status">LLM: проверка...</span>
+      <span id="statusBox" class="status">API...</span>
+      <span id="signalStatusBox" class="status">Signals...</span>
+      <span id="backtestStatusBox" class="status">Backtest...</span>
+      <span id="llmStatusBox" class="status">LLM...</span>
     </div>
   </header>
 
-  <main class="shell">
-    <aside class="control-rail panel">
-      <section class="rail-section">
-        <p class="eyebrow">Pipeline</p>
-        <h2>Порядок работы</h2>
-        <p class="muted">Фоновый анализ сам обновляет сигналы, backtest и LLM‑вердикты. На экране — только решение, MTF‑контекст и причины.</p>
-        <ol class="steps compact">
-          <li><b>15m</b><span>Entry trigger</span></li>
-          <li><b>60m</b><span>Directional bias</span></li>
-          <li><b>240m</b><span>Regime / veto</span></li>
-          <li><b>LLM работает в фоне</b><span>Риск‑разбор top‑кандидатов</span></li>
-        </ol>
-      </section>
-
-      <section class="system-card rail-section">
-        <h3>Состояние стенда</h3>
-        <div class="mini-grid">
-          <div><span>Свечей</span><strong id="kpiCandles">—</strong></div>
-          <div><span>Universe</span><strong id="kpiUniverse">—</strong></div>
-          <div><span>Сигналов</span><strong id="kpiSignals">—</strong></div>
-          <div><span>Режим</span><strong>Research</strong></div>
+  <main class="terminal-shell">
+    <aside class="left-rail">
+      <section class="panel kpi-panel">
+        <div class="kpi-row">
+          <div><span>Свечи</span><b id="kpiCandles">—</b></div>
+          <div><span>Universe</span><b id="kpiUniverse">—</b></div>
+          <div><span>Сигналы</span><b id="kpiSignals">—</b></div>
         </div>
       </section>
 
-      <details class="ops-drawer">
-        <summary>Операции с данными</summary>
-        <label>Символы
-          <input id="symbols" value="BTCUSDT,ETHUSDT,SOLUSDT" autocomplete="off" />
-        </label>
-        <div class="field-grid">
-          <label>Категория
-            <input id="category" value="linear" autocomplete="off" />
-          </label>
-          <label>Таймфреймы
-            <input id="interval" value="15,60,240" autocomplete="off" />
-          </label>
-        </div>
-        <div class="field-grid">
-          <label>Дней истории
-            <input id="days" type="number" value="120" min="1" max="1000" />
-          </label>
-          <label>Universe
-            <select id="universeMode">
-              <option>hybrid</option>
-              <option>core</option>
-              <option>dynamic</option>
-            </select>
-          </label>
-        </div>
-        <label>Стратегия для ручного бэктеста
-          <select id="strategy">
-            <option>regime_adaptive_combo</option>
-            <option>donchian_atr_breakout</option>
-            <option>ema_pullback_trend</option>
-            <option>bollinger_rsi_reversion</option>
-            <option>funding_extreme_contrarian</option>
-            <option>oi_trend_confirmation</option>
-            <option>volatility_squeeze_breakout</option>
-            <option>sentiment_fear_reversal</option>
-            <option>sentiment_greed_reversal</option>
-          </select>
-        </label>
-        <div class="button-stack">
-          <button id="refreshAllBtn" class="primary">Обновить экран</button>
-          <button id="signalsAutoBtn">Авто-рекомендации сейчас</button>
-          <button id="buildSignalsBtn">Построить рекомендации</button>
-          <button id="rankBtn">Пересчитать очередь</button>
-          <button id="syncUniverseBtn">Обновить universe</button>
-          <button id="syncMarketBtn">Загрузить рынок</button>
-          <button id="syncSentimentBtn">Обновить sentiment</button>
-          <button id="backtestBtn">Бэктест выбранного сетапа</button>
-          <button id="backtestAutoBtn">Авто-бэктест сейчас</button>
-          <button id="trainBtn">Обучить ML</button>
-          <button id="predictBtn">ML‑прогноз</button>
-        </div>
-      </details>
-    </aside>
-
-    <section class="workspace">
-      <section class="hero-grid">
-        <article class="decision-board panel" id="decisionBoard">
-          <div class="decision-copy">
-            <p class="eyebrow">Что делать сейчас</p>
-            <h2 id="decisionTitle">Нет выбранного сетапа</h2>
-            <p id="decisionSubtitle">Обновите данные и постройте рекомендации. По умолчанию вход запрещён.</p>
-          </div>
-          <div class="decision-actions">
-            <div class="decision-badge" id="decisionBadge">НЕТ ВХОДА</div>
-            <div class="decision-score">
-              <span>Оценка допуска</span>
-              <strong id="decisionScore">0</strong>
-            </div>
-          </div>
-        </article>
-
-        <article class="panel mtf-panel" id="mtfPanel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">MTF consensus</p>
-              <h2>15m вход · 60m bias · 240m veto</h2>
-            </div>
-          </div>
-          <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
-        </article>
-      </section>
-
-      <section class="main-grid">
-        <article class="ticket panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Trade ticket</p>
-              <h2 id="ticketTitle">Сетап не выбран</h2>
-            </div>
-            <button id="briefBtn" class="ghost">Обновить LLM сейчас</button>
-          </div>
-          <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди ниже.</div>
-        </article>
-
-        <article class="checklist panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Чек‑лист допуска</p>
-              <h2>Красный пункт = отмена</h2>
-            </div>
-          </div>
-          <div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div>
-        </article>
-      </section>
-
-      <section class="queue panel">
-        <div class="panel-head">
+      <section class="panel queue-panel">
+        <div class="panel-head compact-head">
           <div>
-            <p class="eyebrow">Очередь кандидатов</p>
-            <h2>Сначала aligned 15m, потом наблюдение и запреты</h2>
+            <p class="eyebrow">Queue</p>
+            <h2>Кандидаты</h2>
           </div>
-          <div class="queue-filters">
-            <button class="filter active" data-filter="all">Все</button>
-            <button class="filter" data-filter="review">К проверке</button>
-            <button class="filter" data-filter="watch">Наблюдать</button>
-            <button class="filter" data-filter="reject">Запрет</button>
-          </div>
+          <button id="refreshAllBtn" class="icon-button primary" title="Обновить экран">↻</button>
+        </div>
+        <div class="queue-filters segmented">
+          <button class="filter active" data-filter="all">Все</button>
+          <button class="filter" data-filter="review">Вход</button>
+          <button class="filter" data-filter="watch">Watch</button>
+          <button class="filter" data-filter="reject">Stop</button>
         </div>
         <div id="candidateQueue" class="candidate-queue empty-state">Очередь появится после построения рекомендаций.</div>
       </section>
 
-      <section class="analysis-grid">
-        <article class="panel reasons">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Доказательства</p>
-              <h2>Почему система вообще показала сетап</h2>
-            </div>
+      <details class="ops-drawer">
+        <summary>Операции с данными</summary>
+        <div class="ops-body">
+          <label>Символы
+            <input id="symbols" value="BTCUSDT,ETHUSDT,SOLUSDT" autocomplete="off" />
+          </label>
+          <div class="field-grid">
+            <label>Категория
+              <input id="category" value="linear" autocomplete="off" />
+            </label>
+            <label>Таймфреймы
+              <input id="interval" value="15,60,240" autocomplete="off" />
+            </label>
           </div>
-          <div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div>
-        </article>
+          <div class="field-grid">
+            <label>Дней истории
+              <input id="days" type="number" value="120" min="1" max="1000" />
+            </label>
+            <label>Universe
+              <select id="universeMode">
+                <option>hybrid</option>
+                <option>core</option>
+                <option>dynamic</option>
+              </select>
+            </label>
+          </div>
+          <label>Стратегия для ручного бэктеста
+            <select id="strategy">
+              <option>regime_adaptive_combo</option>
+              <option>donchian_atr_breakout</option>
+              <option>ema_pullback_trend</option>
+              <option>bollinger_rsi_reversion</option>
+              <option>funding_extreme_contrarian</option>
+              <option>oi_trend_confirmation</option>
+              <option>volatility_squeeze_breakout</option>
+              <option>sentiment_fear_reversal</option>
+              <option>sentiment_greed_reversal</option>
+            </select>
+          </label>
+          <div class="button-stack">
+            <button id="signalsAutoBtn" class="primary">Авто-рекомендации сейчас</button>
+            <button id="buildSignalsBtn">Построить рекомендации</button>
+            <button id="rankBtn">Пересчитать очередь</button>
+            <button id="syncUniverseBtn">Обновить universe</button>
+            <button id="syncMarketBtn">Загрузить рынок</button>
+            <button id="syncSentimentBtn">Обновить sentiment</button>
+            <button id="backtestBtn">Бэктест сетапа</button>
+            <button id="backtestAutoBtn">Авто-бэктест сейчас</button>
+            <button id="trainBtn">Обучить ML</button>
+            <button id="predictBtn">ML‑прогноз</button>
+          </div>
+        </div>
+      </details>
+    </aside>
 
-        <article class="panel protocol">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Протокол оператора</p>
-              <h2>Что проверить руками</h2>
-            </div>
-          </div>
-          <div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div>
-        </article>
-      </section>
+    <section class="center-stack">
+      <article class="decision-board panel" id="decisionBoard">
+        <div class="decision-copy">
+          <p class="eyebrow">Decision</p>
+          <h2 id="decisionTitle">Нет выбранного сетапа</h2>
+          <p id="decisionSubtitle">Обновите данные и постройте рекомендации. По умолчанию вход запрещён.</p>
+        </div>
+        <div class="decision-actions">
+          <div class="decision-badge" id="decisionBadge">НЕТ ВХОДА</div>
+          <div class="decision-score"><span>Score</span><strong id="decisionScore">0</strong></div>
+        </div>
+      </article>
 
-      <section class="lower-grid">
-        <article class="panel brief-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Фоновая LLM‑оценка</p>
-              <h2>Вердикт по выбранному сетапу</h2>
-            </div>
+      <article class="panel mtf-panel" id="mtfPanel">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="eyebrow">MTF consensus</p>
+            <h2>15m entry · 60m bias · 240m veto</h2>
           </div>
-          <pre id="briefBox" class="brief">LLM‑оценка появится автоматически после фонового цикла.</pre>
-        </article>
+        </div>
+        <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
+      </article>
 
-        <article class="panel news-panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Контекст</p>
-              <h2>Новости / sentiment</h2>
-            </div>
-            <span id="sentimentSummary" class="muted">—</span>
+      <article class="ticket panel">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="eyebrow">Trade ticket</p>
+            <h2 id="ticketTitle">Сетап не выбран</h2>
           </div>
-          <div id="newsList" class="news-list empty-state">Новостей пока нет.</div>
-        </article>
-      </section>
+          <button id="briefBtn" class="ghost">Обновить LLM сейчас</button>
+        </div>
+        <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди слева.</div>
+      </article>
 
       <details class="panel technical-details">
         <summary>Технические детали и журнал</summary>
@@ -235,6 +161,59 @@
         </div>
       </details>
     </section>
+
+    <aside class="right-rail">
+      <article class="checklist panel">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="eyebrow">Risk gate</p>
+            <h2>Красный пункт = отмена</h2>
+          </div>
+        </div>
+        <div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div>
+      </article>
+
+      <article class="panel reasons">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="eyebrow">Evidence</p>
+            <h2>Доказательства</h2>
+          </div>
+        </div>
+        <div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div>
+      </article>
+
+      <article class="panel brief-panel">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="eyebrow">LLM risk review</p>
+            <h2>Фоновая оценка</h2>
+          </div>
+        </div>
+        <pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre>
+      </article>
+
+      <article class="panel news-panel">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="eyebrow">Context</p>
+            <h2>Новости / sentiment</h2>
+          </div>
+          <span id="sentimentSummary" class="muted">—</span>
+        </div>
+        <div id="newsList" class="news-list empty-state">Новостей пока нет.</div>
+      </article>
+
+      <article class="panel protocol">
+        <div class="panel-head compact-head">
+          <div>
+            <p class="eyebrow">Operator protocol</p>
+            <h2>Ручная проверка</h2>
+          </div>
+        </div>
+        <div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div>
+      </article>
+    </aside>
   </main>
 
   <script src="/static/app.js"></script>
