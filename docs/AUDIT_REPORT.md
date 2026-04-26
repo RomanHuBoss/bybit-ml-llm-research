@@ -1,3 +1,141 @@
+# Red-team аудит Bybit ML/LLM Research Lab — ревизия 2026-04-26
+
+## Краткое резюме до исправлений
+
+Проект был полезным research-стендом для ручного оператора: публичный Bybit REST ingestion, rule-based стратегии, backtest, ML-классификатор, sentiment и LLM-разбор кандидатов. При этом для practically production-ready рекомендательной системы оставались дефекты, способные привести к неверной рекомендации, дублированию данных, гонкам идентификаторов, silent failure и некорректному восприятию границ системы.
+
+Ключевой статус после ревизии: **система приведена к более безопасному recommendation-only состоянию, но не является live-trading/order-execution системой**. В проекте нет account-state reconciliation, WebSocket order reconciliation, durable order outbox, idempotency keys для биржевых ордеров и grid-bot lifecycle FSM. Это зафиксировано явно, чтобы не было ложного ощущения готовности к автоматическому исполнению.
+
+## Найденные проблемы по критичности
+
+### Critical
+
+1. **Использование незакрытой Bybit-свечи для сигналов.** Публичный kline endpoint может вернуть текущий бар; его close не финален. Исправлено: `sync_candles()` теперь сохраняет только закрытые свечи через `_is_closed_candle()`.
+2. **Race condition при привязке сделок backtest к run_id.** После INSERT использовался `SELECT id FROM backtest_runs ORDER BY id DESC LIMIT 1`, что при параллельных запусках могло взять чужой id. Исправлено: добавлен `execute_many_values_returning()` и `INSERT ... RETURNING id`.
+3. **Отсутствие финального фильтра непротиворечивости торгового сигнала.** Стратегии могли вернуть физически невозможные уровни из-за дефекта данных/логики. Исправлено: `validate_signal()` проверяет direction, confidence, entry, ATR и порядок SL/TP перед выдачей оператору.
+
+### High
+
+1. **Spot universe ошибочно требовал open interest.** Для spot-инструментов OI не является обязательным полем. Исправлено: OI-фильтр применяется только для `linear`/`inverse`.
+2. **Inverse universe фактически отбрасывался USDT-фильтром.** Исправлено: для `inverse` разрешены USD-инструменты, для `linear/spot` сохранен USDT-фокус текущей конфигурации.
+3. **RSS fallback URL строился через Python `hash()`.** Он рандомизирован между процессами, поэтому одинаковые новости могли дублироваться после рестарта. Исправлено: deterministic SHA-256 synthetic URL.
+4. **Фоновые LLM-запуски не имели явной защиты от перекрытия.** Исправлено: добавлен non-blocking `_run_lock` и безопасный `already_running` результат.
+5. **`app.ml` создавал `models/` при импорте.** В read-only окружении импорт падал до запуска диагностики. Исправлено: каталог создается лениво только при записи модели.
+
+### Medium
+
+1. **Bybit transient retCode был неполным.** Добавлен `10429` как retryable system-level frequency protection.
+2. **Сетевые сбои sentiment-источников частично замалчивались.** Добавлено warning-логирование для GDELT/RSS/CryptoPanic.
+3. **Конфиг и `.env.example` расходились по дефолтной LLM-модели.** Исправлено: дефолт `OLLAMA_MODEL` приведен к `qwen3:8b`.
+4. **Название `MAX_DAILY_DRAWDOWN` вводило в заблуждение.** Реально это backtest-level risk halt от стартового equity, а не календарный дневной лимит. Добавлен алиас `MAX_BACKTEST_DRAWDOWN`, старое имя оставлено для совместимости.
+
+### Low
+
+1. В документации были устаревшие ожидания по числу тестов (`24 passed`). Обновлено до `43 passed`.
+2. В `STRATEGY_MAP` для history-dependent стратегий были заглушки `lambda row: None`; оставлен явный комментарий, `_build_signal()` продолжает передавать history.
+
+## Что исправлено
+
+- `app/bybit_client.py`: закрытость свечей, retryable `10429`, корректный symbol-фильтр для inverse/spot, spot liquidity без OI-требования.
+- `app/db.py`: `execute_many_values_returning()` для безопасного RETURNING после batch insert.
+- `app/backtest.py`: backtest-run id берется из `RETURNING id`, устранена гонка `ORDER BY id DESC`.
+- `app/strategies.py`: `validate_signal()` и фильтрация невалидных рекомендаций до сохранения/вывода.
+- `app/sentiment.py`: deterministic synthetic URL для новостей без URL, warning-логирование сетевых сбоев.
+- `app/llm_background.py`: защита от перекрывающихся LLM-циклов.
+- `app/ml.py`: ленивое создание `models/` только перед сохранением модели.
+- `app/config.py`, `.env.example`/README-документация: актуализированы дефолты и описание risk/backtest режима.
+
+## Что добавлено
+
+- Unit-тест закрытия свечей Bybit перед сохранением.
+- Unit-тест валидации невозможных SL/TP.
+- Unit-тест spot liquidity без open-interest requirement.
+- Unit-тест стабильного synthetic news URL и fallback-логики.
+- Unit-тест защиты LLM-background от overlapping run.
+- Regression-тест импорта `app.ml` без записи в ФС уже покрывается `tests/test_warning_cleanup.py` после исправления.
+
+## Торгово-логические ошибки
+
+1. Сигналы могли строиться на незакрытой свече.
+2. Backtest-run сделки могли быть привязаны к чужому run при параллельном запуске.
+3. Перед persist не было единого контракта валидности рекомендаций.
+4. Spot/inverse liquidity universe был некорректен из-за USDT/OI допущений.
+5. `MAX_DAILY_DRAWDOWN` был не дневным лимитом, а остановкой backtest от стартового equity.
+
+## Архитектурные ошибки
+
+1. Слой рекомендаций и термины live-trading были недостаточно разведены в документации.
+2. ML-модуль имел побочный эффект записи в ФС при импорте.
+3. History-dependent стратегии в `STRATEGY_MAP` были представлены как одноаргументные заглушки, что ухудшало читаемость контракта.
+4. Фоновый LLM-сервис не имел явного single-flight guard.
+
+## Проблемы надежности/отказоустойчивости
+
+1. Неполный список retryable Bybit retCode.
+2. Silent failure в sentiment ingestion без логов.
+3. Дедупликация новостей без URL была нестабильной между рестартами.
+4. Не было защиты от overlapping LLM cycles.
+5. Полная live-trading отказоустойчивость отсутствует намеренно, потому что проект не исполняет ордера.
+
+## Проблемы тестового покрытия
+
+До ревизии не хватало regression-тестов на:
+
+- незакрытые Bybit-свечи;
+- невозможные уровни SL/TP;
+- spot liquidity без OI;
+- стабильность dedup-key для новостей;
+- overlapping LLM-background запуск;
+- race-safe backtest id через RETURNING.
+
+После ревизии эти сценарии покрыты тестами. Grid-bot тесты не добавлены как полноценные сценарии исполнения, потому что grid-bot/order lifecycle в проекте отсутствует. Это зафиксировано как остаточный риск/граница системы, а не додуманная реализация.
+
+## Расхождения код ↔ документация
+
+1. Ожидаемое число тестов было устаревшим (`24 passed`) — обновлено до `43 passed`.
+2. LLM model default в `.env.example` и коде расходился — исправлено.
+3. Risk parameter `MAX_DAILY_DRAWDOWN` описывал не календарный дневной лимит — добавлен `MAX_BACKTEST_DRAWDOWN` и пояснение.
+4. Live-trading/idempotency/reconciliation отсутствуют — теперь явно указано, что проект только рекомендует оператору.
+
+## Результаты проверки
+
+- Статическая компиляция: `python -m compileall -q app tests run.py install.py sitecustomize.py` — успешно.
+- Тесты по файлам через `pytest.main`: **43 passed**.
+- Проверенные группы:
+  - `tests/test_core_safety.py`: 9 passed;
+  - `tests/test_db_diagnostics.py`: 1 passed;
+  - `tests/test_frontend_decision_ui.py`: 5 passed;
+  - `tests/test_launcher_scripts.py`: 6 passed;
+  - `tests/test_llm_background.py`: 3 passed;
+  - `tests/test_llm_background_concurrency.py`: 1 passed;
+  - `tests/test_llm_serialization.py`: 2 passed;
+  - `tests/test_loky_sitecustomize.py`: 2 passed;
+  - `tests/test_news_dedup.py`: 2 passed;
+  - `tests/test_runtime_environment.py`: 3 passed;
+  - `tests/test_universe.py`: 1 passed;
+  - `tests/test_warning_cleanup.py`: 4 passed;
+  - `tests/smoke_test.py`: 1 passed.
+
+## Остаточные риски
+
+1. Нет live-order execution, exchange-side idempotency, account/order WebSocket reconciliation, durable outbox, kill-switch и post-trade audit. Для рекомендательной системы это допустимо; для автоматической торговли — блокер.
+2. Нет grid-bot state machine. Добавлять тесты grid-ботов без реализации было бы фиктивным покрытием.
+3. Backtest остается баровым и консервативным при same-bar SL/TP ambiguity, но не моделирует очередь заявок, funding settlement, ликвидационные риски, проскальзывание по order book и частичные исполнения.
+4. ML-модель остается исследовательской: нет walk-forward retraining orchestration, model registry, drift detection и production monitoring.
+5. LLM-слой не должен рассматриваться как источник торгового исполнения; это только текстовый риск-разбор.
+
+## Принятые допущения
+
+1. При неоднозначности внутри одной свечи backtest выбирает stop-loss первым как более консервативный вариант.
+2. Сигналы строятся только на закрытых свечах.
+3. Spot-инструменты не требуют open interest; linear/inverse требуют.
+4. Старое имя `MAX_DAILY_DRAWDOWN` сохранено как fallback для совместимости, но рекомендуемое имя — `MAX_BACKTEST_DRAWDOWN`.
+5. Никакая бизнес-логика live-trading и grid-bot исполнения не додумывалась молча.
+
+---
+
+## Предыдущая история аудита проекта
+
 # Audit report v2.1
 
 ## Резюме до исправлений
@@ -62,7 +200,7 @@
 ## Результаты проверок
 
 - `python -m compileall -q app tests`: успешно.
-- `python -m pytest -q`: `24 passed`.
+- `python -m pytest -q`: `43 passed`.
 
 Примечание: в контейнере pytest выдал только предупреждение о невозможности записи cache в .pytest_cache; на результат тестов это не повлияло.
 
@@ -97,7 +235,7 @@
 Результаты дополнительной проверки в целевой среде должны быть:
 
 - `python -m compileall -q app tests`: успешно;
-- `python -m pytest -q`: `24 passed`.
+- `python -m pytest -q`: `43 passed`.
 
 ## Дополнение: подавление joblib/loky warning на Windows
 
@@ -115,7 +253,7 @@
 Результаты дополнительной проверки в целевой среде должны быть:
 
 - `python -m compileall -q app tests`: успешно;
-- `python -m pytest -q`: `24 passed`.
+- `python -m pytest -q`: `43 passed`.
 
 ## Дополнение: усиленное подавление warning joblib/loky на Windows
 
@@ -203,3 +341,20 @@
 - ручная кнопка оставлена только как принудительный refresh фонового цикла.
 
 Принятое безопасное допущение: автоматизирован только LLM-анализ кандидатов. Автоматическое обновление рынка/сигналов без оператора не включено, чтобы не запускать дорогостоящие/долгие API-операции и не менять входные данные без явного действия пользователя.
+
+
+## Дополнение по автоматическому backtest
+
+После повторной проверки требования backtest переведен из исключительно ручного режима в безопасный фоновый режим:
+
+- добавлен `app/backtest_background.py` с сервисом `backtest-auto-runner`;
+- FastAPI lifespan запускает и останавливает backtest-runner вместе с LLM-runner;
+- `POST /api/signals/build` будит backtest-runner, если появились новые рекомендации;
+- добавлены endpoints `GET /api/backtest/background/status` и `POST /api/backtest/background/run-now`;
+- UI показывает состояние фонового backtest и кнопку `Авто-бэктест сейчас`;
+- `.env.example` получил `BACKTEST_AUTO_*` параметры;
+- добавлены regression-тесты на lock от overlap, SQL-критерий stale/missing backtest и частичный failure внутри цикла.
+
+Принятое безопасное допущение: backtest автоматизирован как подготовка доказательной базы, но не как торговое действие. Он не отправляет ордера, не создает позиции, не меняет рекомендации и выполняется ограниченной последовательной очередью, чтобы не перегружать PostgreSQL/CPU.
+
+Результат полного прогона после доработки: `43 passed`.

@@ -19,10 +19,14 @@ from .db import execute_many_values
 from .features import FEATURE_COLUMNS, build_ml_dataset, load_market_frame, prepare_feature_matrix
 
 MODELS_DIR = BASE_DIR / "models"
-MODELS_DIR.mkdir(exist_ok=True)
 
 
-def model_path(category: str, symbol: str, interval: str, horizon_bars: int) -> str:
+def model_path(category: str, symbol: str, interval: str, horizon_bars: int, *, ensure_dir: bool = False) -> str:
+    if ensure_dir:
+        # Каталог создается только перед записью модели. Импорт app.ml не должен
+        # требовать прав на запись в корень проекта: это ломает диагностику и тесты
+        # в read-only окружениях.
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
     safe = f"{category}_{symbol.upper()}_{interval}_{horizon_bars}.joblib".replace("/", "_").replace("\\", "_")
     return str(MODELS_DIR / safe)
 
@@ -74,7 +78,7 @@ def train_model(category: str, symbol: str, interval: str, horizon_bars: int = 1
     except Exception:
         importance = {}
 
-    path = model_path(category, symbol, interval, horizon_bars)
+    path = model_path(category, symbol, interval, horizon_bars, ensure_dir=True)
     joblib.dump(pipe, path)
 
     execute_many_values(

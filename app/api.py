@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .backtest import STRATEGY_MAP, run_backtest
+from .backtest_background import background_backtester, backtest_background_summary
 from .bybit_client import sync_market_bundle
 from .config import settings
 from .db import fetch_all, fetch_one
@@ -92,6 +93,12 @@ def status() -> dict[str, Any]:
             "require_liquidity_for_signals": settings.require_liquidity_for_signals,
         },
         "max_signal_age_hours": settings.max_signal_age_hours,
+        "backtest_auto": {
+            "enabled": settings.backtest_auto_enabled,
+            "interval_sec": settings.backtest_auto_interval_sec,
+            "max_candidates": settings.backtest_auto_max_candidates,
+            "ttl_hours": settings.backtest_auto_ttl_hours,
+        },
         "sentiment_sources": {
             "fear_greed": settings.use_fear_greed,
             "gdelt": settings.use_gdelt,
@@ -194,11 +201,15 @@ def build_signals(req: SignalBuildRequest) -> dict[str, Any]:
         category = normalize_category(req.category)
         interval = normalize_interval(req.interval)
         symbols = normalize_symbols(req.symbols)
+        total_inserted = 0
         for symbol in symbols:
             signals = build_latest_signals(category, symbol, interval)
             inserted = persist_signals(category, symbol, interval, signals)
+            total_inserted += int(inserted or 0)
             output[symbol] = {"built": len(signals), "upserted": inserted, "signals": [s.__dict__ for s in signals]}
-        return {"ok": True, "result": output}
+        if total_inserted > 0 and settings.backtest_auto_enabled:
+            background_backtester.request_run()
+        return {"ok": True, "result": output, "backtest_auto_requested": bool(total_inserted > 0 and settings.backtest_auto_enabled)}
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:
@@ -243,6 +254,21 @@ def api_backtest(req: BacktestRequest) -> dict[str, Any]:
         return {"ok": True, "result": run_backtest(category, symbol, interval, req.strategy, req.limit)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/backtest/background/status")
+def api_backtest_background_status() -> dict[str, Any]:
+    try:
+        return {"ok": True, "status": background_backtester.status(), "summary": backtest_background_summary()}
+    except Exception as exc:
+        # Деградация backtest-статуса не должна ломать основной экран рекомендаций.
+        return {"ok": False, "status": background_backtester.status(), "summary": {}, "error": str(exc)}
+
+
+@router.post("/backtest/background/run-now")
+def api_backtest_background_run_now() -> dict[str, Any]:
+    background_backtester.request_run()
+    return {"ok": True, "status": background_backtester.status()}
 
 
 @router.post("/ml/train")

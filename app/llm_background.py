@@ -59,6 +59,7 @@ class LLMBackgroundEvaluator:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._run_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_error: str | None = None
@@ -158,15 +159,19 @@ class LLMBackgroundEvaluator:
             self._next_run_at = _iso(datetime.fromtimestamp(target, tz=timezone.utc))
 
     def run_once(self) -> dict[str, Any]:
+        if not self._run_lock.acquire(blocking=False):
+            # Защита от перекрывающихся ручных и фоновых циклов: один и тот же сигнал
+            # не должен одновременно получать несколько LLM-запросов и гонки статусов.
+            return {"queued": 0, "evaluated": 0, "skipped": 1, "failed": 0, "reason": "already_running"}
         started = _now()
-        with self._lock:
-            self._running = True
-            self._last_started_at = _iso(started)
-            self._last_error = None
-            self._cycle_no += 1
-
         summary = {"queued": 0, "evaluated": 0, "skipped": 0, "failed": 0}
         try:
+            with self._lock:
+                self._running = True
+                self._last_started_at = _iso(started)
+                self._last_error = None
+                self._cycle_no += 1
+
             candidates = candidates_needing_llm()
             summary["queued"] = len(candidates)
             if candidates:
@@ -191,6 +196,7 @@ class LLMBackgroundEvaluator:
                 self._running = False
                 self._last_finished_at = _iso(finished)
                 self._last_cycle = summary
+            self._run_lock.release()
         return summary
 
 

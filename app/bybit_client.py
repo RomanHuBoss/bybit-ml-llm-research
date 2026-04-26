@@ -27,6 +27,7 @@ TRANSIENT_BYBIT_RET_CODES = {
     10000,  # Server timeout.
     10006,  # Too many visits / rate limit.
     10016,  # Service is restarting / internal error.
+    10429,  # System-level frequency protection.
     170007,  # Timeout waiting for response from backend service.
 }
 
@@ -178,6 +179,26 @@ def _interval_to_minutes(interval: str) -> int:
     return mapping.get(interval.upper(), 60)
 
 
+def _is_closed_candle(start_time: datetime, interval: str, now: datetime | None = None) -> bool:
+    """Проверяет, что свеча полностью закрыта до использования в сигналах.
+
+    Bybit возвращает текущую незакрытую свечу вместе с историей; ее close является
+    последней сделкой, а не финальной ценой бара. Для рекомендательной системы это
+    опасно: сигнал может исчезнуть после закрытия свечи.
+    """
+    if start_time.tzinfo is None:
+        start_time = start_time.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return start_time + timedelta(minutes=_interval_to_minutes(interval)) <= now
+
+
+def _is_supported_liquidity_symbol(category: str, symbol: str) -> bool:
+    if category == "inverse":
+        return symbol.endswith("USD") and not symbol.endswith("USDT")
+    # Текущие core-настройки и риск-фильтры проекта рассчитаны на USDT-котируемые пары.
+    return symbol.endswith("USDT")
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         if value in (None, ""):
@@ -206,15 +227,19 @@ def sync_candles(category: str, symbol: str, interval: str, days: int) -> int:
     for cursor, chunk_end in _page_ranges(start, end, timedelta(minutes=step_minutes)):
         rows = client.get_kline(category, symbol, interval, _dt_to_ms(cursor), _dt_to_ms(chunk_end), limit=1000)
         parsed = []
+        now = datetime.now(timezone.utc)
         for item in rows:
             if len(item) < 6:
+                continue
+            start_time = _ms_to_dt(item[0])
+            if not _is_closed_candle(start_time, interval, now):
                 continue
             parsed.append(
                 (
                     category,
                     symbol.upper(),
                     interval,
-                    _ms_to_dt(item[0]),
+                    start_time,
                     item[1],
                     item[2],
                     item[3],
@@ -339,7 +364,7 @@ def sync_liquidity_snapshots(category: str = "linear") -> int:
     rows = []
     for item in tickers:
         symbol = str(item.get("symbol", "")).upper()
-        if not symbol.endswith("USDT") or symbol in settings.exclude_symbols:
+        if not _is_supported_liquidity_symbol(category, symbol) or symbol in settings.exclude_symbols:
             continue
         inst = instruments.get(symbol, {})
         # PreLaunch исключён намеренно: в исследовательский universe не должны попадать инструменты без нормальной торговли.
@@ -354,9 +379,11 @@ def sync_liquidity_snapshots(category: str = "linear") -> int:
         spread_pct = ((ask - bid) / ((ask + bid) / 2) * 100) if bid > 0 and ask > 0 and ask >= bid else 999.0
         funding = _to_float(item.get("fundingRate"))
         age_days = _listing_age_days(inst)
+        requires_open_interest = category in {"linear", "inverse"}
+        oi_ok = (oi_value >= settings.min_open_interest_value) if requires_open_interest else True
         eligible = (
             turnover >= settings.min_turnover_24h
-            and oi_value >= settings.min_open_interest_value
+            and oi_ok
             and spread_pct <= settings.max_spread_pct
             and age_days is not None
             and age_days >= settings.min_listing_age_days

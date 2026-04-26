@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -27,6 +29,7 @@ from .db import execute_many_values, fetch_all
 from .features import load_market_frame
 from .llm import classify_news_with_llm
 
+logger = logging.getLogger(__name__)
 _analyzer = SentimentIntensityAnalyzer()
 
 
@@ -47,6 +50,23 @@ SYMBOL_ALIASES: dict[str, str] = {
     "PEPE": "pepe coin OR PEPE",
     "HYPE": "hyperliquid OR HYPE",
 }
+
+
+
+def _stable_synthetic_url(source: str, title: str, published_at: datetime | None = None) -> str:
+    """Создает детерминированный ключ новости, если источник не дал URL.
+
+    Нельзя использовать встроенный hash(): он рандомизирован между процессами Python,
+    из-за чего одинаковая RSS-новость после перезапуска вставляется повторно.
+    """
+    ts = published_at.isoformat() if published_at else "unknown_time"
+    digest = hashlib.sha256(f"{source}|{ts}|{title}".encode("utf-8")).hexdigest()[:24]
+    return f"synthetic://news/{digest}"
+
+
+def _news_url(source: str, title: str, url: str | None, published_at: datetime | None = None) -> str:
+    value = (url or "").strip()
+    return value or _stable_synthetic_url(source, title, published_at)
 
 
 def _safe_get_json(url: str, params: dict[str, Any] | None = None, timeout: int = 30) -> dict[str, Any]:
@@ -145,7 +165,8 @@ def fetch_gdelt_news(symbol: str, days: int = 2, maxrecords: int = 75) -> list[d
     try:
         payload = _safe_get_json(url, timeout=40)
         return payload.get("articles", [])
-    except Exception:
+    except Exception as exc:
+        logger.warning("GDELT sync failed for %s: %s", symbol, exc)
         return []
 
 
@@ -205,7 +226,8 @@ def sync_gdelt_news(symbol: str, days: int = 2, use_llm: bool = False) -> int:
                 published_at = datetime.strptime(published[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
             except Exception:
                 published_at = None
-        rows.append(("gdelt", symbol.upper(), published_at, title, article.get("url"), article.get("domain"), vader_score, llm_score, llm_label, article))
+        stable_url = _news_url("gdelt", title, article.get("url"), published_at)
+        rows.append(("gdelt", symbol.upper(), published_at, title, stable_url, article.get("domain") or urlparse(stable_url).netloc, vader_score, llm_score, llm_label, article))
     inserted = _insert_news(rows)
     _aggregate_news_daily(symbol, "gdelt_news", rows)
     return inserted
@@ -224,7 +246,8 @@ def sync_rss_news(symbols: list[str], use_llm: bool = False) -> dict[str, int]:
         try:
             xml = _safe_get_text(url, timeout=35)
             root = ET.fromstring(xml)
-        except Exception:
+        except Exception as exc:
+            logger.warning("RSS source %s failed: %s", name, exc)
             continue
         items = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
         for item in items[:120]:
@@ -245,11 +268,13 @@ def sync_rss_news(symbols: list[str], use_llm: bool = False) -> dict[str, int]:
                 llm_score = llm["score"]
                 llm_label = llm["label"]
             raw = {"rss_source": name, "url": url}
-            row = (f"rss:{name}", "MARKET", published_at, title, link or f"rss://{name}/{hash(title)}", urlparse(link).netloc, vader_score, llm_score, llm_label, raw)
+            source = f"rss:{name}"
+            stable_url = _news_url(source, title, link, published_at)
+            row = (source, "MARKET", published_at, title, stable_url, urlparse(stable_url).netloc, vader_score, llm_score, llm_label, raw)
             market_rows.append(row)
             for symbol in symbols:
                 if _title_matches_symbol(title, symbol):
-                    per_symbol[symbol].append((f"rss:{name}", symbol, published_at, title, link or f"rss://{name}/{hash(title)}", urlparse(link).netloc, vader_score, llm_score, llm_label, raw))
+                    per_symbol[symbol].append((source, symbol, published_at, title, stable_url, urlparse(stable_url).netloc, vader_score, llm_score, llm_label, raw))
     inserted_market = _insert_news(market_rows)
     result: dict[str, int] = {"MARKET": inserted_market}
     _aggregate_news_daily("MARKET", "rss_news", market_rows)
@@ -266,7 +291,8 @@ def sync_cryptopanic(symbol: str, use_llm: bool = False) -> int:
     params = {"auth_token": settings.cryptopanic_token, "currencies": base, "filter": "hot", "public": "true"}
     try:
         payload = _safe_get_json("https://cryptopanic.com/api/developer/v2/posts/", params=params, timeout=40)
-    except Exception:
+    except Exception as exc:
+        logger.warning("CryptoPanic sync failed for %s: %s", symbol, exc)
         return 0
     rows = []
     for item in payload.get("results", []):
@@ -286,7 +312,8 @@ def sync_cryptopanic(symbol: str, use_llm: bool = False) -> int:
                 published_at = datetime.fromisoformat(item["published_at"].replace("Z", "+00:00"))
             except Exception:
                 published_at = None
-        rows.append(("cryptopanic", symbol.upper(), published_at, title, item.get("url"), None, vader_score, llm_score, llm_label, item))
+        stable_url = _news_url("cryptopanic", title, item.get("url"), published_at)
+        rows.append(("cryptopanic", symbol.upper(), published_at, title, stable_url, urlparse(stable_url).netloc, vader_score, llm_score, llm_label, item))
     inserted = _insert_news(rows)
     _aggregate_news_daily(symbol, "cryptopanic_news", rows)
     return inserted

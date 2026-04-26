@@ -95,9 +95,14 @@ def test_backtest_enters_on_next_bar_open_and_persists(monkeypatch):
         calls["insert_batches"].append((sql, materialized))
         return len(materialized)
 
+    def fake_execute_many_values_returning(sql, rows, page_size=1000):
+        materialized = list(rows)
+        calls["insert_batches"].append((sql, materialized))
+        return [{"id": 42}]
+
     monkeypatch.setattr(backtest, "load_market_frame", fake_load_market_frame)
     monkeypatch.setattr(backtest, "execute_many_values", fake_execute_many_values)
-    monkeypatch.setattr(backtest, "fetch_one", lambda *args, **kwargs: {"id": 42})
+    monkeypatch.setattr(backtest, "execute_many_values_returning", fake_execute_many_values_returning)
     monkeypatch.setitem(
         backtest.STRATEGY_MAP,
         "unit_test_strategy",
@@ -151,3 +156,81 @@ def test_bybit_get_retries_transient_ret_code(monkeypatch):
 
     assert BybitClient()._get("/v5/market/tickers", {"category": "linear"}) == {"list": []}
     assert calls["n"] == 2
+
+
+def test_bybit_sync_candles_skips_unclosed_bar(monkeypatch):
+    from datetime import datetime, timezone
+
+    import app.bybit_client as bc
+
+    closed = int(datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    unclosed = int(datetime(2024, 1, 1, 1, 0, tzinfo=timezone.utc).timestamp() * 1000)
+
+    class FakeClient:
+        def get_kline(self, *args, **kwargs):
+            # Bybit возвращает kline в обратном порядке startTime; тест фиксирует,
+            # что незакрытый бар не попадет в рекомендации и БД.
+            return [
+                [str(unclosed), "100", "110", "95", "105", "10", "1000"],
+                [str(closed), "90", "101", "88", "100", "12", "1200"],
+            ]
+
+    inserted_rows = []
+
+    def fake_execute_many_values(sql, rows, page_size=1000):
+        materialized = list(rows)
+        inserted_rows.extend(materialized)
+        return len(materialized)
+
+    monkeypatch.setattr(bc, "BybitClient", FakeClient)
+    monkeypatch.setattr(bc, "_page_ranges", lambda start, end, step: [(start, end)])
+    monkeypatch.setattr(bc, "execute_many_values", fake_execute_many_values)
+    monkeypatch.setattr(bc, "datetime", type("FrozenDateTime", (datetime,), {"now": classmethod(lambda cls, tz=None: datetime(2024, 1, 1, 1, 30, tzinfo=timezone.utc))}))
+
+    assert bc.sync_candles("linear", "BTCUSDT", "60", 1) == 1
+    assert len(inserted_rows) == 1
+    assert inserted_rows[0][3] == datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def test_strategy_validation_rejects_impossible_levels():
+    from app.strategies import StrategySignal, validate_signal
+
+    bad_long = StrategySignal("x", "long", 0.7, 100.0, 101.0, 110.0, 2.0, {})
+    bad_short = StrategySignal("x", "short", 0.7, 100.0, 90.0, 95.0, 2.0, {})
+
+    assert validate_signal(bad_long) == (False, "long_levels_not_ordered")
+    assert validate_signal(bad_short) == (False, "short_levels_not_ordered")
+
+
+def test_spot_liquidity_does_not_require_open_interest(monkeypatch):
+    import app.bybit_client as bc
+
+    class FakeClient:
+        def get_tickers(self, category):
+            return [
+                {
+                    "symbol": "BTCUSDT",
+                    "turnover24h": "50000000",
+                    "volume24h": "1000",
+                    "openInterestValue": "0",
+                    "bid1Price": "100",
+                    "ask1Price": "100.01",
+                    "lastPrice": "100",
+                    "fundingRate": "0",
+                }
+            ]
+
+        def get_instruments_info(self, category):
+            return [{"symbol": "BTCUSDT", "status": "Trading", "launchTime": "1609459200000"}]
+
+    captured = []
+
+    def fake_execute_many_values(sql, rows, page_size=1000):
+        materialized = list(rows)
+        captured.extend(materialized)
+        return len(materialized)
+
+    monkeypatch.setattr(bc, "BybitClient", FakeClient)
+    monkeypatch.setattr(bc, "execute_many_values", fake_execute_many_values)
+    assert bc.sync_liquidity_snapshots("spot") == 1
+    assert captured[0][13] is True

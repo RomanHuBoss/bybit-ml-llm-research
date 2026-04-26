@@ -251,6 +251,41 @@ def regime_adaptive_combo(latest: pd.Series, history: pd.DataFrame) -> StrategyS
     )
 
 
+
+def validate_signal(sig: StrategySignal) -> tuple[bool, str | None]:
+    """Проверяет базовую непротиворечивость торговой рекомендации перед сохранением.
+
+    Здесь нет попытки "улучшить" стратегию или угадать бизнес-правило. Фильтр
+    только отсекает физически невозможные и опасно двусмысленные сигналы: неверное
+    направление, нечисловые цены, отрицательный ATR, confidence вне [0; 1] и SL/TP
+    не по сторону входа.
+    """
+    if sig.direction not in {"long", "short"}:
+        return False, "invalid_direction"
+    values = {
+        "confidence": sig.confidence,
+        "entry": sig.entry,
+        "stop_loss": sig.stop_loss,
+        "take_profit": sig.take_profit,
+        "atr": sig.atr,
+    }
+    normalized: dict[str, float] = {}
+    for key, value in values.items():
+        parsed = _finite(value)
+        if parsed is None:
+            return False, f"non_finite_{key}"
+        normalized[key] = parsed
+    if not (0.0 <= normalized["confidence"] <= 1.0):
+        return False, "confidence_out_of_range"
+    if normalized["entry"] <= 0 or normalized["atr"] <= 0:
+        return False, "non_positive_entry_or_atr"
+    if sig.direction == "long" and not (normalized["stop_loss"] < normalized["entry"] < normalized["take_profit"]):
+        return False, "long_levels_not_ordered"
+    if sig.direction == "short" and not (normalized["take_profit"] < normalized["entry"] < normalized["stop_loss"]):
+        return False, "short_levels_not_ordered"
+    return True, None
+
+
 def build_latest_signals(category: str, symbol: str, interval: str, limit: int = 2000) -> list[StrategySignal]:
     df = load_market_frame(category, symbol, interval, limit=limit)
     if df.empty or len(df) < 250:
@@ -268,15 +303,27 @@ def build_latest_signals(category: str, symbol: str, interval: str, limit: int =
         regime_adaptive_combo(latest, history),
     ]
     bar_time = latest.get("start_time")
-    result = [s for s in candidates if s is not None]
-    for signal in result:
-        signal.bar_time = bar_time
+    result: list[StrategySignal] = []
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        ok, reason = validate_signal(candidate)
+        if not ok:
+            # Некорректный сигнал не сохраняется: оператор не должен видеть
+            # рекомендацию с невозможным стопом, тейком или невалидным confidence.
+            candidate.rationale = {**candidate.rationale, "rejected_reason": reason}
+            continue
+        candidate.bar_time = bar_time
+        result.append(candidate)
     return result
 
 
 def persist_signals(category: str, symbol: str, interval: str, signals: list[StrategySignal]) -> int:
     rows = []
     for sig in signals:
+        ok, reason = validate_signal(sig)
+        if not ok:
+            continue
         rows.append(
             (
                 category,

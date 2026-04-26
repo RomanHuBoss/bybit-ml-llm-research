@@ -86,7 +86,7 @@ class Settings:
     rss_urls: tuple[str, ...] = _csv("RSS_URLS", RSS_URLS_DEFAULT)
 
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen3:8b")
     ollama_timeout_sec: int = _int("OLLAMA_TIMEOUT_SEC", 60)
 
     llm_auto_eval_enabled: bool = _bool("LLM_AUTO_EVAL_ENABLED", True)
@@ -96,9 +96,16 @@ class Settings:
     llm_auto_eval_workers: int = _int("LLM_AUTO_EVAL_WORKERS", 2)
     llm_auto_eval_ttl_minutes: int = _int("LLM_AUTO_EVAL_TTL_MINUTES", 60)
 
+    backtest_auto_enabled: bool = _bool("BACKTEST_AUTO_ENABLED", True)
+    backtest_auto_interval_sec: int = _int("BACKTEST_AUTO_INTERVAL_SEC", 900)
+    backtest_auto_startup_delay_sec: int = _int("BACKTEST_AUTO_STARTUP_DELAY_SEC", 45)
+    backtest_auto_max_candidates: int = _int("BACKTEST_AUTO_MAX_CANDIDATES", 8)
+    backtest_auto_limit: int = _int("BACKTEST_AUTO_LIMIT", 5000)
+    backtest_auto_ttl_hours: int = _int("BACKTEST_AUTO_TTL_HOURS", 24)
+
     start_equity_usdt: float = _float("START_EQUITY_USDT", 500.0)
     risk_per_trade: float = _float("RISK_PER_TRADE", 0.005)
-    max_daily_drawdown: float = _float("MAX_DAILY_DRAWDOWN", 0.03)
+    max_daily_drawdown: float = _float("MAX_BACKTEST_DRAWDOWN", _float("MAX_DAILY_DRAWDOWN", 0.03))
     fee_rate: float = _float("FEE_RATE", 0.00055)
     slippage_rate: float = _float("SLIPPAGE_RATE", 0.00020)
     max_position_notional_usdt: float = _float("MAX_POSITION_NOTIONAL_USDT", 1_000.0)
@@ -145,6 +152,16 @@ def _validate_settings(s: Settings) -> None:
         problems.append("LLM_AUTO_EVAL_WORKERS должен быть в диапазоне [1; 4]")
     if s.llm_auto_eval_ttl_minutes < 1:
         problems.append("LLM_AUTO_EVAL_TTL_MINUTES должен быть >= 1")
+    if s.backtest_auto_interval_sec < 60:
+        problems.append("BACKTEST_AUTO_INTERVAL_SEC должен быть >= 60")
+    if s.backtest_auto_startup_delay_sec < 0:
+        problems.append("BACKTEST_AUTO_STARTUP_DELAY_SEC не может быть отрицательным")
+    if not (1 <= s.backtest_auto_max_candidates <= 50):
+        problems.append("BACKTEST_AUTO_MAX_CANDIDATES должен быть в диапазоне [1; 50]")
+    if not (300 <= s.backtest_auto_limit <= 100000):
+        problems.append("BACKTEST_AUTO_LIMIT должен быть в диапазоне [300; 100000]")
+    if s.backtest_auto_ttl_hours < 1:
+        problems.append("BACKTEST_AUTO_TTL_HOURS должен быть >= 1")
     if s.universe_limit <= 0 or s.dynamic_symbol_limit <= 0:
         problems.append("UNIVERSE_LIMIT и DYNAMIC_SYMBOL_LIMIT должны быть > 0")
     if s.bybit_max_retries < 0:

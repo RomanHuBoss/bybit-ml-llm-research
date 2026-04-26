@@ -12,6 +12,8 @@ const state = {
   llmStatus: null,
   llmSummary: null,
   llmEvaluations: [],
+  backtestStatus: null,
+  backtestSummary: null,
 };
 
 const STRATEGY_LABELS = {
@@ -569,6 +571,24 @@ async function refreshStatus() {
 }
 
 
+async function refreshBacktestStatus() {
+  try {
+    const data = await api('/api/backtest/background/status');
+    state.backtestStatus = data.status || null;
+    state.backtestSummary = data.summary || null;
+    const status = state.backtestStatus || {};
+    const summary = state.backtestSummary || {};
+    const text = status.enabled
+      ? `Backtest: авто · свежих ${summary.fresh_runs || 0}/${summary.total || 0} · след. ${dt(status.next_run_at)}`
+      : 'Backtest: авто выключен';
+    $('backtestStatusBox').textContent = text;
+    $('backtestStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
+  } catch (e) {
+    $('backtestStatusBox').textContent = 'Backtest: статус недоступен';
+    $('backtestStatusBox').className = 'status error';
+  }
+}
+
 async function refreshLlmStatus() {
   try {
     const data = await api('/api/llm/background/status');
@@ -680,6 +700,7 @@ async function refreshNews() {
 async function refreshAll() {
   try {
     await refreshStatus();
+    await refreshBacktestStatus();
     await refreshLlmStatus();
     await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews()]);
   } catch (e) {
@@ -746,6 +767,7 @@ function bindControls() {
       await refreshRank();
       await refreshSignals();
       await api('/api/llm/background/run-now', { method: 'POST' });
+      await refreshBacktestStatus();
       await refreshLlmStatus();
       await refreshNews();
       return data.result;
@@ -766,6 +788,15 @@ function bindControls() {
       drawEquity(data.result.equity_curve);
       await refreshRank();
       return data.result;
+    });
+  };
+
+  $('backtestAutoBtn').onclick = async () => {
+    await runOperation('Background backtest refresh requested', async () => {
+      const data = await api('/api/backtest/background/run-now', { method: 'POST' });
+      await refreshBacktestStatus();
+      await refreshRank();
+      return data.status;
     });
   };
 
@@ -814,6 +845,7 @@ bindControls();
 refreshAll();
 setInterval(async () => {
   try {
+    await refreshBacktestStatus();
     await refreshLlmStatus();
     await refreshRank();
     await refreshSignals();

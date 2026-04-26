@@ -120,13 +120,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_windows.ps1
 Установите Ollama отдельно. Затем скачайте модель:
 
 ```powershell
-ollama pull llama3.1:8b
+ollama pull qwen3:8b
 ```
 
 Проверьте endpoint:
 
 ```powershell
-curl http://127.0.0.1:11434/api/generate -d '{"model":"llama3.1:8b","prompt":"test","stream":false}'
+curl http://127.0.0.1:11434/api/generate -d '{"model":"qwen3:8b","prompt":"test","stream":false}'
 ```
 
 Для RTX 3060 12GB лучше начинать с 7B/8B quantized-модели.
@@ -166,7 +166,7 @@ python run.py check
 python run.py test
 ```
 
-Ожидаемо: `24 passed`.
+Ожидаемо: `40 passed`.
 
 ## Если в консоли был joblib/loky warning про wmic
 
@@ -193,7 +193,7 @@ python run.py doctor
 python run.py check
 ```
 
-Ожидаемо: `24 passed`.
+Ожидаемо: `40 passed`.
 
 ## Если warning `joblib/loky` про `wmic` всё еще появляется
 

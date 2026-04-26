@@ -170,6 +170,22 @@ def execute_many_values(sql: str, rows: Iterable[tuple], page_size: int = 1000) 
         return cur.rowcount
 
 
+
+def execute_many_values_returning(sql: str, rows: Iterable[tuple], page_size: int = 1000) -> list[dict[str, Any]]:
+    """Вставляет пачку строк через execute_values и возвращает RETURNING-результат.
+
+    Нужна для критичных сценариев, где нельзя получать id отдельным SELECT после INSERT:
+    при параллельных backtest-запусках такой SELECT может забрать чужую последнюю запись.
+    SQL обязан содержать RETURNING с именованными колонками.
+    """
+    rows = [tuple(_adapt_value(v) for v in row) for row in rows]
+    if not rows:
+        return []
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        returned = execute_values(cur, sql, rows, page_size=page_size, fetch=True)
+        return [dict(row) for row in returned]
+
+
 def query_df(sql: str, params: tuple | dict | None = None) -> "pd.DataFrame":
     import pandas as pd
 

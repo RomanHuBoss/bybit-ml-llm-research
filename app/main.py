@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import router
 from .config import BASE_DIR
+from .backtest_background import background_backtester
 from .llm_background import background_evaluator
 
 
@@ -17,9 +18,11 @@ async def lifespan(_app: FastAPI):
     # LLM-оценка запускается в фоне: интерфейс не должен ждать ручной кнопки
     # и не должен блокироваться на локальной модели Ollama.
     background_evaluator.start()
+    background_backtester.start()
     try:
         yield
     finally:
+        background_backtester.stop()
         background_evaluator.stop()
 
 

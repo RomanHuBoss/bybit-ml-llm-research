@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .config import settings
-from .db import execute_many_values, fetch_one
+from .db import execute_many_values, execute_many_values_returning
 from .features import load_market_frame
 from .strategies import (
     StrategySignal,
@@ -31,8 +31,9 @@ STRATEGY_MAP: dict[str, StrategyFn] = {
     "oi_trend_confirmation": oi_confirmation,
     "sentiment_fear_reversal": sentiment_filter,
     "sentiment_greed_reversal": sentiment_filter,
-    "volatility_squeeze_breakout": lambda row: None,
-    "regime_adaptive_combo": lambda row: None,
+    # Исторически эти стратегии требуют history; _build_signal передает его явно.
+    "volatility_squeeze_breakout": volatility_squeeze,  # type: ignore[dict-item]
+    "regime_adaptive_combo": regime_adaptive_combo,  # type: ignore[dict-item]
 }
 
 
@@ -275,16 +276,18 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
             equity_curve[-500:],
         )
     ]
-    execute_many_values(
+    returned = execute_many_values_returning(
         """
         INSERT INTO backtest_runs(category, symbol, interval, strategy, start_time, end_time, initial_equity, final_equity,
                                   total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, params, equity_curve)
         VALUES %s
+        RETURNING id
         """,
         run_rows,
     )
-    run = fetch_one("SELECT id FROM backtest_runs ORDER BY id DESC LIMIT 1")
-    run_id = int(run["id"]) if run else None
+    # Не используем SELECT ORDER BY id DESC: при параллельных запусках backtest это
+    # создает race condition и может привязать сделки к чужому run_id.
+    run_id = int(returned[0]["id"]) if returned else None
     if run_id and trades:
         execute_many_values(
             """
