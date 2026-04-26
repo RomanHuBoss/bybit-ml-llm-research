@@ -25,6 +25,7 @@ except ModuleNotFoundError:  # pragma: no cover - используется то�
         raise RuntimeError("psycopg2-binary is not installed; database writes are unavailable")
 
 from .config import settings
+from .serialization import to_jsonable
 
 
 class DatabaseConnectionError(RuntimeError):
@@ -174,17 +175,6 @@ def query_df(sql: str, params: tuple | dict | None = None) -> "pd.DataFrame":
 
 
 def json_safe(obj: Any) -> Any:
-    if isinstance(obj, Decimal):
-        return float(obj)
-    try:
-        import pandas as pd
-
-        if isinstance(obj, pd.Timestamp):
-            return obj.isoformat()
-    except ModuleNotFoundError:
-        pass
-    try:
-        json.dumps(obj)
-        return obj
-    except TypeError:
-        return str(obj)
+    # Обратная совместимость для старых импортов: фактическая JSON-нормализация
+    # вынесена в app.serialization и используется также LLM endpoint.
+    return to_jsonable(obj)

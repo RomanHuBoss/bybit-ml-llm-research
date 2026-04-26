@@ -504,3 +504,9 @@ setx LOKY_MAX_CPU_COUNT 4
 $env:LOKY_MAX_CPU_COUNT="4"
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+### LLM brief и JSON-совместимость payload
+
+Endpoint `POST /api/llm/brief` принимает пользовательский payload или строку из таблицы `signals`. Так как данные PostgreSQL/pandas могут содержать `datetime`, `Decimal`, numpy/pandas-типы и `pd.NA`, проект перед отправкой данных в LLM-промпт рекурсивно приводит payload к JSON-совместимому виду через `app.serialization.to_jsonable()`.
+
+Это предотвращает `500 Internal Server Error` на `json.dumps(...)` и сохраняет поведение системы как research-рекомендателя: неизвестные объектные типы безопасно переводятся в строковое представление, а не используются для автоматического исполнения сделок.

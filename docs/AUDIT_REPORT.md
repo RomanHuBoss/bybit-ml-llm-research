@@ -151,3 +151,15 @@
 - `py_compile`: успешно для измененных модулей и тестов;
 - `tests/test_warning_cleanup.py`: `4 passed`;
 - полный набор содержит 24 теста.
+
+## Дополнительное исправление: JSON-нормализация LLM brief
+
+Обнаружено по runtime-логу Windows: endpoint `POST /api/llm/brief` возвращал `500 Internal Server Error`, если payload содержал `datetime` из PostgreSQL-строки сигнала. Причина — прямой `json.dumps(payload)` в `app.llm.market_brief`, тогда как стандартный JSON encoder Python не сериализует `datetime`, `date`, `Decimal`, numpy/pandas-типы и ряд других объектов.
+
+Исправление:
+- добавлен `app.serialization.to_jsonable()` для рекурсивного приведения DB/pandas/numpy значений к JSON-совместимому виду;
+- `market_brief()` теперь сериализует уже нормализованный payload;
+- `app.db.json_safe()` оставлен как совместимый wrapper на общий serializer;
+- добавлены regression-тесты на `datetime`, `date`, `time`, `Decimal`, `UUID`, numpy scalar/array, pandas `Timestamp` и `pd.NA`.
+
+Безопасное допущение: неизвестные объектные типы переводятся в строку, потому что для LLM-brief это безопаснее, чем пользовательский 500 и потеря диагностического сценария. Торговые решения от этого не исполняются автоматически.

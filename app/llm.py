@@ -6,6 +6,7 @@ from typing import Any
 import requests
 
 from .config import settings
+from .serialization import to_jsonable
 
 
 class LLMUnavailable(RuntimeError):
@@ -58,7 +59,7 @@ def market_brief(payload: dict[str, Any]) -> str:
 Сделай краткий риск-ориентированный разбор торговой ситуации.
 Не давай обещаний прибыли. Укажи, почему сигнал можно рассматривать, почему его надо отклонить, и какие условия invalidation.
 Данные JSON:
-{json.dumps(payload, ensure_ascii=False, indent=2)}
+{json.dumps(to_jsonable(payload), ensure_ascii=False, indent=2)}
 """.strip()
     return ollama_generate(
         prompt,
