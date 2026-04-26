@@ -109,6 +109,8 @@ def command_doctor(args: argparse.Namespace) -> int:
     print(f"POSTGRES_PORT: {env_value('POSTGRES_PORT', '5432')}")
     print(f"POSTGRES_DB: {env_value('POSTGRES_DB', 'bybit_lab')}")
     print(f"POSTGRES_USER: {env_value('POSTGRES_USER', 'bybit_lab_user')}")
+    print(f"ML_MAX_CPU_COUNT: {env_value('ML_MAX_CPU_COUNT', 'auto') or 'auto'}")
+    print(f"LOKY_MAX_CPU_COUNT: {os.getenv('LOKY_MAX_CPU_COUNT') or env_value('LOKY_MAX_CPU_COUNT', 'auto') or 'auto'}")
     if getattr(args, "db_check", False):
         return run_command([py, "-m", "app.db_check"])
     return 0

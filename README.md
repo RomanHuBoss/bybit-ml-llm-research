@@ -362,6 +362,7 @@ REQUIRE_LIQUIDITY_FOR_SIGNALS=true
 MAX_SIGNAL_AGE_HOURS=48
 MAX_SYMBOLS_PER_REQUEST=50
 MAX_SYNC_DAYS=730
+ML_MAX_CPU_COUNT=
 ```
 
 ### Миграция БД
@@ -398,7 +399,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\init_db.ps1
 - валидации символов;
 - retry после transient Bybit retCode `10006`;
 - исключения unverified core symbols из universe;
-- базового smoke-теста индикаторов.
+- базового smoke-теста индикаторов;
+- отсутствия pandas runtime warning в DB/feature pipeline;
+- runtime-настройки `LOKY_MAX_CPU_COUNT` до импорта sklearn/joblib.
 
 Запуск:
 
@@ -412,7 +415,7 @@ python run.py test
 python -m pytest -q
 ```
 
-Ожидаемый результат текущей ревизии: `11 passed`.
+Ожидаемый результат текущей ревизии: `18 passed`.
 
 ### Оставшиеся ограничения
 
@@ -443,4 +446,30 @@ python run.py check
 python run.py test
 ```
 
-Тестовый прогон: `15 passed`.
+Ожидаемый результат полного прогона после обновления: `18 passed`.
+
+## Runtime-предупреждение joblib/loky на Windows
+
+Если при `Train ML` появляется сообщение вида:
+
+```text
+UserWarning: Could not find the number of physical cores ...
+[WinError 2] Не удается найти указанный файл
+wmic CPU Get NumberOfCores /Format:csv
+```
+
+это не падение обучения: endpoint может завершиться `200 OK`, но `joblib/loky` на Windows пытается вызвать отсутствующую утилиту `wmic` для определения физических ядер. Текущая ревизия задает `LOKY_MAX_CPU_COUNT` до импорта `sklearn/joblib`, поэтому warning подавляется без отключения ML.
+
+По умолчанию используется число логических ядер `os.cpu_count()`. Для ручного ограничения можно указать в `.env`:
+
+```env
+ML_MAX_CPU_COUNT=4
+```
+
+Если одновременно задан системный `LOKY_MAX_CPU_COUNT`, он имеет приоритет. Проверить видимые настройки можно командой:
+
+```bash
+python run.py doctor
+```
+
+Ожидаемый результат полного прогона после обновления: `18 passed`.

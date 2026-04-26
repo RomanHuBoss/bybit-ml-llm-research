@@ -166,4 +166,31 @@ python run.py check
 python run.py test
 ```
 
-Ожидаемо: `15 passed`.
+Ожидаемо: `18 passed`.
+
+## Если в консоли был joblib/loky warning про wmic
+
+При обучении ML на Windows может появляться предупреждение:
+
+```text
+UserWarning: Could not find the number of physical cores ...
+[WinError 2] Не удается найти указанный файл
+wmic CPU Get NumberOfCores /Format:csv
+```
+
+Это не означает, что `/api/ml/train` упал: в показанном сценарии сервер вернул `200 OK`. Причина в том, что `joblib/loky` пытается определить физические ядра через `wmic`, а в современных Windows эта утилита может отсутствовать.
+
+В текущей ревизии проект задает `LOKY_MAX_CPU_COUNT` до импорта `sklearn/joblib`. По умолчанию берется число логических ядер. Чтобы ограничить ML-нагрузку вручную, добавьте в `.env`:
+
+```env
+ML_MAX_CPU_COUNT=4
+```
+
+Проверка:
+
+```powershell
+python run.py doctor
+python run.py check
+```
+
+Ожидаемо: `18 passed`.

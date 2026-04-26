@@ -62,7 +62,7 @@
 ## Результаты проверок
 
 - `python -m compileall -q app tests`: успешно.
-- `python -m pytest -q`: `11 passed`.
+- `python -m pytest -q`: `18 passed`.
 
 Примечание: в контейнере pytest выдал только предупреждение о невозможности записи cache в .pytest_cache; на результат тестов это не повлияло.
 
@@ -94,7 +94,25 @@
 - `is_eligible` теперь приводится через pandas `BooleanDtype`, а затем к обычному `bool`; неизвестная ликвидность по-прежнему трактуется как `False`;
 - добавлены тесты, которые запрещают возврат к `pandas.read_sql_query` с raw connection и проверяют отсутствие `FutureWarning` при сборке market frame.
 
-Результаты дополнительной проверки:
+Результаты дополнительной проверки в целевой среде должны быть:
 
 - `python -m compileall -q app tests`: успешно;
-- `python -m pytest -q`: `15 passed`.
+- `python -m pytest -q`: `18 passed`.
+
+## Дополнение: подавление joblib/loky warning на Windows
+
+При реальном запуске `POST /api/ml/train` на Windows обнаружено предупреждение `joblib/loky`: библиотека пыталась вызвать `wmic CPU Get NumberOfCores /Format:csv`, но `wmic` отсутствовал, после чего joblib возвращался к числу логических ядер. Обучение при этом завершалось успешно (`200 OK`), однако warning засорял лог и мог скрывать значимые сообщения.
+
+Исправлено:
+
+- добавлен `app.runtime.configure_runtime_environment()`;
+- `LOKY_MAX_CPU_COUNT` задается до импорта `sklearn/joblib`;
+- пользовательские `LOKY_MAX_CPU_COUNT` и `ML_MAX_CPU_COUNT` не перетираются;
+- добавлен вывод ML CPU-настроек в `python run.py doctor`;
+- `.env.example`, README и Windows-инструкция дополнены параметром `ML_MAX_CPU_COUNT`;
+- добавлены regression-тесты runtime-настройки.
+
+Результаты дополнительной проверки в целевой среде должны быть:
+
+- `python -m compileall -q app tests`: успешно;
+- `python -m pytest -q`: `18 passed`.

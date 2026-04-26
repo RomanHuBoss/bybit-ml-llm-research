@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .runtime import configure_runtime_environment
+
+configure_runtime_environment()
+
 import joblib
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.inspection import permutation_importance
