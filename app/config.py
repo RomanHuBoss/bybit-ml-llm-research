@@ -42,6 +42,33 @@ RSS_URLS_DEFAULT = (
     "https://cointelegraph.com/rss|Cointelegraph"
 )
 
+VALID_BYBIT_INTERVALS = {"1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W", "M"}
+
+
+def _normalize_interval_value(value: str) -> str:
+    interval = (value or "").strip().upper()
+    if interval in {"1D", "DAY"}:
+        interval = "D"
+    if interval not in VALID_BYBIT_INTERVALS:
+        raise ValueError(f"Недопустимый interval Bybit в конфигурации: {value!r}")
+    return interval
+
+
+def _interval(name: str, default: str) -> str:
+    return _normalize_interval_value(os.getenv(name, default))
+
+
+def _intervals(name: str, default: str) -> tuple[str, ...]:
+    raw = os.getenv(name, default)
+    out: list[str] = []
+    for part in raw.split(","):
+        interval = _normalize_interval_value(part)
+        if interval not in out:
+            out.append(interval)
+    if not out:
+        raise ValueError(f"{name} не должен быть пустым")
+    return tuple(out)
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -63,13 +90,13 @@ class Settings:
 
     default_category: str = os.getenv("DEFAULT_CATEGORY", "linear")
     default_symbols: tuple[str, ...] = tuple(s.upper() for s in _csv("DEFAULT_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
-    default_interval: str = os.getenv("DEFAULT_INTERVAL", "60")
+    default_interval: str = _interval("DEFAULT_INTERVAL", "60")
 
     symbol_mode: str = os.getenv("SYMBOL_MODE", "hybrid").lower()  # core | dynamic | hybrid
     core_symbols: tuple[str, ...] = tuple(s.upper() for s in _csv("CORE_SYMBOLS", CORE_SYMBOLS_DEFAULT))
     exclude_symbols: tuple[str, ...] = tuple(s.upper() for s in _csv("EXCLUDE_SYMBOLS", "USDCUSDT,USDEUSDT,FDUSDUSDT"))
-    dynamic_symbol_limit: int = _int("DYNAMIC_SYMBOL_LIMIT", 25)
-    universe_limit: int = _int("UNIVERSE_LIMIT", 25)
+    dynamic_symbol_limit: int = _int("DYNAMIC_SYMBOL_LIMIT", 40)
+    universe_limit: int = _int("UNIVERSE_LIMIT", 40)
     min_turnover_24h: float = _float("MIN_TURNOVER_24H", 20_000_000.0)
     min_open_interest_value: float = _float("MIN_OPEN_INTEREST_VALUE", 15_000_000.0)
     max_spread_pct: float = _float("MAX_SPREAD_PCT", 0.05)
@@ -99,8 +126,9 @@ class Settings:
     signal_auto_refresh_enabled: bool = _bool("SIGNAL_AUTO_REFRESH_ENABLED", True)
     signal_auto_refresh_interval_sec: int = _int("SIGNAL_AUTO_REFRESH_INTERVAL_SEC", 300)
     signal_auto_refresh_startup_delay_sec: int = _int("SIGNAL_AUTO_REFRESH_STARTUP_DELAY_SEC", 20)
-    signal_auto_max_symbols: int = _int("SIGNAL_AUTO_MAX_SYMBOLS", 12)
-    signal_auto_sync_days: int = _int("SIGNAL_AUTO_SYNC_DAYS", 7)
+    signal_auto_max_symbols: int = _int("SIGNAL_AUTO_MAX_SYMBOLS", 25)
+    signal_auto_sync_days: int = _int("SIGNAL_AUTO_SYNC_DAYS", 30)
+    signal_auto_intervals: tuple[str, ...] = _intervals("SIGNAL_AUTO_INTERVALS", "15,60,240")
     signal_auto_refresh_universe: bool = _bool("SIGNAL_AUTO_REFRESH_UNIVERSE", True)
     signal_auto_sync_sentiment: bool = _bool("SIGNAL_AUTO_SYNC_SENTIMENT", True)
 
@@ -168,6 +196,11 @@ def _validate_settings(s: Settings) -> None:
         problems.append("SIGNAL_AUTO_MAX_SYMBOLS должен быть в диапазоне [1; MAX_SYMBOLS_PER_REQUEST]")
     if not (1 <= s.signal_auto_sync_days <= s.max_sync_days):
         problems.append("SIGNAL_AUTO_SYNC_DAYS должен быть в диапазоне [1; MAX_SYNC_DAYS]")
+    if not s.signal_auto_intervals:
+        problems.append("SIGNAL_AUTO_INTERVALS не должен быть пустым")
+    for interval in s.signal_auto_intervals:
+        if interval not in VALID_BYBIT_INTERVALS:
+            problems.append(f"SIGNAL_AUTO_INTERVALS содержит недопустимый interval: {interval}")
     if s.backtest_auto_interval_sec < 60:
         problems.append("BACKTEST_AUTO_INTERVAL_SEC должен быть >= 60")
     if s.backtest_auto_startup_delay_sec < 0:

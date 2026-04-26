@@ -58,6 +58,14 @@ function symbols() {
   return $('symbols').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 }
 
+function intervals() {
+  return $('interval').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+}
+
+function primaryInterval() {
+  return intervals()[0] || '60';
+}
+
 function num(value, fallback = null) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -122,7 +130,7 @@ function log(title, obj) {
 
 function rankBySignal(signal) {
   return state.rank.find((r) => Number(r.id) === Number(signal.id))
-    || state.rank.find((r) => r.symbol === signal.symbol && r.strategy === signal.strategy && r.direction === signal.direction)
+    || state.rank.find((r) => r.symbol === signal.symbol && r.interval === signal.interval && r.strategy === signal.strategy && r.direction === signal.direction)
     || {};
 }
 
@@ -407,7 +415,7 @@ function renderTicket(s) {
   }
   const rr = riskReward(s);
   const directionClass = s.direction === 'long' ? 'long' : s.direction === 'short' ? 'short' : '';
-  $('ticketTitle').textContent = `${s.symbol} · ${String(s.direction || 'flat').toUpperCase()} · ${STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия'}`;
+  $('ticketTitle').textContent = `${s.symbol} · ${s.interval || '—'} · ${String(s.direction || 'flat').toUpperCase()} · ${STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия'}`;
   $('ticketBody').className = 'ticket-body';
   $('ticketBody').innerHTML = `
     <div class="ticket-main">
@@ -516,13 +524,14 @@ function renderQueue() {
       <article class="candidate ${s.decision.level} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}">
         <div class="candidate-head">
           <div>
-            <div class="symbol">${escapeHtml(s.symbol)}</div>
+            <div class="symbol">${escapeHtml(s.symbol)} · ${escapeHtml(s.interval || '—')}</div>
             <div class="candidate-meta"><span class="direction-${escapeHtml(s.direction)}">${escapeHtml(String(s.direction || 'flat').toUpperCase())}</span> · ${escapeHtml(STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия')}</div>
           </div>
           <span class="badge ${s.decision.level}">${escapeHtml(s.decision.label)}</span>
         </div>
         <div class="candidate-line">
           <span class="chip">#<b>${index + 1}</b></span>
+          <span class="chip">TF <b>${escapeHtml(s.interval || '—')}</b></span>
           <span class="chip">Score <b>${s.decision.score}</b></span>
           <span class="chip">Conf <b>${pct(s.confidence, 0)}</b></span>
           <span class="chip">R/R <b>${rr ? rr.ratio.toFixed(2) : '—'}</b></span>
@@ -551,6 +560,7 @@ function renderRawTable(list = candidates()) {
       <td>${escapeHtml(s.decision.label)}</td>
       <td>${escapeHtml(s.decision.score)}</td>
       <td>${escapeHtml(s.symbol)}</td>
+      <td>${escapeHtml(s.interval || '—')}</td>
       <td>${escapeHtml(String(s.direction || 'flat').toUpperCase())}</td>
       <td>${escapeHtml(s.strategy || '—')}</td>
       <td>${pct(s.confidence, 0)}</td>
@@ -579,7 +589,7 @@ async function refreshSignalStatus() {
     const status = state.signalStatus || {};
     const cycle = status.last_cycle || {};
     const text = status.enabled
-      ? `Signals: ${status.running ? 'обновляются' : 'фон'} · cycle ${status.cycle_no || 0} · upsert ${cycle.signals_upserted ?? 0}`
+      ? `Signals: ${status.running ? 'обновляются' : 'фон'} · TF ${(status.intervals || []).join('/') || '—'} · cycle ${status.cycle_no || 0} · upsert ${cycle.signals_upserted ?? 0}`
       : 'Signals: авто выкл';
     $('signalStatusBox').textContent = status.last_error ? `Signals: ошибка · ${status.last_error}` : text;
     $('signalStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
@@ -759,7 +769,7 @@ function bindControls() {
     await runOperation('Market synced', async () => {
       const data = await api('/api/sync/market', {
         method: 'POST',
-        body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: $('interval').value, days: Number($('days').value) }),
+        body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: primaryInterval(), intervals: intervals(), days: Number($('days').value) }),
       });
       await refreshStatus();
       return data.result;
@@ -770,7 +780,7 @@ function bindControls() {
     await runOperation('Sentiment synced', async () => {
       const data = await api('/api/sync/sentiment', {
         method: 'POST',
-        body: JSON.stringify({ symbols: symbols(), days: 7, use_llm: false, category: $('category').value, interval: $('interval').value }),
+        body: JSON.stringify({ symbols: symbols(), days: 7, use_llm: false, category: $('category').value, interval: primaryInterval(), intervals: intervals() }),
       });
       await refreshNews();
       return data.result;
@@ -781,7 +791,7 @@ function bindControls() {
     await runOperation('Signals built', async () => {
       const data = await api('/api/signals/build', {
         method: 'POST',
-        body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: $('interval').value }),
+        body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: primaryInterval(), intervals: intervals() }),
       });
       await refreshRank();
       await refreshSignals();
@@ -802,7 +812,7 @@ function bindControls() {
       const strategy = s?.strategy || $('strategy').value;
       const data = await api('/api/backtest/run', {
         method: 'POST',
-        body: JSON.stringify({ category: $('category').value, symbol: sym, interval: $('interval').value, strategy, limit: 5000 }),
+        body: JSON.stringify({ category: $('category').value, symbol: sym, interval: s?.interval || primaryInterval(), strategy, limit: 5000 }),
       });
       drawEquity(data.result.equity_curve);
       await refreshRank();
@@ -835,7 +845,7 @@ function bindControls() {
       const sym = s?.symbol || symbols()[0] || 'BTCUSDT';
       const data = await api('/api/ml/train', {
         method: 'POST',
-        body: JSON.stringify({ category: $('category').value, symbol: sym, interval: $('interval').value, horizon_bars: 12 }),
+        body: JSON.stringify({ category: $('category').value, symbol: sym, interval: s?.interval || primaryInterval(), horizon_bars: 12 }),
       });
       await refreshRank();
       return data.result;
@@ -846,7 +856,7 @@ function bindControls() {
     await runOperation('ML prediction', async () => {
       const s = selectedCandidate();
       const sym = s?.symbol || symbols()[0] || 'BTCUSDT';
-      const data = await api(`/api/ml/predict/latest?symbol=${encodeURIComponent(sym)}&category=${encodeURIComponent($('category').value)}&interval=${encodeURIComponent($('interval').value)}&horizon_bars=12`);
+      const data = await api(`/api/ml/predict/latest?symbol=${encodeURIComponent(sym)}&category=${encodeURIComponent($('category').value)}&interval=${encodeURIComponent(s?.interval || primaryInterval())}&horizon_bars=12`);
       return data.result;
     });
   };

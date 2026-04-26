@@ -354,18 +354,48 @@ def sync_market_sentiment(symbol: str, category: str = "linear", interval: str =
 
 
 def sync_sentiment_bundle(symbols: list[str], days: int, use_llm: bool = False, category: str = "linear", interval: str = "60") -> dict[str, Any]:
+    result = sync_sentiment_bundle_multi(symbols, days, [interval], use_llm=use_llm, category=category)
+    # Обратная совместимость: старый endpoint возвращал market_microstructure одним числом,
+    # а не словарем по таймфреймам. Multi-timeframe контур использует новую функцию ниже.
+    for symbol, payload in result.get("symbols", {}).items():
+        intervals = payload.get("market_microstructure_by_interval", {})
+        payload["market_microstructure"] = intervals.get(interval, 0)
+    return result
+
+
+def sync_sentiment_bundle_multi(
+    symbols: list[str],
+    days: int,
+    intervals: list[str] | tuple[str, ...],
+    use_llm: bool = False,
+    category: str = "linear",
+) -> dict[str, Any]:
     symbols = [s.upper() for s in symbols]
+    normalized_intervals = []
+    for interval in intervals:
+        value = str(interval).strip().upper()
+        if value and value not in normalized_intervals:
+            normalized_intervals.append(value)
     result: dict[str, Any] = {
         "fear_greed": sync_fear_greed(limit=max(30, days + 5)),
         "rss_news": sync_rss_news(symbols, use_llm=use_llm),
         "symbols": {},
+        "intervals": normalized_intervals,
         "cryptopanic_enabled": bool(settings.use_cryptopanic and settings.cryptopanic_token),
     }
     for symbol in symbols:
         gdelt = sync_gdelt_news(symbol, days=min(max(days, 1), 7), use_llm=use_llm)
         cp = sync_cryptopanic(symbol, use_llm=use_llm)
-        market_micro = sync_market_sentiment(symbol, category=category, interval=interval)
-        result["symbols"][symbol] = {"gdelt_news": gdelt, "cryptopanic_news": cp, "market_microstructure": market_micro}
+        market_by_interval: dict[str, int] = {}
+        for interval in normalized_intervals:
+            # Рыночный micro-sentiment зависит от свечного таймфрейма. Его нельзя
+            # считать один раз для 1h и молча переиспользовать для 15m/4h.
+            market_by_interval[interval] = sync_market_sentiment(symbol, category=category, interval=interval)
+        result["symbols"][symbol] = {
+            "gdelt_news": gdelt,
+            "cryptopanic_news": cp,
+            "market_microstructure_by_interval": market_by_interval,
+        }
     return result
 
 

@@ -16,21 +16,24 @@ def test_signal_background_rejects_overlap():
 
 
 def test_signal_background_run_once_full_pipeline(monkeypatch):
+    from dataclasses import replace
+
     import app.signal_background as sb
     from app.strategies import StrategySignal
 
     runner = sb.SignalAutoRefresher()
     calls: list[tuple] = []
 
+    monkeypatch.setattr(sb, "settings", replace(sb.settings, signal_auto_intervals=("60", "240")))
     monkeypatch.setattr(sb, "select_auto_symbols", lambda category: (["BTCUSDT", "ETHUSDT"], "unit"))
 
     def fake_sync_market(category, symbol, interval, days):
         calls.append(("market", category, symbol, interval, days))
         return {"candles": 10, "funding_rates": 2, "open_interest": 2}
 
-    def fake_sync_sentiment(symbols, days, use_llm, category, interval):
-        calls.append(("sentiment", tuple(symbols), days, use_llm, category, interval))
-        return {"ok": True}
+    def fake_sync_sentiment(symbols, days, intervals, use_llm, category):
+        calls.append(("sentiment", tuple(symbols), days, tuple(intervals), use_llm, category))
+        return {"ok": True, "intervals": list(intervals)}
 
     def fake_build(category, symbol, interval):
         calls.append(("build", category, symbol, interval))
@@ -44,7 +47,7 @@ def test_signal_background_run_once_full_pipeline(monkeypatch):
     llm_requests = []
 
     monkeypatch.setattr(sb, "sync_market_bundle", fake_sync_market)
-    monkeypatch.setattr(sb, "sync_sentiment_bundle", fake_sync_sentiment)
+    monkeypatch.setattr(sb, "sync_sentiment_bundle_multi", fake_sync_sentiment)
     monkeypatch.setattr(sb, "build_latest_signals", fake_build)
     monkeypatch.setattr(sb, "persist_signals", fake_persist)
     monkeypatch.setattr(sb.background_backtester, "request_run", lambda: backtest_requests.append(True))
@@ -52,17 +55,20 @@ def test_signal_background_run_once_full_pipeline(monkeypatch):
 
     result = runner.run_once()
 
-    assert result["queued"] == 2
-    assert result["signals_built"] == 2
-    assert result["signals_upserted"] == 2
+    assert result["queued"] == 4
+    assert result["market_synced"] == 4
+    assert result["intervals"] == ["60", "240"]
+    assert result["signals_built"] == 4
+    assert result["signals_upserted"] == 4
     assert result["failed"] == 0
     assert result["downstream_requested"] == {"backtest": True, "llm": True}
     assert backtest_requests == [True]
     assert llm_requests == [True]
     call_names = [c[0] for c in calls]
-    assert call_names[:2] == ["market", "market"]
+    assert call_names[:4] == ["market", "market", "market", "market"]
     assert call_names.index("sentiment") > call_names.index("market")
-    assert call_names.count("persist") == 2
+    assert call_names.count("persist") == 4
+    assert {c[3] for c in calls if c[0] == "market"} == {"60", "240"}
 
 
 def test_select_auto_symbols_falls_back_to_defaults(monkeypatch):

@@ -25,6 +25,28 @@ def normalize_interval(interval: str) -> str:
     return value
 
 
+def normalize_intervals(intervals: str | list[str] | tuple[str, ...]) -> list[str]:
+    """Нормализует один или несколько Bybit-таймфреймов с дедупликацией порядка.
+
+    Ввод может прийти из UI как строка `15,60,240` или из API как список.
+    Пустой набор опасен: оператор увидит успешный запуск без фактической проверки.
+    """
+    if isinstance(intervals, str):
+        raw = intervals.split(",")
+    else:
+        raw = list(intervals)
+    out: list[str] = []
+    for interval in raw:
+        value = normalize_interval(str(interval))
+        if value not in out:
+            out.append(value)
+    if not out:
+        raise ValueError("Список intervals пуст")
+    if len(out) > 6:
+        raise ValueError("Слишком много intervals: максимум 6 за один запрос")
+    return out
+
+
 def normalize_symbol(symbol: str) -> str:
     value = (symbol or "").strip().upper().replace("-", "")
     if not SYMBOL_RE.fullmatch(value):

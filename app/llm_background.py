@@ -11,7 +11,7 @@ from typing import Any
 from .config import settings
 from .db import execute, fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
-from .research import rank_candidates
+from .research import rank_candidates_multi
 from .serialization import to_jsonable
 
 
@@ -269,7 +269,11 @@ def _is_eval_fresh(candidate: dict[str, Any], current_hash: str) -> bool:
 
 
 def candidates_needing_llm() -> list[dict[str, Any]]:
-    ranked = rank_candidates(settings.default_category, settings.default_interval, limit=max(settings.llm_auto_eval_max_candidates * 3, 12))
+    ranked = rank_candidates_multi(
+        settings.default_category,
+        settings.signal_auto_intervals,
+        limit=max(settings.llm_auto_eval_max_candidates * 3, 12),
+    )
     selected: list[dict[str, Any]] = []
     for candidate in ranked:
         if not candidate.get("id"):

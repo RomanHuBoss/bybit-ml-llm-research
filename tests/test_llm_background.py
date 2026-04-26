@@ -31,7 +31,7 @@ def test_candidates_needing_llm_skips_fresh_existing_evaluation(monkeypatch):
         "llm_updated_at": datetime.now(timezone.utc) - timedelta(minutes=5),
     }
 
-    monkeypatch.setattr(bg, "rank_candidates", lambda *_args, **_kwargs: [fresh])
+    monkeypatch.setattr(bg, "rank_candidates_multi", lambda *_args, **_kwargs: [fresh])
 
     assert bg.candidates_needing_llm() == []
 
@@ -51,7 +51,7 @@ def test_candidates_needing_llm_selects_missing_or_stale_evaluation(monkeypatch)
         "llm_updated_at": datetime.now(timezone.utc) - timedelta(days=1),
     }
 
-    monkeypatch.setattr(bg, "rank_candidates", lambda *_args, **_kwargs: [stale])
+    monkeypatch.setattr(bg, "rank_candidates_multi", lambda *_args, **_kwargs: [stale])
 
     selected = bg.candidates_needing_llm()
 

@@ -7,27 +7,34 @@ from .db import fetch_all
 
 
 def rank_candidates(category: str = "linear", interval: str = "60", limit: int = 30) -> list[dict[str, Any]]:
+    return rank_candidates_multi(category, [interval], limit)
+
+
+def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple[str, ...] = ("60",), limit: int = 30) -> list[dict[str, Any]]:
+    interval_list = [str(interval).strip().upper() for interval in intervals if str(interval).strip()]
+    if not interval_list:
+        return []
     rows = fetch_all(
         """
         WITH latest_signals AS (
-            SELECT DISTINCT ON (symbol, strategy, direction)
+            SELECT DISTINCT ON (symbol, interval, strategy, direction)
                    id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
                    entry, stop_loss, take_profit, sentiment_score, rationale
             FROM signals
-            WHERE category=%s AND interval=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
-            ORDER BY symbol, strategy, direction, created_at DESC
+            WHERE category=%s AND interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
+            ORDER BY symbol, interval, strategy, direction, created_at DESC
         ), latest_backtests AS (
-            SELECT DISTINCT ON (symbol, strategy)
-                   symbol, strategy, total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, created_at
+            SELECT DISTINCT ON (symbol, interval, strategy)
+                   symbol, interval, strategy, total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, created_at
             FROM backtest_runs
-            WHERE category=%s AND interval=%s
-            ORDER BY symbol, strategy, created_at DESC
+            WHERE category=%s AND interval = ANY(%s)
+            ORDER BY symbol, interval, strategy, created_at DESC
         ), latest_models AS (
-            SELECT DISTINCT ON (symbol)
-                   symbol, roc_auc, precision_score, recall_score, created_at
+            SELECT DISTINCT ON (symbol, interval)
+                   symbol, interval, roc_auc, precision_score, recall_score, created_at
             FROM model_runs
-            WHERE category=%s AND interval=%s
-            ORDER BY symbol, created_at DESC
+            WHERE category=%s AND interval = ANY(%s)
+            ORDER BY symbol, interval, created_at DESC
         ), latest_liq_time AS (
             SELECT MAX(captured_at) AS captured_at FROM liquidity_snapshots WHERE category=%s
         ), latest_liq AS (
@@ -61,8 +68,8 @@ def rank_candidates(category: str = "linear", interval: str = "60", limit: int =
                  - LEAST(GREATEST(COALESCE(b.max_drawdown::float, 0.2), 0), 1) * 0.10
                ) AS research_score
         FROM latest_signals s
-        LEFT JOIN latest_backtests b ON b.symbol=s.symbol AND b.strategy=s.strategy
-        LEFT JOIN latest_models m ON m.symbol=s.symbol
+        LEFT JOIN latest_backtests b ON b.symbol=s.symbol AND b.interval=s.interval AND b.strategy=s.strategy
+        LEFT JOIN latest_models m ON m.symbol=s.symbol AND m.interval=s.interval
         LEFT JOIN latest_liq l ON l.symbol=s.symbol
         LEFT JOIN latest_llm e ON e.signal_id=s.id
         ORDER BY research_score DESC NULLS LAST, s.created_at DESC
@@ -70,12 +77,12 @@ def rank_candidates(category: str = "linear", interval: str = "60", limit: int =
         """,
         (
             category,
-            interval,
+            interval_list,
             settings.max_signal_age_hours,
             category,
-            interval,
+            interval_list,
             category,
-            interval,
+            interval_list,
             category,
             category,
             settings.max_spread_pct,

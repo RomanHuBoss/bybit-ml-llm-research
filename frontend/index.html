@@ -35,9 +35,9 @@
       </div>
 
       <ol class="steps">
-        <li><b>Данные рынка</b><span>Свечи, liquidity и sentiment обновляются операцией с данными.</span></li>
-        <li><b>Рекомендации</b><span>Signals/rank строят очередь кандидатов.</span></li>
-        <li><b>LLM работает в фоне</b><span>Top-кандидаты периодически получают риск‑вердикт без ручной кнопки.</span></li>
+        <li><b>Данные рынка</b><span>Свечи, liquidity и sentiment обновляются по заданным таймфреймам.</span></li>
+        <li><b>Рекомендации</b><span>Signals/rank строят очередь кандидатов с учетом TF 15m/1h/4h.</span></li>
+        <li><b>LLM работает в фоне</b><span>Top-кандидаты по всем включенным TF получают риск‑вердикт без ручной кнопки.</span></li>
         <li><b>Решение</b><span>Красный пункт или отрицательный LLM‑вердикт = нет входа.</span></li>
       </ol>
 
@@ -50,8 +50,8 @@
           <label>Категория
             <input id="category" value="linear" autocomplete="off" />
           </label>
-          <label>Интервал
-            <input id="interval" value="60" autocomplete="off" />
+          <label>Таймфреймы
+            <input id="interval" value="15,60,240" autocomplete="off" />
           </label>
         </div>
         <div class="field-grid">
@@ -218,7 +218,7 @@
         </div>
         <div class="table-wrap">
           <table id="rawTable">
-            <thead><tr><th>Решение</th><th>Score</th><th>Символ</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th><th>LLM</th></tr></thead>
+            <thead><tr><th>Решение</th><th>Score</th><th>Символ</th><th>TF</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th><th>LLM</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>

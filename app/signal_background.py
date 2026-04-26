@@ -9,7 +9,7 @@ from .backtest_background import background_backtester
 from .bybit_client import sync_market_bundle
 from .config import settings
 from .llm_background import background_evaluator
-from .sentiment import sync_sentiment_bundle
+from .sentiment import sync_sentiment_bundle_multi
 from .strategies import build_latest_signals, persist_signals
 from .symbols import build_universe, latest_universe
 
@@ -75,6 +75,7 @@ class SignalAutoRefresher:
                 "startup_delay_sec": settings.signal_auto_refresh_startup_delay_sec,
                 "max_symbols": settings.signal_auto_max_symbols,
                 "sync_days": settings.signal_auto_sync_days,
+                "intervals": settings.signal_auto_intervals,
                 "refresh_universe": settings.signal_auto_refresh_universe,
                 "sync_sentiment": settings.signal_auto_sync_sentiment,
                 "last_error": self._last_error,
@@ -129,11 +130,12 @@ class SignalAutoRefresher:
                 self._cycle_no += 1
 
             category = settings.default_category
-            interval = settings.default_interval
+            intervals = list(settings.signal_auto_intervals)
             symbols, source = select_auto_symbols(category)
             summary["symbol_source"] = source
             summary["symbols"] = symbols
-            summary["queued"] = len(symbols)
+            summary["intervals"] = intervals
+            summary["queued"] = len(symbols) * len(intervals)
 
             if not symbols:
                 summary["skipped"] = 1
@@ -142,25 +144,29 @@ class SignalAutoRefresher:
 
             items_by_symbol: dict[str, dict[str, Any]] = {}
             for symbol in symbols:
-                item: dict[str, Any] = {"symbol": symbol, "status": "pending", "market_ok": False}
+                item: dict[str, Any] = {"symbol": symbol, "status": "pending", "intervals": {}}
                 items_by_symbol[symbol] = item
                 summary["items"].append(item)
-                try:
-                    item["market"] = sync_market_bundle(category, symbol, interval, settings.signal_auto_sync_days)
-                    item["market_ok"] = True
-                except Exception as exc:
-                    # Нельзя строить новую рекомендацию поверх неудачной синхронизации свечей:
-                    # это создает иллюзию свежего сигнала на старом/частичном рынке.
-                    message = str(exc)
-                    item.update({"status": "market_error", "error": message[:500]})
-                    summary["failed"] += 1
-                    logger.warning("background market sync failed for %s: %s", symbol, message)
+                for interval in intervals:
+                    interval_item: dict[str, Any] = {"interval": interval, "status": "pending", "market_ok": False}
+                    item["intervals"][interval] = interval_item
+                    try:
+                        interval_item["market"] = sync_market_bundle(category, symbol, interval, settings.signal_auto_sync_days)
+                        interval_item["market_ok"] = True
+                        summary["market_synced"] += 1
+                    except Exception as exc:
+                        # Нельзя строить новую рекомендацию поверх неудачной синхронизации свечей:
+                        # это создает иллюзию свежего сигнала на старом/частичном рынке.
+                        message = str(exc)
+                        interval_item.update({"status": "market_error", "error": message[:500]})
+                        summary["failed"] += 1
+                        logger.warning("background market sync failed for %s %s: %s", symbol, interval, message)
 
             if settings.signal_auto_sync_sentiment:
                 try:
                     # Sentiment синхронизируется после рынка: market-based sentiment должен
-                    # видеть свежие свечи, а не предыдущий snapshot.
-                    sentiment = sync_sentiment_bundle(symbols, settings.sentiment_lookback_days, False, category, interval)
+                    # видеть свежие свечи каждого таймфрейма, а не предыдущий snapshot 1h.
+                    sentiment = sync_sentiment_bundle_multi(symbols, settings.sentiment_lookback_days, intervals, False, category)
                     summary["sentiment"] = sentiment
                 except Exception as exc:
                     # Sentiment полезен, но не должен блокировать закрытые рыночные сигналы.
@@ -170,20 +176,23 @@ class SignalAutoRefresher:
 
             total_upserted = 0
             for symbol, item in items_by_symbol.items():
-                if not item.get("market_ok"):
-                    continue
-                try:
-                    signals = build_latest_signals(category, symbol, interval)
-                    upserted = int(persist_signals(category, symbol, interval, signals) or 0)
-                    total_upserted += upserted
-                    item.update({"status": "ok", "built": len(signals), "upserted": upserted})
-                    summary["signals_built"] += len(signals)
-                    summary["signals_upserted"] += upserted
-                except Exception as exc:
-                    message = str(exc)
-                    item.update({"status": "signal_error", "error": message[:500]})
-                    summary["failed"] += 1
-                    logger.warning("background signal refresh failed for %s: %s", symbol, message)
+                for interval, interval_item in item["intervals"].items():
+                    if not interval_item.get("market_ok"):
+                        continue
+                    try:
+                        signals = build_latest_signals(category, symbol, interval)
+                        upserted = int(persist_signals(category, symbol, interval, signals) or 0)
+                        total_upserted += upserted
+                        interval_item.update({"status": "ok", "built": len(signals), "upserted": upserted})
+                        summary["signals_built"] += len(signals)
+                        summary["signals_upserted"] += upserted
+                    except Exception as exc:
+                        message = str(exc)
+                        interval_item.update({"status": "signal_error", "error": message[:500]})
+                        summary["failed"] += 1
+                        logger.warning("background signal refresh failed for %s %s: %s", symbol, interval, message)
+                statuses = [payload.get("status") for payload in item["intervals"].values()]
+                item["status"] = "ok" if statuses and all(status == "ok" for status in statuses) else "partial"
 
             if total_upserted > 0:
                 if settings.backtest_auto_enabled:
@@ -211,12 +220,14 @@ class SignalAutoRefresher:
 def _empty_summary() -> dict[str, Any]:
     return {
         "queued": 0,
+        "market_synced": 0,
         "signals_built": 0,
         "signals_upserted": 0,
         "skipped": 0,
         "failed": 0,
         "symbol_source": None,
         "symbols": [],
+        "intervals": [],
         "warnings": [],
         "items": [],
         "downstream_requested": {"backtest": False, "llm": False},

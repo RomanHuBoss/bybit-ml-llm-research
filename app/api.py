@@ -12,12 +12,12 @@ from .config import settings
 from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
-from .research import rank_candidates
+from .research import rank_candidates, rank_candidates_multi
 from .sentiment import sentiment_summary, sync_sentiment_bundle
 from .signal_background import signal_refresher
 from .strategies import build_latest_signals, persist_signals
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
-from .validation import bounded_int, normalize_category, normalize_interval, normalize_symbol, normalize_symbols
+from .validation import bounded_int, normalize_category, normalize_interval, normalize_intervals, normalize_symbol, normalize_symbols
 
 router = APIRouter(prefix="/api")
 
@@ -26,6 +26,7 @@ class MarketSyncRequest(BaseModel):
     category: str = settings.default_category
     symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols), min_length=1)
     interval: str = settings.default_interval
+    intervals: list[str] | None = None
     days: int = Field(default=90, ge=1, le=settings.max_sync_days)
 
 
@@ -35,12 +36,14 @@ class SentimentSyncRequest(BaseModel):
     use_llm: bool = False
     category: str = settings.default_category
     interval: str = settings.default_interval
+    intervals: list[str] | None = None
 
 
 class SignalBuildRequest(BaseModel):
     category: str = settings.default_category
     symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols), min_length=1)
     interval: str = settings.default_interval
+    intervals: list[str] | None = None
 
 
 class BacktestRequest(BaseModel):
@@ -104,6 +107,7 @@ def status() -> dict[str, Any]:
             "interval_sec": settings.signal_auto_refresh_interval_sec,
             "max_symbols": settings.signal_auto_max_symbols,
             "sync_days": settings.signal_auto_sync_days,
+            "intervals": settings.signal_auto_intervals,
             "sync_sentiment": settings.signal_auto_sync_sentiment,
         },
         "sentiment_sources": {
@@ -167,12 +171,15 @@ def sync_market(req: MarketSyncRequest) -> dict[str, Any]:
     result = {}
     try:
         category = normalize_category(req.category)
-        interval = normalize_interval(req.interval)
+        intervals = normalize_intervals(req.intervals or req.interval)
         symbols = normalize_symbols(req.symbols)
         days = bounded_int(req.days, "days", 1, settings.max_sync_days)
         for symbol in symbols:
-            result[symbol] = sync_market_bundle(category, symbol, interval, days)
-        return {"ok": True, "result": result}
+            if len(intervals) == 1:
+                result[symbol] = sync_market_bundle(category, symbol, intervals[0], days)
+            else:
+                result[symbol] = {interval: sync_market_bundle(category, symbol, interval, days) for interval in intervals}
+        return {"ok": True, "intervals": intervals, "result": result}
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:
@@ -183,10 +190,16 @@ def sync_market(req: MarketSyncRequest) -> dict[str, Any]:
 def sync_sentiment(req: SentimentSyncRequest) -> dict[str, Any]:
     try:
         category = normalize_category(req.category)
-        interval = normalize_interval(req.interval)
+        intervals = normalize_intervals(req.intervals or req.interval)
         symbols = normalize_symbols(req.symbols)
         days = bounded_int(req.days, "days", 1, 60)
-        return {"ok": True, "result": sync_sentiment_bundle(symbols, days, req.use_llm, category, interval)}
+        if len(intervals) == 1:
+            result = sync_sentiment_bundle(symbols, days, req.use_llm, category, intervals[0])
+        else:
+            from .sentiment import sync_sentiment_bundle_multi
+
+            result = sync_sentiment_bundle_multi(symbols, days, intervals, req.use_llm, category)
+        return {"ok": True, "intervals": intervals, "result": result}
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:
@@ -206,14 +219,21 @@ def build_signals(req: SignalBuildRequest) -> dict[str, Any]:
     output = {}
     try:
         category = normalize_category(req.category)
-        interval = normalize_interval(req.interval)
+        intervals = normalize_intervals(req.intervals or req.interval)
         symbols = normalize_symbols(req.symbols)
         total_inserted = 0
         for symbol in symbols:
-            signals = build_latest_signals(category, symbol, interval)
-            inserted = persist_signals(category, symbol, interval, signals)
-            total_inserted += int(inserted or 0)
-            output[symbol] = {"built": len(signals), "upserted": inserted, "signals": [s.__dict__ for s in signals]}
+            if len(intervals) > 1:
+                output[symbol] = {}
+            for interval in intervals:
+                signals = build_latest_signals(category, symbol, interval)
+                inserted = persist_signals(category, symbol, interval, signals)
+                total_inserted += int(inserted or 0)
+                payload = {"built": len(signals), "upserted": inserted, "signals": [s.__dict__ for s in signals]}
+                if len(intervals) == 1:
+                    output[symbol] = payload
+                else:
+                    output[symbol][interval] = payload
         backtest_requested = False
         llm_requested = False
         if total_inserted > 0:
@@ -225,6 +245,7 @@ def build_signals(req: SignalBuildRequest) -> dict[str, Any]:
                 llm_requested = True
         return {
             "ok": True,
+            "intervals": intervals,
             "result": output,
             "backtest_auto_requested": backtest_requested,
             "llm_auto_requested": llm_requested,
@@ -268,7 +289,12 @@ def latest_signals(limit: int = 50) -> dict[str, Any]:
 @router.get("/research/rank")
 def api_rank_candidates(category: str = settings.default_category, interval: str = settings.default_interval, limit: int = 30) -> dict[str, Any]:
     try:
-        return {"ok": True, "items": rank_candidates(normalize_category(category), normalize_interval(interval), bounded_int(limit, "limit", 1, 200))}
+        category = normalize_category(category)
+        if interval.strip().lower() in {"all", "multi", "mtf", "*"}:
+            intervals = list(settings.signal_auto_intervals)
+        else:
+            intervals = normalize_intervals(interval)
+        return {"ok": True, "intervals": intervals, "items": rank_candidates_multi(category, intervals, bounded_int(limit, "limit", 1, 200))}
     except ValueError as exc:
         raise _bad_request(exc) from exc
 
