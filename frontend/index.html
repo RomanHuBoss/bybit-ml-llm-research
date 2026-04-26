@@ -3,115 +3,205 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bybit ML/LLM Research Lab</title>
+  <title>Bybit Research Decision Cockpit</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <h1>Bybit ML/LLM Research Lab</h1>
-      <p>Локальный аналитический стенд: Bybit + ML + LLM + бесплатный sentiment pipeline + paper research</p>
+    <div class="brand">
+      <span class="brand-mark">BR</span>
+      <div>
+        <h1>Bybit Research Decision Cockpit</h1>
+        <p>Рекомендательный экран для оператора: сигнал → качество → риск → ручное решение.</p>
+      </div>
     </div>
-    <div class="status" id="statusBox">Проверка...</div>
+    <div class="topbar-actions">
+      <span class="mode-pill">LIVE TRADING OFF</span>
+      <span class="status" id="statusBox">Проверка...</span>
+    </div>
   </header>
 
-  <main class="layout">
-    <section class="panel controls">
-      <h2>Управление</h2>
-      <label>Символы <input id="symbols" value="BTCUSDT,ETHUSDT,SOLUSDT" /></label>
-      <label>Категория <input id="category" value="linear" /></label>
-      <label>Интервал <input id="interval" value="60" /></label>
-      <label>Дней истории <input id="days" type="number" value="120" min="1" max="1000" /></label>
-      <label>Universe mode
-        <select id="universeMode">
-          <option>hybrid</option>
-          <option>core</option>
-          <option>dynamic</option>
-        </select>
-      </label>
-      <label>Стратегия
-        <select id="strategy">
-          <option>regime_adaptive_combo</option>
-          <option>donchian_atr_breakout</option>
-          <option>ema_pullback_trend</option>
-          <option>bollinger_rsi_reversion</option>
-          <option>funding_extreme_contrarian</option>
-          <option>oi_trend_confirmation</option>
-          <option>volatility_squeeze_breakout</option>
-          <option>sentiment_fear_reversal</option>
-          <option>sentiment_greed_reversal</option>
-        </select>
-      </label>
-      <div class="button-grid">
-        <button id="syncUniverseBtn">Sync universe</button>
-        <button id="syncMarketBtn">Sync market</button>
-        <button id="syncSentimentBtn">Sync sentiment</button>
-        <button id="buildSignalsBtn">Build signals</button>
-        <button id="rankBtn">Rank candidates</button>
-        <button id="backtestBtn">Backtest</button>
-        <button id="trainBtn">Train ML</button>
-        <button id="predictBtn">ML latest</button>
-      </div>
-      <pre id="log" class="log"></pre>
-    </section>
+  <main class="shell">
+    <aside class="sidebar">
+      <section class="panel compact-panel">
+        <div class="panel-head">
+          <h2>Рабочий контекст</h2>
+          <button id="refreshAllBtn" class="ghost small">Обновить</button>
+        </div>
+        <label>Символы
+          <input id="symbols" value="BTCUSDT,ETHUSDT,SOLUSDT" autocomplete="off" />
+        </label>
+        <div class="field-grid">
+          <label>Категория
+            <input id="category" value="linear" autocomplete="off" />
+          </label>
+          <label>Интервал
+            <input id="interval" value="60" autocomplete="off" />
+          </label>
+        </div>
+        <div class="field-grid">
+          <label>Дней истории
+            <input id="days" type="number" value="120" min="1" max="1000" />
+          </label>
+          <label>Universe
+            <select id="universeMode">
+              <option>hybrid</option>
+              <option>core</option>
+              <option>dynamic</option>
+            </select>
+          </label>
+        </div>
+        <label>Стратегия для бэктеста
+          <select id="strategy">
+            <option>regime_adaptive_combo</option>
+            <option>donchian_atr_breakout</option>
+            <option>ema_pullback_trend</option>
+            <option>bollinger_rsi_reversion</option>
+            <option>funding_extreme_contrarian</option>
+            <option>oi_trend_confirmation</option>
+            <option>volatility_squeeze_breakout</option>
+            <option>sentiment_fear_reversal</option>
+            <option>sentiment_greed_reversal</option>
+          </select>
+        </label>
+      </section>
 
-    <section class="panel kpis">
-      <div class="kpi"><span>Свечей</span><strong id="kpiCandles">—</strong></div>
-      <div class="kpi"><span>Universe</span><strong id="kpiUniverse">—</strong></div>
-      <div class="kpi"><span>Live trading</span><strong>OFF</strong></div>
-      <div class="kpi"><span>Режим</span><strong>Research</strong></div>
-      <div class="kpi"><span>Sentiment</span><strong id="kpiSentiment">Free</strong></div>
-      <div class="kpi"><span>ML/LLM</span><strong>Local</strong></div>
-    </section>
+      <section class="panel compact-panel">
+        <h2>Операции</h2>
+        <div class="button-stack">
+          <button id="syncUniverseBtn">1 · Обновить universe</button>
+          <button id="syncMarketBtn">2 · Загрузить рынок</button>
+          <button id="syncSentimentBtn">3 · Обновить sentiment</button>
+          <button id="buildSignalsBtn" class="primary">4 · Построить рекомендации</button>
+          <button id="rankBtn">Пересчитать рейтинг</button>
+          <button id="backtestBtn">Бэктест выбранной стратегии</button>
+          <button id="trainBtn">Обучить ML по выбранному символу</button>
+          <button id="predictBtn">ML-прогноз по выбранному символу</button>
+        </div>
+      </section>
 
-    <section class="panel wide">
-      <h2>Dynamic / Hybrid universe</h2>
-      <div class="table-wrap">
-        <table id="universeTable">
-          <thead><tr><th>#</th><th>Символ</th><th>Reason</th><th>Liquidity</th><th>Spread %</th><th>Turnover 24h</th><th>OI value</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
+      <section class="panel compact-panel system-panel">
+        <h2>Система</h2>
+        <div class="mini-grid">
+          <div><span>Свечей</span><strong id="kpiCandles">—</strong></div>
+          <div><span>Universe</span><strong id="kpiUniverse">—</strong></div>
+          <div><span>Режим</span><strong>Research</strong></div>
+          <div><span>Sentiment</span><strong id="kpiSentiment">Free</strong></div>
+        </div>
+        <details>
+          <summary>Журнал операций</summary>
+          <pre id="log" class="log"></pre>
+        </details>
+      </section>
+    </aside>
 
-    <section class="panel wide">
-      <h2>Research ranking</h2>
-      <div class="table-wrap">
-        <table id="rankTable">
-          <thead><tr><th>Score</th><th>Символ</th><th>Стратегия</th><th>Dir</th><th>Conf</th><th>PF</th><th>Sharpe</th><th>DD</th><th>ROC AUC</th><th>Spread</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
+    <section class="workspace">
+      <section class="decision-hero" id="decisionHero">
+        <div class="decision-status no-data" id="decisionStatus">NO DATA</div>
+        <div class="decision-main">
+          <p class="eyebrow">Главное решение</p>
+          <h2 id="decisionTitle">Нет свежих торговых рекомендаций</h2>
+          <p id="decisionSubtitle">Сначала синхронизируйте рынок и постройте рекомендации. Экран не отправляет ордера и не создает ботов автоматически.</p>
+        </div>
+        <div class="decision-score">
+          <span>Оценка</span>
+          <strong id="decisionScore">—</strong>
+        </div>
+      </section>
 
-    <section class="panel wide">
-      <h2>Последние сигналы</h2>
-      <div class="table-wrap">
-        <table id="signalsTable">
-          <thead>
-            <tr>
-              <th>ID</th><th>Время</th><th>Символ</th><th>Стратегия</th><th>Направление</th><th>Confidence</th><th>Entry</th><th>SL</th><th>TP</th><th>LLM</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
+      <section class="decision-grid">
+        <article class="panel action-card">
+          <div class="panel-head">
+            <h2>План кандидата</h2>
+            <button id="briefBtn" class="ghost small">LLM brief</button>
+          </div>
+          <div id="tradePlan" class="trade-plan empty-state">Выберите кандидата из списка ниже.</div>
+        </article>
 
-    <section class="panel chart-panel">
-      <h2>Equity curve последнего бэктеста</h2>
-      <canvas id="equityCanvas" width="900" height="320"></canvas>
-    </section>
+        <article class="panel evidence-card">
+          <h2>Почему / почему нет</h2>
+          <div id="evidenceList" class="evidence-list empty-state">Нет выбранного сигнала.</div>
+        </article>
 
-    <section class="panel">
-      <h2>Последние новости / сентимент</h2>
-      <div id="sentimentBox" class="sentiment-box"></div>
-      <div id="newsList" class="news-list"></div>
-    </section>
+        <article class="panel guard-card">
+          <h2>Стоп-факторы</h2>
+          <div id="guardrails" class="guardrails empty-state">Нет данных для проверки ограничений.</div>
+        </article>
+      </section>
 
-    <section class="panel wide">
-      <h2>LLM brief</h2>
-      <pre id="briefBox" class="brief">Выберите сигнал и нажмите LLM.</pre>
+      <section class="panel candidates-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Кандидаты для ручного решения</h2>
+            <p>Сначала смотрите статус и риск/прибыль, затем доказательства и LLM-brief. Таблицы ниже — только детализация.</p>
+          </div>
+          <div class="legend">
+            <span><i class="dot good"></i>можно проверять</span>
+            <span><i class="dot warn"></i>наблюдать</span>
+            <span><i class="dot bad"></i>запрет</span>
+          </div>
+        </div>
+        <div id="candidateList" class="candidate-list empty-state">Кандидаты появятся после построения сигналов.</div>
+      </section>
+
+      <section class="panel chart-panel">
+        <div class="panel-head">
+          <h2>Equity curve последнего бэктеста</h2>
+          <span id="equityMeta" class="muted">—</span>
+        </div>
+        <canvas id="equityCanvas" width="960" height="300"></canvas>
+      </section>
+
+      <section class="panel brief-panel">
+        <div class="panel-head">
+          <h2>LLM brief / протокол оператора</h2>
+          <span class="muted">Использовать как объяснение, не как приказ на вход.</span>
+        </div>
+        <pre id="briefBox" class="brief">Выберите сигнал и нажмите LLM brief.</pre>
+      </section>
+
+      <section class="panel context-panel">
+        <div class="panel-head">
+          <h2>Контекст рынка и новостей</h2>
+          <span id="sentimentSummary" class="muted">—</span>
+        </div>
+        <div id="newsList" class="news-list"></div>
+      </section>
+
+      <details class="panel raw-section">
+        <summary>Технические детали: рейтинг, сигналы, universe</summary>
+        <div class="raw-tabs">
+          <div>
+            <h3>Research ranking</h3>
+            <div class="table-wrap">
+              <table id="rankTable">
+                <thead><tr><th>Score</th><th>Символ</th><th>Стратегия</th><th>Dir</th><th>Conf</th><th>PF</th><th>Sharpe</th><th>DD</th><th>ROC AUC</th><th>Spread</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div>
+            <h3>Последние сигналы</h3>
+            <div class="table-wrap">
+              <table id="signalsTable">
+                <thead>
+                  <tr><th>ID</th><th>Время</th><th>Символ</th><th>Стратегия</th><th>Dir</th><th>Conf</th><th>Entry</th><th>SL</th><th>TP</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div>
+            <h3>Dynamic / Hybrid universe</h3>
+            <div class="table-wrap">
+              <table id="universeTable">
+                <thead><tr><th>#</th><th>Символ</th><th>Reason</th><th>Liquidity</th><th>Spread %</th><th>Turnover 24h</th><th>OI value</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
     </section>
   </main>
 

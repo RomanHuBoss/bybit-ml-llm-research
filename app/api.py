@@ -90,6 +90,7 @@ def status() -> dict[str, Any]:
             "max_leverage": settings.max_leverage,
             "require_liquidity_for_signals": settings.require_liquidity_for_signals,
         },
+        "max_signal_age_hours": settings.max_signal_age_hours,
         "sentiment_sources": {
             "fear_greed": settings.use_fear_greed,
             "gdelt": settings.use_gdelt,
