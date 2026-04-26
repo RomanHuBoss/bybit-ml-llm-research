@@ -59,8 +59,9 @@ class LLMBackgroundEvaluator:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
         self._run_lock = threading.Lock()
-        self._stop = threading.Event()
+        self._stop_requested = False
         self._thread: threading.Thread | None = None
         self._last_error: str | None = None
         self._last_started_at: str | None = None
@@ -90,13 +91,15 @@ class LLMBackgroundEvaluator:
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return
-            self._stop.clear()
+            self._stop_requested = False
+            self._run_requested = False
             self._thread = threading.Thread(target=self._loop, name="llm-auto-evaluator", daemon=True)
             self._thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
-        with self._lock:
+        with self._condition:
+            self._stop_requested = True
+            self._condition.notify_all()
             thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=3.0)
@@ -104,10 +107,10 @@ class LLMBackgroundEvaluator:
     def request_run(self) -> None:
         # Ручная команда теперь не делает LLM brief синхронно в UI-потоке, а просит фонового
         # аналитика выполнить ближайший цикл как можно раньше.
-        with self._lock:
+        with self._condition:
             self._run_requested = True
             self._next_run_at = _iso(_now())
-        self._stop.set()
+            self._condition.notify_all()
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -132,26 +135,23 @@ class LLMBackgroundEvaluator:
     def _loop(self) -> None:
         delay = max(0, settings.llm_auto_eval_startup_delay_sec)
         self._set_next_run(delay)
-        if self._stop.wait(delay):
-            self._stop.clear()
+        with self._condition:
+            self._condition.wait_for(lambda: self._stop_requested or self._run_requested, timeout=delay)
 
-        while not self._stop.is_set():
-            with self._lock:
+        while True:
+            with self._condition:
+                if self._stop_requested:
+                    break
                 requested = self._run_requested
                 self._run_requested = False
             if requested or settings.llm_auto_eval_enabled:
                 self.run_once()
             self._set_next_run(settings.llm_auto_eval_interval_sec)
-            if self._stop.wait(settings.llm_auto_eval_interval_sec):
-                # Если stop был выставлен через request_run(), не завершаем поток, а сбрасываем
-                # событие и сразу идем на новый цикл. При shutdown stop() поток уже daemon, join
-                # ограничен таймаутом, поэтому безопаснее не пытаться различать оба случая жестко.
-                with self._lock:
-                    should_continue = self._run_requested
-                if should_continue:
-                    self._stop.clear()
-                    continue
-                break
+            with self._condition:
+                self._condition.wait_for(
+                    lambda: self._stop_requested or self._run_requested,
+                    timeout=max(1, settings.llm_auto_eval_interval_sec),
+                )
 
     def _set_next_run(self, seconds: int | float) -> None:
         target = _now().timestamp() + max(0, float(seconds))

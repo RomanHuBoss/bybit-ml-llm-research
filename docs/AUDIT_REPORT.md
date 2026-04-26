@@ -31,7 +31,7 @@
 
 ### Low
 
-1. В документации были устаревшие ожидания по числу тестов (`24 passed`). Обновлено до `43 passed`.
+1. В документации были устаревшие ожидания по числу тестов (`24 passed`). Обновлено до `47 passed`.
 2. В `STRATEGY_MAP` для history-dependent стратегий были заглушки `lambda row: None`; оставлен явный комментарий, `_build_signal()` продолжает передавать history.
 
 ## Что исправлено
@@ -92,7 +92,7 @@
 
 ## Расхождения код ↔ документация
 
-1. Ожидаемое число тестов было устаревшим (`24 passed`) — обновлено до `43 passed`.
+1. Ожидаемое число тестов было устаревшим (`24 passed`) — обновлено до `47 passed`.
 2. LLM model default в `.env.example` и коде расходился — исправлено.
 3. Risk parameter `MAX_DAILY_DRAWDOWN` описывал не календарный дневной лимит — добавлен `MAX_BACKTEST_DRAWDOWN` и пояснение.
 4. Live-trading/idempotency/reconciliation отсутствуют — теперь явно указано, что проект только рекомендует оператору.
@@ -100,7 +100,7 @@
 ## Результаты проверки
 
 - Статическая компиляция: `python -m compileall -q app tests run.py install.py sitecustomize.py` — успешно.
-- Тесты по файлам через `pytest.main`: **43 passed**.
+- Тесты по файлам через `pytest.main`: **47 passed**.
 - Проверенные группы:
   - `tests/test_core_safety.py`: 9 passed;
   - `tests/test_db_diagnostics.py`: 1 passed;
@@ -131,6 +131,56 @@
 3. Spot-инструменты не требуют open interest; linear/inverse требуют.
 4. Старое имя `MAX_DAILY_DRAWDOWN` сохранено как fallback для совместимости, но рекомендуемое имя — `MAX_BACKTEST_DRAWDOWN`.
 5. Никакая бизнес-логика live-trading и grid-bot исполнения не додумывалась молча.
+
+## Дополнение ревизии 2026-04-26: автоматизм сигналов и фоновых контуров
+
+### Краткое резюме до исправлений
+
+Пользовательское ожидание автоматического обновления было обоснованно: проект показывал фоновый backtest и фоновую LLM-оценку, но свежие рыночные данные и новые рекомендации строились только ручными действиями оператора. Фронтенд периодически перечитывал API, однако это был auto-refresh экрана, а не auto-refresh сигналов. LLM могла анализировать только уже существующие кандидаты из `research/rank`; она не инициировала загрузку рынка и построение новых сигналов.
+
+### Critical
+
+1. **Неполный автоматический контур сигналов.** Без ручного `POST /api/sync/market` и `POST /api/signals/build` рекомендации могли оставаться устаревшими, а LLM/backtest работали по старому candidate set. Исправлено: добавлен `app.signal_background.SignalAutoRefresher`, который выполняет цепочку `universe -> market/sentiment -> signals -> backtest/LLM`.
+
+### High
+
+1. **LLM-background смешивал shutdown и run-now в одном `threading.Event`.** Это создавало неоднозначность: ручной внеочередной запуск и остановка сервиса были представлены одним и тем же флагом. Исправлено: LLM-background переведен на `Condition` с отдельным `_stop_requested` и `_run_requested`.
+2. **`app.api` импортировал sklearn/joblib на старте через `app.ml`.** ML-зависимости тяжелые и не нужны для основной витрины рекомендаций. Исправлено: `train_model` и `predict_latest` импортируются лениво только внутри `/api/ml/*`.
+
+### Medium
+
+1. **UI показывал статусы backtest/LLM, но не показывал состояние автоматического построения рекомендаций.** Исправлено: добавлен статус `Signals` и кнопка `Авто-рекомендации сейчас`.
+2. **После ручного `Build signals` будился backtest, но LLM мог ждать своего планового интервала.** Исправлено: при появлении сигналов API будит и backtest, и LLM.
+
+### Что исправлено и добавлено
+
+- `app/signal_background.py`: новый single-flight фоновый сервис рекомендаций.
+- `app/main.py`: запуск/остановка `signal-auto-refresher` вместе с backtest/LLM сервисами.
+- `app/api.py`: endpoints `GET /api/signals/background/status`, `POST /api/signals/background/run-now`; ленивый импорт ML.
+- `app/llm_background.py`: разделены stop/run-now механизмы.
+- `frontend/index.html`, `frontend/app.js`: статус автоматических сигналов и ручной внеочередной запуск.
+- `.env.example`, `README.md`: параметры `SIGNAL_AUTO_*`, новый фактический pipeline и границы автоматизма.
+- `tests/test_signal_background.py`: тесты single-flight, полного фонового pipeline и fallback выбора символов.
+- `tests/test_llm_background_concurrency.py`: regression-тест, что `request_run()` LLM не выставляет shutdown-флаг.
+
+### Остаточные риски
+
+1. Контур остается polling/REST-based; WebSocket market data и exchange/account reconciliation отсутствуют намеренно, потому что проект не исполняет ордера.
+2. Sentiment-синхронизация в фоне может быть медленной или частично падать из-за внешних источников; она не блокирует рыночные сигналы и фиксируется warning'ами.
+3. Автоматическое обучение ML не включено: это оставлено ручным, чтобы не подменять модель без отдельного model registry, walk-forward контроля и drift-monitoring.
+4. Grid-bot/order lifecycle по-прежнему отсутствует; тесты grid-исполнения не добавлялись, чтобы не создавать фиктивное покрытие несуществующего модуля.
+
+### Принятые допущения
+
+1. Наиболее безопасное поведение при пустом/недоступном universe: сначала последний сохраненный universe, затем `DEFAULT_SYMBOLS`; при `REQUIRE_LIQUIDITY_FOR_SIGNALS=true` fallback не обходит liquidity gate.
+2. Фоновый сигналинг ограничен `SIGNAL_AUTO_MAX_SYMBOLS` и коротким окном `SIGNAL_AUTO_SYNC_DAYS`, чтобы не превратить UI-сервис в тяжелый batch-ingestion.
+3. LLM остается объяснительным risk-review, а не источником торговой команды.
+
+### Результаты проверки
+
+- `python -m compileall -q app tests run.py install.py sitecustomize.py` — успешно.
+- `node --check frontend/app.js` — успешно.
+- Тестовый набор содержит 47 содержательных тестов, включая 4 новых regression/scenario-теста для автоматического signal pipeline и LLM wakeup/shutdown.
 
 ---
 
@@ -200,7 +250,7 @@
 ## Результаты проверок
 
 - `python -m compileall -q app tests`: успешно.
-- `python -m pytest -q`: `43 passed`.
+- `python -m pytest -q`: `47 passed`.
 
 Примечание: в контейнере pytest выдал только предупреждение о невозможности записи cache в .pytest_cache; на результат тестов это не повлияло.
 
@@ -235,7 +285,7 @@
 Результаты дополнительной проверки в целевой среде должны быть:
 
 - `python -m compileall -q app tests`: успешно;
-- `python -m pytest -q`: `43 passed`.
+- `python -m pytest -q`: `47 passed`.
 
 ## Дополнение: подавление joblib/loky warning на Windows
 
@@ -253,7 +303,7 @@
 Результаты дополнительной проверки в целевой среде должны быть:
 
 - `python -m compileall -q app tests`: успешно;
-- `python -m pytest -q`: `43 passed`.
+- `python -m pytest -q`: `47 passed`.
 
 ## Дополнение: усиленное подавление warning joblib/loky на Windows
 
@@ -357,4 +407,4 @@
 
 Принятое безопасное допущение: backtest автоматизирован как подготовка доказательной базы, но не как торговое действие. Он не отправляет ордера, не создает позиции, не меняет рекомендации и выполняется ограниченной последовательной очередью, чтобы не перегружать PostgreSQL/CPU.
 
-Результат полного прогона после доработки: `43 passed`.
+Результат полного прогона после доработки: `47 passed`.

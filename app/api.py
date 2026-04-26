@@ -12,9 +12,9 @@ from .config import settings
 from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
-from .ml import predict_latest, train_model
 from .research import rank_candidates
 from .sentiment import sentiment_summary, sync_sentiment_bundle
+from .signal_background import signal_refresher
 from .strategies import build_latest_signals, persist_signals
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
 from .validation import bounded_int, normalize_category, normalize_interval, normalize_symbol, normalize_symbols
@@ -98,6 +98,13 @@ def status() -> dict[str, Any]:
             "interval_sec": settings.backtest_auto_interval_sec,
             "max_candidates": settings.backtest_auto_max_candidates,
             "ttl_hours": settings.backtest_auto_ttl_hours,
+        },
+        "signal_auto_refresh": {
+            "enabled": settings.signal_auto_refresh_enabled,
+            "interval_sec": settings.signal_auto_refresh_interval_sec,
+            "max_symbols": settings.signal_auto_max_symbols,
+            "sync_days": settings.signal_auto_sync_days,
+            "sync_sentiment": settings.signal_auto_sync_sentiment,
         },
         "sentiment_sources": {
             "fear_greed": settings.use_fear_greed,
@@ -207,13 +214,36 @@ def build_signals(req: SignalBuildRequest) -> dict[str, Any]:
             inserted = persist_signals(category, symbol, interval, signals)
             total_inserted += int(inserted or 0)
             output[symbol] = {"built": len(signals), "upserted": inserted, "signals": [s.__dict__ for s in signals]}
-        if total_inserted > 0 and settings.backtest_auto_enabled:
-            background_backtester.request_run()
-        return {"ok": True, "result": output, "backtest_auto_requested": bool(total_inserted > 0 and settings.backtest_auto_enabled)}
+        backtest_requested = False
+        llm_requested = False
+        if total_inserted > 0:
+            if settings.backtest_auto_enabled:
+                background_backtester.request_run()
+                backtest_requested = True
+            if settings.llm_auto_eval_enabled:
+                background_evaluator.request_run()
+                llm_requested = True
+        return {
+            "ok": True,
+            "result": output,
+            "backtest_auto_requested": backtest_requested,
+            "llm_auto_requested": llm_requested,
+        }
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/signals/background/status")
+def api_signal_background_status() -> dict[str, Any]:
+    return {"ok": True, "status": signal_refresher.status()}
+
+
+@router.post("/signals/background/run-now")
+def api_signal_background_run_now() -> dict[str, Any]:
+    signal_refresher.request_run()
+    return {"ok": True, "status": signal_refresher.status()}
 
 
 @router.get("/signals/latest")
@@ -274,6 +304,10 @@ def api_backtest_background_run_now() -> dict[str, Any]:
 @router.post("/ml/train")
 def api_train(req: TrainRequest) -> dict[str, Any]:
     try:
+        # sklearn/joblib тяжелые и нужны только для ML endpoints. Ленивый импорт не дает
+        # ML-зависимостям замедлять или ломать запуск основного research/API контура.
+        from .ml import train_model
+
         return {"ok": True, "result": train_model(normalize_category(req.category), normalize_symbol(req.symbol), normalize_interval(req.interval), req.horizon_bars)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -282,6 +316,10 @@ def api_train(req: TrainRequest) -> dict[str, Any]:
 @router.get("/ml/predict/latest")
 def api_predict(symbol: str = "BTCUSDT", category: str = settings.default_category, interval: str = settings.default_interval, horizon_bars: int = 12) -> dict[str, Any]:
     try:
+        # Ленивый импорт по той же причине, что и в /ml/train: торговая витрина и
+        # фоновые сигналы должны стартовать даже если локальный sklearn проблемный.
+        from .ml import predict_latest
+
         return {"ok": True, "result": predict_latest(normalize_category(category), normalize_symbol(symbol), normalize_interval(interval), bounded_int(horizon_bars, "horizon_bars", 1, 240))}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

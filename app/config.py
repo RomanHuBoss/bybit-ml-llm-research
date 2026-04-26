@@ -96,6 +96,14 @@ class Settings:
     llm_auto_eval_workers: int = _int("LLM_AUTO_EVAL_WORKERS", 2)
     llm_auto_eval_ttl_minutes: int = _int("LLM_AUTO_EVAL_TTL_MINUTES", 60)
 
+    signal_auto_refresh_enabled: bool = _bool("SIGNAL_AUTO_REFRESH_ENABLED", True)
+    signal_auto_refresh_interval_sec: int = _int("SIGNAL_AUTO_REFRESH_INTERVAL_SEC", 300)
+    signal_auto_refresh_startup_delay_sec: int = _int("SIGNAL_AUTO_REFRESH_STARTUP_DELAY_SEC", 20)
+    signal_auto_max_symbols: int = _int("SIGNAL_AUTO_MAX_SYMBOLS", 12)
+    signal_auto_sync_days: int = _int("SIGNAL_AUTO_SYNC_DAYS", 7)
+    signal_auto_refresh_universe: bool = _bool("SIGNAL_AUTO_REFRESH_UNIVERSE", True)
+    signal_auto_sync_sentiment: bool = _bool("SIGNAL_AUTO_SYNC_SENTIMENT", True)
+
     backtest_auto_enabled: bool = _bool("BACKTEST_AUTO_ENABLED", True)
     backtest_auto_interval_sec: int = _int("BACKTEST_AUTO_INTERVAL_SEC", 900)
     backtest_auto_startup_delay_sec: int = _int("BACKTEST_AUTO_STARTUP_DELAY_SEC", 45)
@@ -152,6 +160,14 @@ def _validate_settings(s: Settings) -> None:
         problems.append("LLM_AUTO_EVAL_WORKERS должен быть в диапазоне [1; 4]")
     if s.llm_auto_eval_ttl_minutes < 1:
         problems.append("LLM_AUTO_EVAL_TTL_MINUTES должен быть >= 1")
+    if s.signal_auto_refresh_interval_sec < 60:
+        problems.append("SIGNAL_AUTO_REFRESH_INTERVAL_SEC должен быть >= 60")
+    if s.signal_auto_refresh_startup_delay_sec < 0:
+        problems.append("SIGNAL_AUTO_REFRESH_STARTUP_DELAY_SEC не может быть отрицательным")
+    if not (1 <= s.signal_auto_max_symbols <= s.max_symbols_per_request):
+        problems.append("SIGNAL_AUTO_MAX_SYMBOLS должен быть в диапазоне [1; MAX_SYMBOLS_PER_REQUEST]")
+    if not (1 <= s.signal_auto_sync_days <= s.max_sync_days):
+        problems.append("SIGNAL_AUTO_SYNC_DAYS должен быть в диапазоне [1; MAX_SYNC_DAYS]")
     if s.backtest_auto_interval_sec < 60:
         problems.append("BACKTEST_AUTO_INTERVAL_SEC должен быть >= 60")
     if s.backtest_auto_startup_delay_sec < 0:

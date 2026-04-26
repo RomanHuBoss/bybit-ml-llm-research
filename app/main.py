@@ -11,17 +11,22 @@ from .api import router
 from .config import BASE_DIR
 from .backtest_background import background_backtester
 from .llm_background import background_evaluator
+from .signal_background import signal_refresher
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # LLM-оценка запускается в фоне: интерфейс не должен ждать ручной кнопки
-    # и не должен блокироваться на локальной модели Ollama.
+    # Backtest/LLM запускаются первыми, чтобы автообновление сигналов не потеряло
+    # downstream-запрос, если первый цикл завершится сразу после старта приложения.
+    # Ни один из этих сервисов не отправляет ордера.
     background_evaluator.start()
     background_backtester.start()
+    signal_refresher.start()
     try:
         yield
     finally:
+        # Останавливаем producer первым, затем downstream-проверки.
+        signal_refresher.stop()
         background_backtester.stop()
         background_evaluator.stop()
 

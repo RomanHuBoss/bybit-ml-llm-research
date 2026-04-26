@@ -14,6 +14,7 @@ const state = {
   llmEvaluations: [],
   backtestStatus: null,
   backtestSummary: null,
+  signalStatus: null,
 };
 
 const STRATEGY_LABELS = {
@@ -571,6 +572,23 @@ async function refreshStatus() {
 }
 
 
+async function refreshSignalStatus() {
+  try {
+    const data = await api('/api/signals/background/status');
+    state.signalStatus = data.status || null;
+    const status = state.signalStatus || {};
+    const cycle = status.last_cycle || {};
+    const text = status.enabled
+      ? `Signals: ${status.running ? 'обновляются' : 'фон'} · cycle ${status.cycle_no || 0} · upsert ${cycle.signals_upserted ?? 0}`
+      : 'Signals: авто выкл';
+    $('signalStatusBox').textContent = status.last_error ? `Signals: ошибка · ${status.last_error}` : text;
+    $('signalStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
+  } catch (e) {
+    $('signalStatusBox').textContent = 'Signals: статус недоступен';
+    $('signalStatusBox').className = 'status error';
+  }
+}
+
 async function refreshBacktestStatus() {
   try {
     const data = await api('/api/backtest/background/status');
@@ -700,6 +718,7 @@ async function refreshNews() {
 async function refreshAll() {
   try {
     await refreshStatus();
+    await refreshSignalStatus();
     await refreshBacktestStatus();
     await refreshLlmStatus();
     await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews()]);
@@ -800,6 +819,16 @@ function bindControls() {
     });
   };
 
+  $('signalsAutoBtn').onclick = async () => {
+    await runOperation('Background signal refresh requested', async () => {
+      const data = await api('/api/signals/background/run-now', { method: 'POST' });
+      await refreshSignalStatus();
+      await refreshBacktestStatus();
+      await refreshLlmStatus();
+      return data.status;
+    });
+  };
+
   $('trainBtn').onclick = async () => {
     await runOperation('ML trained', async () => {
       const s = selectedCandidate();
@@ -845,6 +874,7 @@ bindControls();
 refreshAll();
 setInterval(async () => {
   try {
+    await refreshSignalStatus();
     await refreshBacktestStatus();
     await refreshLlmStatus();
     await refreshRank();

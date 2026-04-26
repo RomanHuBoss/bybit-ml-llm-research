@@ -13,3 +13,13 @@ def test_llm_background_run_once_rejects_overlap():
 
     assert result["reason"] == "already_running"
     assert result["skipped"] == 1
+
+
+def test_llm_request_run_does_not_set_shutdown_flag():
+    from app.llm_background import LLMBackgroundEvaluator
+
+    evaluator = LLMBackgroundEvaluator()
+    evaluator.request_run()
+
+    assert evaluator._run_requested is True
+    assert evaluator._stop_requested is False
