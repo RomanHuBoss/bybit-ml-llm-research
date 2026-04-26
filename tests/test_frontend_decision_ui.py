@@ -84,15 +84,23 @@ def test_left_rail_keeps_data_operations_visible():
     css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
     required_fragments = [
-        "grid-template-rows: auto minmax(0, 1fr) auto",
+        ".left-rail",
+        "display: flex",
+        "flex-direction: column",
+        "height: calc(100dvh - 82px)",
         ".queue-panel",
-        "grid-template-rows: auto auto minmax(0, 1fr)",
+        "flex: 1 1 auto",
+        "overflow: hidden",
         ".candidate-queue",
-        "max-height: none",
+        "overflow-y: auto",
+        "scrollbar-gutter: stable",
         ".ops-drawer[open]",
-        "max-height: min(52vh, 520px)",
+        "flex-basis: min(44dvh, 420px)",
         ".ops-body",
-        "overflow: auto",
+        "overflow-y: scroll",
+        "overscroll-behavior: contain",
+        "scrollbar-width: thin",
+        "::-webkit-scrollbar-thumb",
     ]
     for fragment in required_fragments:
         assert fragment in css
