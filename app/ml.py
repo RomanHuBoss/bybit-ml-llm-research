@@ -16,7 +16,7 @@ from sklearn.preprocessing import StandardScaler
 
 from .config import BASE_DIR
 from .db import execute_many_values
-from .features import FEATURE_COLUMNS, build_ml_dataset, load_market_frame
+from .features import FEATURE_COLUMNS, build_ml_dataset, load_market_frame, prepare_feature_matrix
 
 MODELS_DIR = BASE_DIR / "models"
 MODELS_DIR.mkdir(exist_ok=True)
@@ -116,8 +116,9 @@ def predict_latest(category: str, symbol: str, interval: str, horizon_bars: int 
     if clean.empty:
         raise ValueError("No complete feature row available.")
     latest = clean.iloc[-1]
-    X = latest[FEATURE_COLUMNS].to_frame().T.fillna(0.0)
-    proba = float(pipe.predict_proba(X)[:, 1][0])
+    X = prepare_feature_matrix(latest)
+    proba_matrix = pipe.predict_proba(X)
+    proba = float(proba_matrix[0][1])
     return {
         "symbol": symbol.upper(),
         "interval": interval,

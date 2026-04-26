@@ -62,7 +62,7 @@
 ## Результаты проверок
 
 - `python -m compileall -q app tests`: успешно.
-- `python -m pytest -q`: `18 passed`.
+- `python -m pytest -q`: `24 passed`.
 
 Примечание: в контейнере pytest выдал только предупреждение о невозможности записи cache в .pytest_cache; на результат тестов это не повлияло.
 
@@ -97,7 +97,7 @@
 Результаты дополнительной проверки в целевой среде должны быть:
 
 - `python -m compileall -q app tests`: успешно;
-- `python -m pytest -q`: `18 passed`.
+- `python -m pytest -q`: `24 passed`.
 
 ## Дополнение: подавление joblib/loky warning на Windows
 
@@ -115,7 +115,7 @@
 Результаты дополнительной проверки в целевой среде должны быть:
 
 - `python -m compileall -q app tests`: успешно;
-- `python -m pytest -q`: `18 passed`.
+- `python -m pytest -q`: `24 passed`.
 
 ## Дополнение: усиленное подавление warning joblib/loky на Windows
 
@@ -134,3 +134,20 @@
 Повторная проверка показала, что значение `LOKY_MAX_CPU_COUNT`, равное числу логических ядер, не всегда предотвращает попытку `joblib/loky` определить физические ядра через `wmic`. В Windows-средах без `wmic` это снова давало шумный warning при ML-операциях, особенно при прямом запуске `python -m uvicorn ... --reload`.
 
 Исправление: автоматический дефолт теперь намеренно меньше `os.cpu_count()` и ограничен 4 потоками. Такой режим снижает локальную нагрузку и предотвращает ветку loky с вызовом `wmic`. В `run.py` переменная дополнительно передается в окружение дочернего процесса, включая reloader Uvicorn.
+
+## Дополнение: очистка pandas FutureWarning в ML-инференсе
+
+При реальном вызове `GET /api/ml/predict/latest` на Windows обнаружен отдельный `FutureWarning` pandas в `app/ml.py`: одиночная строка `latest[FEATURE_COLUMNS].to_frame().T` имела object dtype, а последующий `fillna(0.0)` полагался на неявный downcast.
+
+Исправлено:
+
+- добавлен `features.prepare_feature_matrix()`, который явно приводит все ML-признаки через `pd.to_numeric(errors="coerce")`, заменяет бесконечности и только затем заполняет пропуски;
+- `build_ml_dataset()` и `predict_latest()` используют один и тот же безопасный путь подготовки feature matrix;
+- `predict_latest()` стал устойчивее к разным формам результата `predict_proba`, извлекая вероятность через `[0][1]`;
+- добавлены regression-тесты на отсутствие `FutureWarning` для object-признаков и ML-инференса.
+
+Результаты дополнительной проверки:
+
+- `py_compile`: успешно для измененных модулей и тестов;
+- `tests/test_warning_cleanup.py`: `4 passed`;
+- полный набор содержит 24 теста.

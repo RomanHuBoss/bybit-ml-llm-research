@@ -169,6 +169,22 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
     return df
 
 
+def prepare_feature_matrix(frame: pd.DataFrame | pd.Series) -> pd.DataFrame:
+    """Возвращает числовую матрицу признаков без неявного pandas downcast.
+
+    pandas 2.x предупреждает о future-изменении silent downcasting, если fillna()
+    вызывается на object-колонках. Для ML-признаков безопаснее явно привести каждую
+    колонку к числу, заменить бесконечности и только затем заполнить пропуски.
+    """
+    if isinstance(frame, pd.Series):
+        out = frame[FEATURE_COLUMNS].to_frame().T
+    else:
+        out = frame[FEATURE_COLUMNS].copy()
+    for col in FEATURE_COLUMNS:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    return out.replace([float("inf"), float("-inf")], pd.NA).fillna(0.0).astype(float)
+
+
 def build_ml_dataset(category: str, symbol: str, interval: str, horizon_bars: int = 12) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
     df = load_market_frame(category, symbol, interval)
     if df.empty:
@@ -180,6 +196,6 @@ def build_ml_dataset(category: str, symbol: str, interval: str, horizon_bars: in
     valid_future = df["future_ret"].notna()
     df.loc[valid_future, "target"] = (df.loc[valid_future, "future_ret"] > threshold.loc[valid_future]).astype(int)
     clean = df.dropna(subset=FEATURE_COLUMNS + ["future_ret", "target"]).copy()
-    X = clean[FEATURE_COLUMNS].replace([float("inf"), float("-inf")], pd.NA).fillna(0.0)
+    X = prepare_feature_matrix(clean)
     y = clean["target"].astype(int)
     return X, y, clean

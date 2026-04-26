@@ -166,7 +166,7 @@ python run.py check
 python run.py test
 ```
 
-Ожидаемо: `18 passed`.
+Ожидаемо: `24 passed`.
 
 ## Если в консоли был joblib/loky warning про wmic
 
@@ -193,7 +193,7 @@ python run.py doctor
 python run.py check
 ```
 
-Ожидаемо: `18 passed`.
+Ожидаемо: `24 passed`.
 
 ## Если warning `joblib/loky` про `wmic` всё еще появляется
 

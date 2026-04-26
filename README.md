@@ -415,7 +415,7 @@ python run.py test
 python -m pytest -q
 ```
 
-Ожидаемый результат текущей ревизии: `18 passed`.
+Ожидаемый результат текущей ревизии: `24 passed`.
 
 ### Оставшиеся ограничения
 
@@ -437,6 +437,7 @@ FutureWarning: Downcasting object dtype arrays on .fillna ...
 
 - `query_df` больше не вызывает `pandas.read_sql_query` с raw `psycopg2` connection;
 - `is_eligible` в feature frame приводится через nullable boolean и затем к обычному `bool`;
+- ML-инференс в `app.ml.predict_latest` явно приводит feature-вектор к числовой матрице до `fillna(0.0)`, поэтому `FutureWarning` из `latest[FEATURE_COLUMNS].to_frame().T.fillna(0.0)` больше не возникает;
 - отсутствие liquidity snapshot остается безопасным состоянием `False`, то есть сигнал не должен считаться ликвидным без доказательства.
 
 Ожидаемый результат текущей ревизии:
@@ -446,7 +447,7 @@ python run.py check
 python run.py test
 ```
 
-Ожидаемый результат полного прогона после обновления: `18 passed`.
+Ожидаемый результат полного прогона после обновления: `24 passed`.
 
 ## Runtime-предупреждение joblib/loky на Windows
 
@@ -472,7 +473,7 @@ ML_MAX_CPU_COUNT=4
 python run.py doctor
 ```
 
-Ожидаемый результат полного прогона после обновления: `18 passed`.
+Ожидаемый результат полного прогона после обновления: `24 passed`.
 
 ### Усиленное исправление `joblib/loky` warning через `sitecustomize.py`
 
