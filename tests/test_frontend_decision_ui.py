@@ -35,7 +35,9 @@ def test_frontend_keeps_technical_data_secondary():
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert '<details class="panel technical-details">' in html
-    assert '<details class="ops-drawer">' in html
+    assert 'id="opsPanel"' in html
+    assert 'id="opsToggleBtn"' in html
+    assert 'id="opsBody"' in html
     assert "Операции с данными" in html
     assert "context-tab" in html
     assert "Review context" in html
@@ -81,9 +83,16 @@ def test_frontend_explains_background_llm_instead_of_manual_brief():
     assert "/api/llm/brief" not in js
 
 def test_left_rail_keeps_data_operations_visible():
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    required_fragments = [
+    assert 'id="opsToggleBtn"' in html
+    assert 'aria-expanded="false"' in html
+    assert 'id="opsBody" hidden' in html
+    assert '<details class="ops-drawer">' not in html
+
+    required_css_fragments = [
         ".left-rail",
         "display: flex",
         "flex-direction: column",
@@ -94,14 +103,26 @@ def test_left_rail_keeps_data_operations_visible():
         ".candidate-queue",
         "overflow-y: auto",
         "scrollbar-gutter: stable",
-        ".ops-drawer[open]",
-        "flex-basis: min(44dvh, 420px)",
+        ".ops-panel.open",
+        "position: fixed",
+        "max-height: calc(100dvh - 88px)",
         ".ops-body",
-        "overflow-y: scroll",
+        "overflow-y: auto",
         "overscroll-behavior: contain",
         "scrollbar-width: thin",
         "::-webkit-scrollbar-thumb",
     ]
-    for fragment in required_fragments:
+    for fragment in required_css_fragments:
         assert fragment in css
+
+    required_js_fragments = [
+        "function setOpsPanelOpen",
+        "function toggleOpsPanel",
+        "body.hidden = !open",
+        "aria-expanded",
+        "opsToggleBtn",
+        "Escape",
+    ]
+    for fragment in required_js_fragments:
+        assert fragment in js
 

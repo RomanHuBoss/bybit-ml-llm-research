@@ -51,9 +51,12 @@
         <div id="candidateQueue" class="candidate-queue empty-state">Очередь появится после построения рекомендаций.</div>
       </section>
 
-      <details class="ops-drawer">
-        <summary>Операции с данными</summary>
-        <div class="ops-body">
+      <section class="panel ops-panel" id="opsPanel">
+        <button id="opsToggleBtn" class="ops-toggle" type="button" aria-expanded="false" aria-controls="opsBody">
+          <span>Операции с данными</span>
+          <span class="ops-toggle-state" id="opsToggleState">Открыть</span>
+        </button>
+        <div class="ops-body" id="opsBody" hidden>
           <label>Символы
             <input id="symbols" value="BTCUSDT,ETHUSDT,SOLUSDT" autocomplete="off" />
           </label>
@@ -103,7 +106,7 @@
             <button id="predictBtn">ML‑прогноз</button>
           </div>
         </div>
-      </details>
+      </section>
     </aside>
 
     <section class="workspace">

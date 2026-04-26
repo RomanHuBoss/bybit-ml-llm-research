@@ -179,6 +179,24 @@ function withLlmFields(item) {
   };
 }
 
+function setOpsPanelOpen(open) {
+  const panel = $('opsPanel');
+  const body = $('opsBody');
+  const toggle = $('opsToggleBtn');
+  const stateLabel = $('opsToggleState');
+  if (!panel || !body || !toggle) return;
+
+  panel.classList.toggle('open', open);
+  body.hidden = !open;
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (stateLabel) stateLabel.textContent = open ? 'Закрыть' : 'Открыть';
+}
+
+function toggleOpsPanel() {
+  const panel = $('opsPanel');
+  setOpsPanelOpen(!panel?.classList.contains('open'));
+}
+
 
 const MTF_STATUS_LABELS = {
   aligned_intraday: '15m+60m+240m согласованы',
@@ -968,6 +986,14 @@ function bindControls() {
       return data.status;
     });
   };
+
+  $('opsToggleBtn').addEventListener('click', toggleOpsPanel);
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && $('opsPanel')?.classList.contains('open')) {
+      setOpsPanelOpen(false);
+    }
+  });
 
   document.querySelectorAll('.context-tab').forEach((button) => {
     button.addEventListener('click', () => setContextTab(button.dataset.tab));
