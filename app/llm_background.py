@@ -297,6 +297,10 @@ def candidates_needing_llm() -> list[dict[str, Any]]:
     for candidate in ranked:
         if not candidate.get("id"):
             continue
+        if settings.mtf_consensus_enabled and str(candidate.get("interval") or "").upper() != settings.mtf_entry_interval:
+            continue
+        if candidate.get("mtf_status") == "context_only" or candidate.get("mtf_action_class") == "CONTEXT_ONLY" or candidate.get("mtf_is_entry_candidate") is False:
+            continue
         if candidate.get("direction") not in {"long", "short"}:
             continue
         payload = _brief_payload(candidate)

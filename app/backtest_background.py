@@ -193,6 +193,7 @@ def candidates_needing_backtest(limit: int | None = None) -> list[dict[str, Any]
                    category, interval, symbol, strategy, created_at AS signal_created_at, confidence
             FROM signals
             WHERE created_at >= NOW() - (%s::text || ' hours')::interval
+              AND (%s = FALSE OR interval = %s)
             ORDER BY category, interval, symbol, strategy, created_at DESC
         ), latest_backtests AS (
             SELECT DISTINCT ON (category, interval, symbol, strategy)
@@ -212,7 +213,7 @@ def candidates_needing_backtest(limit: int | None = None) -> list[dict[str, Any]
         ORDER BY s.confidence DESC NULLS LAST, s.signal_created_at DESC
         LIMIT %s
         """,
-        (settings.max_signal_age_hours, settings.backtest_auto_ttl_hours, candidate_limit),
+        (settings.max_signal_age_hours, settings.mtf_consensus_enabled, settings.mtf_entry_interval, settings.backtest_auto_ttl_hours, candidate_limit),
     )
 
 

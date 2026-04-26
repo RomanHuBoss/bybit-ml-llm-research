@@ -325,33 +325,46 @@ def api_signal_background_run_now() -> dict[str, Any]:
 
 
 @router.get("/signals/latest")
-def latest_signals(limit: int = 50) -> dict[str, Any]:
+def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
     try:
         limit = bounded_int(limit, "limit", 1, 500)
     except ValueError as exc:
         raise _bad_request(exc) from exc
+
+    where = "WHERE interval=%s" if entry_only and settings.mtf_consensus_enabled else ""
+    params: tuple[Any, ...] = (settings.mtf_entry_interval, limit) if where else (limit,)
     rows = fetch_all(
-        """
+        f"""
         SELECT id, created_at, bar_time, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit,
                atr, ml_probability, sentiment_score, rationale
         FROM signals
+        {where}
         ORDER BY created_at DESC
         LIMIT %s
         """,
-        (limit,),
+        params,
     )
-    return {"ok": True, "signals": rows}
+    return {"ok": True, "entry_only": entry_only and settings.mtf_consensus_enabled, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
 
 @router.get("/research/rank")
-def api_rank_candidates(category: str = settings.default_category, interval: str = settings.default_interval, limit: int = 30) -> dict[str, Any]:
+def api_rank_candidates(category: str = settings.default_category, interval: str | None = None, limit: int = 30) -> dict[str, Any]:
     try:
         category = normalize_category(category)
-        if interval.strip().lower() in {"all", "multi", "mtf", "*"}:
+        interval_value = interval or (settings.mtf_entry_interval if settings.mtf_consensus_enabled else settings.default_interval)
+        if interval_value.strip().lower() in {"all", "multi", "mtf", "*"}:
             intervals = list(settings.signal_auto_intervals)
         else:
-            intervals = normalize_intervals(interval)
-        return {"ok": True, "intervals": intervals, "items": rank_candidates_multi(category, intervals, bounded_int(limit, "limit", 1, 200))}
+            intervals = normalize_intervals(interval_value)
+        items = rank_candidates_multi(category, intervals, bounded_int(limit, "limit", 1, 200))
+        return {
+            "ok": True,
+            "intervals": intervals,
+            "entry_interval": settings.mtf_entry_interval,
+            "recommendation_intervals": [settings.mtf_entry_interval] if settings.mtf_consensus_enabled else intervals,
+            "context_intervals": [settings.mtf_bias_interval, settings.mtf_regime_interval] if settings.mtf_consensus_enabled else [],
+            "items": items,
+        }
     except ValueError as exc:
         raise _bad_request(exc) from exc
 

@@ -26,6 +26,9 @@ def test_frontend_has_operator_workstation_structure():
         assert f'id="{element_id}"' in html
 
     assert "Рабочее место оператора" in html
+    assert "15m рекомендации" in html
+    assert "15m setups" in html
+    assert "MTF контур" in html
     assert "Красный пункт = отмена" in html
     assert "Технические детали и журнал" in html
     assert "LIVE OFF" in html
@@ -61,6 +64,9 @@ def test_frontend_logic_contains_operator_trade_guards():
         "/api/llm/background/status",
         "/api/llm/background/run-now",
         "Фоновый LLM",
+        "function isEntryRecommendation",
+        "entry_only=true",
+        "context_only",
     ]
     for fragment in required_fragments:
         assert fragment in js

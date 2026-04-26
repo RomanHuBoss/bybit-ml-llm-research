@@ -16,6 +16,9 @@ const state = {
   backtestSummary: null,
   signalStatus: null,
   contextTab: 'risk',
+  entryInterval: '15',
+  recommendationIntervals: ['15'],
+  contextIntervals: ['60', '240'],
 };
 
 const STRATEGY_LABELS = {
@@ -64,7 +67,7 @@ function intervals() {
 }
 
 function primaryInterval() {
-  return intervals()[0] || '60';
+  return state.entryInterval || intervals()[0] || '15';
 }
 
 function num(value, fallback = null) {
@@ -482,9 +485,22 @@ function operatorProtocol(s) {
   ];
 }
 
+function isEntryRecommendation(item) {
+  const entry = String(state.entryInterval || item?.mtf_entry_interval || '15').toUpperCase();
+  const interval = String(item?.interval || '').toUpperCase();
+  const direction = String(item?.direction || '').toLowerCase();
+  return interval === entry
+    && (direction === 'long' || direction === 'short')
+    && item?.mtf_status !== 'context_only'
+    && item?.mtf_action_class !== 'CONTEXT_ONLY'
+    && item?.mtf_is_entry_candidate !== false;
+}
+
 function candidates() {
   const source = state.signals.length ? state.signals.map(enrichedSignal) : state.rank.map(withLlmFields);
-  const mapped = source.map((item) => ({ ...withLlmFields(item), decision: decisionFor(item) }));
+  const mapped = source
+    .filter(isEntryRecommendation)
+    .map((item) => ({ ...withLlmFields(item), decision: decisionFor(item) }));
   mapped.sort((a, b) => {
     const priority = { review: 3, watch: 2, reject: 1 };
     const levelDiff = (priority[b.decision.level] || 0) - (priority[a.decision.level] || 0);
@@ -622,7 +638,7 @@ function renderBrief(s) {
 
 function renderQueue() {
   const list = candidates();
-  $('kpiSignals').textContent = state.signals.length || '—';
+  $("kpiSignals").textContent = list.length || "—";
   const queue = $('candidateQueue');
   const filtered = state.filter === 'all' ? list : list.filter((s) => s.decision.level === state.filter);
   if (!filtered.length) {
@@ -761,12 +777,15 @@ async function refreshUniverse() {
 
 async function refreshRank() {
   const data = await api(`/api/research/rank?category=${encodeURIComponent($('category').value)}&interval=${encodeURIComponent($('interval').value)}&limit=40`);
+  state.entryInterval = data.entry_interval || state.entryInterval || '15';
+  state.recommendationIntervals = data.recommendation_intervals || [state.entryInterval];
+  state.contextIntervals = data.context_intervals || state.contextIntervals;
   state.rank = data.items || [];
   renderQueue();
 }
 
 async function refreshSignals() {
-  const data = await api('/api/signals/latest?limit=80');
+  const data = await api('/api/signals/latest?limit=80&entry_only=true');
   state.signals = data.signals || [];
   if (state.selectedId !== null && !state.signals.some((s) => Number(s.id) === Number(state.selectedId))) state.selectedId = null;
   renderQueue();

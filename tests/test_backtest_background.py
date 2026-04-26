@@ -40,6 +40,9 @@ def test_candidates_needing_backtest_uses_staleness_query(monkeypatch):
     assert "b.run_id IS NULL" in captured["sql"]
     assert "b.backtest_created_at < s.signal_created_at" in captured["sql"]
     assert captured["params"][-1] == 3
+    assert "interval = %s" in captured["sql"]
+    assert captured["params"][1] is True
+    assert captured["params"][2] == "15"
 
 
 def test_backtest_background_run_once_runs_candidates_sequentially(monkeypatch):

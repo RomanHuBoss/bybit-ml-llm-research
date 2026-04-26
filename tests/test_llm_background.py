@@ -18,7 +18,7 @@ def test_candidates_needing_llm_skips_fresh_existing_evaluation(monkeypatch):
     payload = {
         "id": 10,
         "symbol": "BTCUSDT",
-        "interval": "60",
+        "interval": "15",
         "strategy": "regime_adaptive_combo",
         "direction": "long",
         "confidence": 0.7,
@@ -42,7 +42,7 @@ def test_candidates_needing_llm_selects_missing_or_stale_evaluation(monkeypatch)
     stale = {
         "id": 11,
         "symbol": "ETHUSDT",
-        "interval": "60",
+        "interval": "15",
         "strategy": "regime_adaptive_combo",
         "direction": "short",
         "confidence": 0.7,

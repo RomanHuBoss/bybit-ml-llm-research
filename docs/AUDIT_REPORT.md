@@ -422,8 +422,8 @@
 - ручные endpoints `/api/sync/market`, `/api/sync/sentiment`, `/api/signals/build` получили поддержку `intervals` без удаления старого `interval`;
 - `/api/research/rank` получил поддержку `interval=15,60,240`, `interval=all`, `interval=multi`, `interval=mtf`;
 - ranking/backtest/ML/LLM join'ы теперь учитывают `interval`, чтобы 15m-сигнал не получал доказательства от 1h backtest или ML-модели;
-- фоновый LLM выбирает кандидатов по всем `SIGNAL_AUTO_INTERVALS`, а не только по `DEFAULT_INTERVAL`;
-- UI теперь передает набор TF, показывает TF в карточке кандидата и технической таблице, а ручной backtest/ML запускает выбранный TF кандидата.
+- фоновый LLM берет MTF-контекст из всех `SIGNAL_AUTO_INTERVALS`, но выбирает для оценки только 15m entry-кандидатов;
+- UI теперь передает набор TF, но очередь решений показывает только 15m entry-рекомендации; 60m/240m видны только в MTF matrix как bias/regime-контекст.
 
 Принятое безопасное допущение: MTF реализован как независимые сигналы по каждому таймфрейму, а не как скрытое смешивание признаков разных TF в одной рекомендации. Это проще проверять, воспроизводить и откатывать: каждая строка имеет собственный `interval`, `bar_time`, дедупликацию, backtest и LLM-оценку.
 
@@ -436,7 +436,7 @@
 
 - добавлен `app/mtf.py` — расчет MTF-сводки по символу;
 - зафиксирована иерархия `15m entry / 60m bias / 240m regime-veto`;
-- 60m и 240m больше не считаются самостоятельными entry-trigger: они получают класс `CONTEXT_ONLY`;
+- 60m и 240m больше не считаются самостоятельными entry-trigger: они получают класс `CONTEXT_ONLY` и не выводятся в operator queue как рекомендации на вход;
 - 15m сигнал получает `NO_TRADE_CONFLICT`, если 60m или 240m против направления;
 - `research_score` корректируется через `mtf_score`, `mtf_veto` и `higher_tf_conflict`;
 - LLM payload теперь содержит MTF-контекст и причину MTF-решения;

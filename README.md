@@ -331,7 +331,7 @@ POST /api/sync/market
 POST /api/sync/sentiment
 GET  /api/sentiment/summary
 POST /api/signals/build
-GET  /api/signals/latest
+GET  /api/signals/latest            # по умолчанию entry_only=true для 15m UI-очереди
 GET  /api/signals/background/status
 POST /api/signals/background/run-now
 GET  /api/research/rank
@@ -615,10 +615,10 @@ HIGH_CONVICTION_INTRADAY — 15m, 60m и 240m согласованы;
 BIAS_ALIGNED_INTRADAY   — 15m подтвержден 60m, 240m нейтрален/без сигнала;
 TACTICAL_ONLY           — есть только 15m без подтверждения 60m;
 NO_TRADE_CONFLICT       — 60m или 240m против направления 15m;
-CONTEXT_ONLY            — сигнал 60m/240m, он показан как контекст, но не как entry.
+CONTEXT_ONLY            — внутренний сигнал 60m/240m: используется в MTF-контексте, но не выводится в очередь рекомендаций как сделка.
 ```
 
-`research_score` теперь пересчитывается с учетом `mtf_score`, `mtf_veto`, `higher_tf_conflict` и роли таймфрейма. Исходная оценка сохраняется в поле `research_score_base`. Для LLM в payload добавляются `mtf_status`, `mtf_action_class`, `mtf_entry`, `mtf_bias`, `mtf_regime` и причина решения.
+`research_score` теперь пересчитывается с учетом `mtf_score`, `mtf_veto`, `higher_tf_conflict` и роли таймфрейма. Исходная оценка сохраняется в поле `research_score_base`. В очередь `/api/research/rank` и UI попадают только entry-кандидаты `15m`; `60m` и `240m` остаются внутри полей `mtf_bias` и `mtf_regime`. Для LLM в payload добавляются `mtf_status`, `mtf_action_class`, `mtf_entry`, `mtf_bias`, `mtf_regime` и причина решения, но LLM также оценивает только 15m entry-кандидатов.
 
 Параметры `.env`:
 
@@ -629,7 +629,7 @@ MTF_BIAS_INTERVAL=60
 MTF_REGIME_INTERVAL=240
 ```
 
-Ручные endpoints `/api/sync/market`, `/api/sync/sentiment`, `/api/signals/build` принимают как старый параметр `interval`, так и новый `intervals`. UI отправляет оба поля для обратной совместимости. `/api/research/rank` умеет принимать `interval=15,60,240`, `interval=all`, `interval=multi` или один конкретный TF.
+Ручные endpoints `/api/sync/market`, `/api/sync/sentiment`, `/api/signals/build` принимают как старый параметр `interval`, так и новый `intervals`. UI отправляет оба поля для обратной совместимости. `/api/research/rank` умеет принимать `interval=15,60,240`, `interval=all`, `interval=multi` или один конкретный TF, но при включенном MTF-consensus возвращает торговые рекомендации только по `MTF_ENTRY_INTERVAL=15`; старшие TF используются только как контекст.
 
 
 ## Фоновый backtest актуальных рекомендаций

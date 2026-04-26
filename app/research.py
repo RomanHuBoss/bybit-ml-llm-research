@@ -7,15 +7,41 @@ from .db import fetch_all
 from .mtf import apply_mtf_consensus
 
 
-def rank_candidates(category: str = "linear", interval: str = "60", limit: int = 30) -> list[dict[str, Any]]:
-    return rank_candidates_multi(category, [interval], limit)
+def _unique_intervals(values: list[str] | tuple[str, ...]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        interval = str(value).strip().upper()
+        if interval and interval not in out:
+            out.append(interval)
+    return out
+
+
+def _mtf_role_intervals() -> list[str]:
+    return _unique_intervals([settings.mtf_entry_interval, settings.mtf_bias_interval, settings.mtf_regime_interval])
+
+
+def rank_candidates(category: str = "linear", interval: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
+    selected_interval = interval or (settings.mtf_entry_interval if settings.mtf_consensus_enabled else settings.default_interval)
+    return rank_candidates_multi(category, [selected_interval], limit)
 
 
 def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple[str, ...] = ("60",), limit: int = 30) -> list[dict[str, Any]]:
-    interval_list = [str(interval).strip().upper() for interval in intervals if str(interval).strip()]
-    if not interval_list:
+    requested_intervals = _unique_intervals([str(interval).strip().upper() for interval in intervals if str(interval).strip()])
+    if not requested_intervals:
         return []
-    query_limit = max(limit * 6, limit)
+
+    entry_interval = str(settings.mtf_entry_interval).strip().upper()
+    requested_entry_queue = entry_interval in requested_intervals
+
+    # MTF-контекст требует старшие TF для расчета bias/regime, но это не означает,
+    # что 60m/240m должны попадать в очередь торговых рекомендаций. Они загружаются
+    # только как контекст для 15m entry-кандидата.
+    if settings.mtf_consensus_enabled and requested_entry_queue:
+        query_intervals = _unique_intervals(requested_intervals + _mtf_role_intervals())
+    else:
+        query_intervals = requested_intervals
+
+    query_limit = max(limit * 8, limit, 60)
     rows = fetch_all(
         """
         WITH latest_signals AS (
@@ -79,12 +105,12 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
         """,
         (
             category,
-            interval_list,
+            query_intervals,
             settings.max_signal_age_hours,
             category,
-            interval_list,
+            query_intervals,
             category,
-            interval_list,
+            query_intervals,
             category,
             category,
             settings.max_spread_pct,
@@ -98,4 +124,10 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
             bias_interval=settings.mtf_bias_interval,
             regime_interval=settings.mtf_regime_interval,
         )
+        # В operator queue возвращаются только реальные entry-кандидаты. 60m/240m
+        # остаются внутри mtf_entry/mtf_bias/mtf_regime и больше не выглядят как
+        # самостоятельные рекомендации на сделку.
+        if not requested_entry_queue:
+            return []
+        rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
     return rows[:limit]
