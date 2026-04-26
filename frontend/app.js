@@ -229,7 +229,7 @@ function setOpsPanelOpen(open) {
   panel.classList.toggle('open', open);
   body.hidden = !open;
   toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if (stateLabel) stateLabel.textContent = open ? 'Закрыть' : 'Открыть';
+  if (stateLabel) stateLabel.textContent = open ? 'Скрыть' : 'Открыть';
 }
 
 function toggleOpsPanel() {
@@ -562,6 +562,7 @@ function renderDecision() {
   const board = $('decisionBoard');
   board.className = `decision-board panel ${d.level}`;
   $('decisionBadge').textContent = d.label;
+  $('decisionBadge').className = `decision-badge ${d.level}`;
   $('decisionTitle').textContent = d.title;
   $('decisionSubtitle').textContent = d.subtitle;
   $('decisionScore').textContent = d.score;
@@ -686,37 +687,39 @@ function renderQueue() {
     return;
   }
   queue.className = 'candidate-queue';
-  queue.innerHTML = filtered.map((s, index) => {
-    const rr = riskReward(s);
-    const selected = Number(s.id) === Number(selectedCandidate()?.id);
+  const selectedId = selectedCandidate()?.id;
+  queue.innerHTML = filtered.map((s) => {
+    const selected = Number(s.id) === Number(selectedId);
     const decisionLevel = cssToken(s.decision.level, 'reject');
     const directionToken = cssToken(s.direction, 'flat');
+    const label = escapeHtml(s.decision.label);
     return `
-      <article class="candidate ${decisionLevel} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}">
-        <div class="candidate-head">
-          <div>
-            <div class="symbol">${escapeHtml(s.symbol)} <span>${escapeHtml(s.interval || '—')}m</span></div>
-            <div class="candidate-meta"><span class="direction-${directionToken}">${escapeHtml(String(s.direction || 'flat').toUpperCase())}</span> · ${escapeHtml(STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия')}</div>
+      <article class="candidate ${decisionLevel} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
+        <span class="candidate-star" aria-hidden="true">☆</span>
+        <div class="candidate-copy">
+          <div class="candidate-title">
+            <span class="symbol">${escapeHtml(s.symbol)} <span>${escapeHtml(s.interval || '—')}m</span></span>
+            <span class="badge ${decisionLevel}">${label}</span>
           </div>
-          <span class="badge ${decisionLevel}">${escapeHtml(s.decision.label)}</span>
+          <div class="candidate-meta"><span class="direction-${directionToken}">${escapeHtml(String(s.direction || 'flat').toUpperCase())}</span> · ${escapeHtml(STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия')}</div>
         </div>
-        <div class="candidate-line">
-          <span class="chip">#<b>${index + 1}</b></span>
-          <span class="chip">Score <b>${s.decision.score}</b></span>
-          <span class="chip mtf-chip ${cssToken(mtfSeverity(s), 'fail')}"><b>${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || mtfLabel(s))}</b></span>
-          <span class="chip">Conf <b>${pct(s.confidence, 0)}</b></span>
-          <span class="chip">R/R <b>${rr ? rr.ratio.toFixed(2) : '—'}</b></span>
-          <span class="chip">Spr <b>${pctRaw(s.spread_pct, 3)}</b></span>
-        </div>
-        <div class="candidate-note">${escapeHtml(mtfLabel(s))} · ${escapeHtml(s.mtf_reason || llmStateText(s))}</div>
+        <span class="candidate-score">${s.decision.score}</span>
+        <span class="candidate-chevron" aria-hidden="true">›</span>
       </article>`;
   }).join('');
   queue.querySelectorAll('.candidate').forEach((card) => {
-    card.addEventListener('click', () => {
+    const select = () => {
       const parsedId = Number(card.dataset.id);
       state.selectedId = Number.isFinite(parsedId) ? parsedId : null;
       renderQueue();
       renderDecision();
+    };
+    card.addEventListener('click', select);
+    card.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        select();
+      }
     });
   });
   renderDecision();
@@ -835,7 +838,7 @@ function drawEquity(curve) {
   const canvas = $('equityCanvas');
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#070c12';
+  ctx.fillStyle = '#f8fafc';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!curve || curve.length < 2) return;
   const vals = curve.map((p) => Number(p.equity)).filter(Number.isFinite);
@@ -843,7 +846,7 @@ function drawEquity(curve) {
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   const pad = 26;
-  ctx.strokeStyle = '#263345';
+  ctx.strokeStyle = '#e2e8f0';
   ctx.lineWidth = 1;
   for (let i = 0; i < 5; i += 1) {
     const y = pad + i * (canvas.height - pad * 2) / 4;
@@ -852,7 +855,7 @@ function drawEquity(curve) {
     ctx.lineTo(canvas.width - pad, y);
     ctx.stroke();
   }
-  ctx.strokeStyle = '#82cfff';
+  ctx.strokeStyle = '#2563eb';
   ctx.lineWidth = 2;
   ctx.beginPath();
   vals.forEach((v, i) => {
@@ -861,7 +864,7 @@ function drawEquity(curve) {
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
-  ctx.fillStyle = '#dce8f5';
+  ctx.fillStyle = '#172033';
   ctx.font = '12px system-ui';
   ctx.fillText(`min ${fmt(min, 2)} · max ${fmt(max, 2)}`, pad, 18);
 }

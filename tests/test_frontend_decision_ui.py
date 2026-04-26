@@ -43,7 +43,7 @@ def test_frontend_keeps_technical_data_secondary():
     assert 'id="opsBody"' in html
     assert "Операции с данными" in html
     assert "context-tab" in html
-    assert "Review context" in html
+    assert "Risk & evidence" in html
     assert "right-rail" not in html
 
 
@@ -88,34 +88,37 @@ def test_frontend_explains_background_llm_instead_of_manual_brief():
     assert "market_brief" not in js
     assert "/api/llm/brief" not in js
 
-def test_left_rail_keeps_data_operations_visible():
+
+def test_frontend_has_light_fintech_redesign_and_sidebar():
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'id="opsToggleBtn"' in html
-    assert 'aria-expanded="false"' in html
-    assert 'id="opsBody" hidden' in html
-    assert '<details class="ops-drawer">' not in html
+    assert 'class="app-frame"' in html
+    assert 'class="side-nav"' in html
+    assert 'class="side-logo"' in html
+    assert 'class="support-grid"' in html
+    assert 'class="protocol-mini"' in html
+    assert 'aria-expanded="true"' in html
+    assert 'id="opsBody"' in html
+    assert 'id="opsBody" hidden' not in html
 
     required_css_fragments = [
-        ".left-rail",
-        "display: flex",
-        "flex-direction: column",
-        "height: calc(100dvh - 82px)",
-        "overflow: hidden",
-        ".queue-panel",
-        "flex: 1 1 0",
-        "min-height: 128px",
-        ".candidate-queue",
-        "overflow-y: auto",
-        "scrollbar-gutter: stable",
+        "color-scheme: light",
+        "--page: #f5f7fb",
+        ".app-frame",
+        "grid-template-columns: 78px minmax(0, 1fr)",
+        ".side-nav",
+        ".topbar",
+        "background: rgba(255, 255, 255",
+        ".decision-board",
+        ".support-grid",
+        ".candidate",
+        "grid-template-columns: 24px minmax(0, 1fr) auto 24px",
         ".ops-panel.open",
         "position: relative",
-        "flex: 0 1 min(44dvh, 390px)",
-        "max-height: min(44dvh, 390px)",
+        "flex: 0 1 min(48dvh, 420px)",
         ".ops-body",
-        "flex: 1 1 auto",
         "overflow-y: auto",
         "overscroll-behavior: contain",
         "scrollbar-width: thin",
@@ -124,22 +127,10 @@ def test_left_rail_keeps_data_operations_visible():
     for fragment in required_css_fragments:
         assert fragment in css
 
-    desktop_open_rule = css.split("@media (max-width: 980px)", 1)[0]
-    assert "position: fixed" not in desktop_open_rule
-    assert "bottom: 12px" not in desktop_open_rule
-    assert "left: max" not in desktop_open_rule
-
-    required_js_fragments = [
-        "function setOpsPanelOpen",
-        "function toggleOpsPanel",
-        "body.hidden = !open",
-        "aria-expanded",
-        "opsToggleBtn",
-        "Escape",
-    ]
-    for fragment in required_js_fragments:
-        assert fragment in js
-
+    assert "decisionBadge').className" in js
+    assert 'role="button" tabindex="0"' in js
+    assert "event.key === 'Enter'" in js
+    assert "event.key === ' '" in js
 
 
 def test_frontend_has_fetch_timeout_busy_guard_and_safe_links():

@@ -497,3 +497,28 @@ pytest -q -p no:cacheprovider tests/test_runtime_environment.py
 - `tests/test_backtest_background.py`: 3 passed до зависания тестового runner на завершении процесса в контейнерной среде.
 
 Ограничение проверки: в текущем контейнере импорт `pandas` может зависать на уровне окружения, поэтому полный `tests/test_core_safety.py` здесь не был надежно прогнан повторно. Код и targeted regression-тесты для внесенных изменений проверены отдельно; ранее существующий полный набор в проектной документации оставлен как baseline, но эта среда не позволяет честно подтвердить его полным прогоном после UX-доработки.
+
+## Дополнение 2026-04-26: полная переработка frontend-дизайна
+
+Повторная UX-проверка показала, что предыдущий интерфейс технически стал безопаснее, но визуально оставался перегруженным и недостаточно профессиональным для операторского рабочего места. Выполнен новый redesign pass без изменения торговых backend-контрактов.
+
+Исправлено:
+
+- заменена dark/neon стилистика на светлую enterprise-палитру с мягкими границами и спокойной контрастностью;
+- перестроена структура экрана: sidebar, topbar, левая рабочая колонка, крупный primary decision и две основные аналитические карточки;
+- очередь кандидатов упрощена до быстрых строковых карточек с symbol/status/direction/strategy/score;
+- trade sheet преобразован в читаемую таблицу параметров сделки;
+- risk/evidence/LLM/news/protocol перенесены в нижний support-блок и больше не конкурируют с главным вердиктом;
+- операции с данными раскрыты по умолчанию, но не растягивают страницу и имеют локальную прокрутку;
+- добавлена клавиатурная доступность выбора кандидата через Enter/Space;
+- regression-тесты фронтенда обновлены под новую структуру и проверяют светлую дизайн-систему, sidebar, открытый data operations блок, классы decision badge и keyboard-accessibility.
+
+Проверено:
+
+- `node --check frontend/app.js` — OK;
+- `python -S -m compileall -q app tests run.py install.py sitecustomize.py` — OK;
+- `tests/test_frontend_decision_ui.py` — 7 passed;
+- `tests/test_bybit_client_resilience.py` — 2 passed;
+- `tests/test_runtime_environment.py` — 5 passed.
+
+Остаточный риск: полноценная browser visual regression проверка отсутствует. Текущие тесты фиксируют структуру и safety-инварианты, но не заменяют Playwright/Cypress screenshot-baseline suite.
