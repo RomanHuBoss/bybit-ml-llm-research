@@ -77,7 +77,9 @@ function safeExternalUrl(value) {
 function setBusy(isBusy) {
   document.body.classList.toggle('is-busy', isBusy);
   document.body.setAttribute('aria-busy', isBusy ? 'true' : 'false');
-  document.querySelectorAll('button').forEach((button) => {
+  // Блокируем только кнопки, которые запускают API-операции. Навигация, вкладки,
+  // фильтры и сворачивание панелей должны оставаться рабочими даже во время долгого запроса.
+  document.querySelectorAll('button[data-busy-lock="true"]').forEach((button) => {
     button.disabled = isBusy;
   });
 }
@@ -165,8 +167,57 @@ async function api(path, options = {}, timeoutMs = 45_000) {
 }
 
 function log(title, obj) {
-  const payload = obj ? `\n${JSON.stringify(obj, null, 2)}` : '';
-  $('log').textContent = `[${new Date().toLocaleTimeString()}] ${title}${payload}\n\n${$('log').textContent}`;
+  const logBox = $('log');
+  if (!logBox) return;
+  const payload = obj ? `
+${JSON.stringify(obj, null, 2)}` : '';
+  logBox.textContent = `[${new Date().toLocaleTimeString()}] ${title}${payload}
+
+${logBox.textContent}`;
+}
+
+function setText(id, value) {
+  const node = $(id);
+  if (node) node.textContent = value;
+}
+
+function showOperationStatus(message, tone = 'neutral') {
+  const safeTone = ['neutral', 'busy', 'ok', 'warn', 'error'].includes(tone) ? tone : 'neutral';
+  ['operationToast', 'operationStatus'].forEach((id) => {
+    const node = $(id);
+    if (!node) return;
+    node.className = `${id === 'operationToast' ? 'operation-toast' : 'operation-status'} ${safeTone}`;
+    node.textContent = message;
+  });
+}
+
+function validateInputs({ requireSymbols = false } = {}) {
+  const days = Number($('days')?.value);
+  if (!Number.isFinite(days) || days < 1 || days > 1000) {
+    throw new Error('Дней истории должно быть числом от 1 до 1000.');
+  }
+  if (!$('category')?.value.trim()) throw new Error('Категория не задана.');
+  if (!intervals().length) throw new Error('MTF контур не задан.');
+  if (requireSymbols && !symbols().length) throw new Error('Укажите хотя бы один символ.');
+}
+
+function openTechnicalDetails() {
+  const details = $('technicalDetails');
+  if (details) details.open = true;
+}
+
+function scrollToElement(id) {
+  const node = $(id);
+  if (!node) return;
+  node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function activateNav(button) {
+  document.querySelectorAll('.nav-item').forEach((item) => {
+    item.classList.toggle('active', item === button);
+    if (item === button) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  });
 }
 
 function rankBySignal(signal) {
@@ -308,10 +359,14 @@ function renderMtfMatrix(s) {
 function setContextTab(tabName) {
   state.contextTab = tabName || 'risk';
   document.querySelectorAll('.context-tab').forEach((button) => {
-    button.classList.toggle('active', button.dataset.tab === state.contextTab);
+    const active = button.dataset.tab === state.contextTab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
   });
   document.querySelectorAll('.context-tab-panel').forEach((panel) => {
-    panel.classList.toggle('active', panel.dataset.panel === state.contextTab);
+    const active = panel.dataset.panel === state.contextTab;
+    panel.classList.toggle('active', active);
+    panel.hidden = !active;
   });
 }
 
@@ -837,8 +892,9 @@ async function refreshSignals() {
 function drawEquity(curve) {
   const canvas = $('equityCanvas');
   const ctx = canvas.getContext('2d');
+  if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#f8fafc';
+  ctx.fillStyle = '#f4f1ea';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!curve || curve.length < 2) return;
   const vals = curve.map((p) => Number(p.equity)).filter(Number.isFinite);
@@ -846,7 +902,7 @@ function drawEquity(curve) {
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   const pad = 26;
-  ctx.strokeStyle = '#e2e8f0';
+  ctx.strokeStyle = '#d6d1c6';
   ctx.lineWidth = 1;
   for (let i = 0; i < 5; i += 1) {
     const y = pad + i * (canvas.height - pad * 2) / 4;
@@ -855,7 +911,7 @@ function drawEquity(curve) {
     ctx.lineTo(canvas.width - pad, y);
     ctx.stroke();
   }
-  ctx.strokeStyle = '#2563eb';
+  ctx.strokeStyle = '#3f5f85';
   ctx.lineWidth = 2;
   ctx.beginPath();
   vals.forEach((v, i) => {
@@ -864,7 +920,7 @@ function drawEquity(curve) {
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
-  ctx.fillStyle = '#172033';
+  ctx.fillStyle = '#232a35';
   ctx.font = '12px system-ui';
   ctx.fillText(`min ${fmt(min, 2)} · max ${fmt(max, 2)}`, pad, 18);
 }
@@ -907,42 +963,56 @@ async function refreshNews() {
 }
 
 async function refreshAll() {
+  showOperationStatus('Обновляю экран и статусы…', 'busy');
   try {
     await refreshStatus();
     await refreshSignalStatus();
     await refreshBacktestStatus();
     await refreshLlmStatus();
-    await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews()]);
+    const results = await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews()]);
+    const failed = results.filter((r) => r.status === 'rejected');
+    if (failed.length) {
+      showOperationStatus(`Экран обновлен частично: ${failed.length} блока недоступны. Подробности в журнале.`, 'warn');
+      failed.forEach((r) => log(`WARN refresh block: ${r.reason?.message || r.reason}`));
+    } else {
+      showOperationStatus('Экран обновлен. Данные актуализированы.', 'ok');
+    }
   } catch (e) {
     $('statusBox').textContent = 'DB/API error';
     $('statusBox').className = 'status error';
+    showOperationStatus(`Ошибка обновления: ${e.message}`, 'error');
     log(`ERROR refresh: ${e.message}`);
   }
 }
 
 async function runOperation(title, fn) {
   if (document.body.classList.contains('is-busy')) {
+    showOperationStatus(`Операция «${title}» пропущена: предыдущая еще выполняется.`, 'warn');
     log(`SKIP ${title}: предыдущая операция еще выполняется`);
     return null;
   }
   setBusy(true);
+  showOperationStatus(`Выполняется: ${title}…`, 'busy');
   try {
     const result = await fn();
     log(title, result);
+    showOperationStatus(`Готово: ${title}.`, 'ok');
     return result;
   } catch (e) {
     log(`ERROR ${title}: ${e.message}`);
-    throw e;
+    showOperationStatus(`Ошибка: ${title}. ${e.message}`, 'error');
+    return null;
   } finally {
     setBusy(false);
   }
 }
 
 function bindControls() {
-  $('refreshAllBtn').onclick = refreshAll;
+  $('refreshAllBtn').onclick = async () => runOperation('Обновление экрана', refreshAll);
 
   $('syncUniverseBtn').onclick = async () => {
     await runOperation('Universe built', async () => {
+      validateInputs();
       const data = await api('/api/symbols/universe/build', {
         method: 'POST',
         body: JSON.stringify({ category: $('category').value, mode: $('universeMode').value, limit: 25, refresh: true }),
@@ -955,6 +1025,7 @@ function bindControls() {
 
   $('syncMarketBtn').onclick = async () => {
     await runOperation('Market synced', async () => {
+      validateInputs({ requireSymbols: true });
       const data = await api('/api/sync/market', {
         method: 'POST',
         body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: primaryInterval(), intervals: intervals(), days: Number($('days').value) }),
@@ -966,6 +1037,7 @@ function bindControls() {
 
   $('syncSentimentBtn').onclick = async () => {
     await runOperation('Sentiment synced', async () => {
+      validateInputs({ requireSymbols: true });
       const data = await api('/api/sync/sentiment', {
         method: 'POST',
         body: JSON.stringify({ symbols: symbols(), days: 7, use_llm: false, category: $('category').value, interval: primaryInterval(), intervals: intervals() }),
@@ -977,6 +1049,7 @@ function bindControls() {
 
   $('buildSignalsBtn').onclick = async () => {
     await runOperation('Signals built', async () => {
+      validateInputs({ requireSymbols: true });
       const data = await api('/api/signals/build', {
         method: 'POST',
         body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: primaryInterval(), intervals: intervals() }),
@@ -998,6 +1071,7 @@ function bindControls() {
       const s = selectedCandidate();
       const sym = s?.symbol || symbols()[0] || 'BTCUSDT';
       const strategy = s?.strategy || $('strategy').value;
+      validateInputs();
       const data = await api('/api/backtest/run', {
         method: 'POST',
         body: JSON.stringify({ category: $('category').value, symbol: sym, interval: s?.interval || primaryInterval(), strategy, limit: 5000 }),
@@ -1031,6 +1105,7 @@ function bindControls() {
     await runOperation('ML trained', async () => {
       const s = selectedCandidate();
       const sym = s?.symbol || symbols()[0] || 'BTCUSDT';
+      validateInputs();
       const data = await api('/api/ml/train', {
         method: 'POST',
         body: JSON.stringify({ category: $('category').value, symbol: sym, interval: s?.interval || primaryInterval(), horizon_bars: 12 }),
@@ -1044,6 +1119,7 @@ function bindControls() {
     await runOperation('ML prediction', async () => {
       const s = selectedCandidate();
       const sym = s?.symbol || symbols()[0] || 'BTCUSDT';
+      validateInputs();
       const data = await api(`/api/ml/predict/latest?symbol=${encodeURIComponent(sym)}&category=${encodeURIComponent($('category').value)}&interval=${encodeURIComponent(s?.interval || primaryInterval())}&horizon_bars=12`);
       return data.result;
     });
@@ -1073,11 +1149,43 @@ function bindControls() {
 
   document.querySelectorAll('.filter').forEach((button) => {
     button.addEventListener('click', () => {
-      document.querySelectorAll('.filter').forEach((b) => b.classList.remove('active'));
-      button.classList.add('active');
+      document.querySelectorAll('.filter').forEach((b) => {
+        const active = b === button;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
       state.filter = button.dataset.filter;
       renderQueue();
     });
+  });
+
+  document.querySelectorAll('.nav-item[data-nav-target]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = button.dataset.navTarget;
+      activateNav(button);
+      if (target === 'help') {
+        const dialog = $('helpDialog');
+        if (dialog?.showModal) dialog.showModal();
+        else showOperationStatus('Помощь: обновите данные, выберите кандидата, проверьте Risk/Evidence/LLM/News/Protocol.', 'neutral');
+        return;
+      }
+      if (target === 'settings') {
+        setOpsPanelOpen(true);
+        scrollToElement('opsPanel');
+        $('strategy')?.focus();
+        return;
+      }
+      if (target === 'equityCanvas') openTechnicalDetails();
+      if (target === 'operatorProtocol') setContextTab('protocol');
+      if (target === 'opsPanel') setOpsPanelOpen(true);
+      scrollToElement(target);
+    });
+  });
+
+  $('navToggleBtn')?.addEventListener('click', () => {
+    const collapsed = !document.body.classList.contains('nav-collapsed');
+    document.body.classList.toggle('nav-collapsed', collapsed);
+    $('navToggleBtn').setAttribute('aria-pressed', collapsed ? 'true' : 'false');
   });
 }
 
@@ -1085,6 +1193,7 @@ bindControls();
 setContextTab(state.contextTab);
 refreshAll();
 setInterval(async () => {
+  if (document.body.classList.contains('is-busy')) return;
   try {
     await refreshSignalStatus();
     await refreshBacktestStatus();

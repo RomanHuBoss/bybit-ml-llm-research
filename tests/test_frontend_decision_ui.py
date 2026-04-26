@@ -37,7 +37,7 @@ def test_frontend_has_operator_workstation_structure():
 def test_frontend_keeps_technical_data_secondary():
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert '<details class="panel technical-details">' in html
+    assert '<details class="panel technical-details" id="technicalDetails">' in html
     assert 'id="opsPanel"' in html
     assert 'id="opsToggleBtn"' in html
     assert 'id="opsBody"' in html
@@ -105,12 +105,15 @@ def test_frontend_has_light_fintech_redesign_and_sidebar():
 
     required_css_fragments = [
         "color-scheme: light",
-        "--page: #f5f7fb",
+        "--page: #ece8df",
+        "--surface: #fbfaf6",
+        "--blue: #3f5f85",
         ".app-frame",
         "grid-template-columns: 78px minmax(0, 1fr)",
         ".side-nav",
         ".topbar",
-        "background: rgba(255, 255, 255",
+        "background: rgba(248, 246, 240",
+        ".operation-toast",
         ".decision-board",
         ".support-grid",
         ".candidate",
@@ -123,6 +126,7 @@ def test_frontend_has_light_fintech_redesign_and_sidebar():
         "overscroll-behavior: contain",
         "scrollbar-width: thin",
         "::-webkit-scrollbar-thumb",
+        ".help-dialog",
     ]
     for fragment in required_css_fragments:
         assert fragment in css
@@ -145,6 +149,8 @@ def test_frontend_has_fetch_timeout_busy_guard_and_safe_links():
         "AbortController",
         "API timeout after",
         "function setBusy",
+        "button[data-busy-lock=\"true\"]",
+        "function showOperationStatus",
         "aria-busy",
         "document.body.classList.contains('is-busy')",
         "noopener noreferrer",
@@ -155,3 +161,49 @@ def test_frontend_has_fetch_timeout_busy_guard_and_safe_links():
     assert 'id="candidateQueue"' in html
     assert 'aria-live="polite"' in html
     assert html.count('type="button"') >= 12
+
+
+def test_frontend_all_visible_controls_are_bound_or_native():
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    expected = [
+        'id="navToggleBtn"',
+        'data-nav-target="workspace"',
+        'data-nav-target="equityCanvas"',
+        'data-nav-target="operatorProtocol"',
+        'data-nav-target="opsPanel"',
+        'data-nav-target="settings"',
+        'data-nav-target="help"',
+        'id="operationToast"',
+        'id="operationStatus"',
+        'id="helpDialog"',
+    ]
+    for fragment in expected:
+        assert fragment in html
+
+    required_js = [
+        "document.querySelectorAll('.nav-item[data-nav-target]')",
+        "activateNav(button)",
+        "openTechnicalDetails()",
+        "setContextTab('protocol')",
+        "setOpsPanelOpen(true)",
+        "dialog?.showModal",
+        "nav-collapsed",
+        "button[data-busy-lock=\"true\"]",
+        "showOperationStatus(`Ошибка:",
+        "return null",
+        "validateInputs({ requireSymbols: true })",
+        "setAttribute('aria-selected'",
+        "panel.hidden = !active",
+    ]
+    for fragment in required_js:
+        assert fragment in js
+
+
+def test_frontend_does_not_disable_navigation_during_long_operations():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "document.querySelectorAll('button').forEach" not in js
+    assert "document.querySelectorAll('button[data-busy-lock=\"true\"]')" in js
+    assert "if (document.body.classList.contains('is-busy')) return;" in js

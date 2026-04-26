@@ -522,3 +522,43 @@ pytest -q -p no:cacheprovider tests/test_runtime_environment.py
 - `tests/test_runtime_environment.py` — 5 passed.
 
 Остаточный риск: полноценная browser visual regression проверка отсутствует. Текущие тесты фиксируют структуру и safety-инварианты, но не заменяют Playwright/Cypress screenshot-baseline suite.
+
+## Дополнение 2026-04-26: исправление интерактивности frontend и приглушение UI
+
+После замечаний по неработающим элементам страницы проведена отдельная ревизия всех видимых контролов.
+
+### Найденные проблемы
+
+#### High
+
+1. **Sidebar был визуально интерактивным, но часть кнопок была декоративной.** Это создавало ложные affordance и ощущение неработающего продукта. Исправлено: все nav-кнопки получили действия через `data-nav-target`.
+2. **Глобальный busy-state блокировал все кнопки страницы.** Во время долгих API-операций пользователь не мог переключать вкладки, смотреть protocol, открывать help или сворачивать панели. Исправлено: блокируются только API-action buttons с `data-busy-lock="true"`.
+3. **Ошибки операций были видны в основном только в скрытом техническом журнале.** Исправлено: добавлены `operationToast` и `operationStatus`, а `runOperation()` теперь показывает успех/ошибку явно.
+
+#### Medium
+
+1. **Burger-кнопка не выполняла действие.** Исправлено: `navToggleBtn` переключает `nav-collapsed`.
+2. **Контекстные вкладки переключались только визуально.** Исправлено: синхронизируются `aria-selected` и `hidden`.
+3. **Автообновление могло пересекаться с ручной операцией.** Исправлено: periodic refresh пропускается при активном `is-busy`.
+4. **Палитра после light redesign была слишком яркой.** Исправлено: заменена на теплую muted-neutral палитру с более мягким blue/accent.
+
+### Что исправлено
+
+- `frontend/index.html`: добавлены nav targets, help dialog, operation status/toast, busy-lock атрибуты, ARIA для tabs/filters.
+- `frontend/app.js`: обработчики sidebar, burger, help dialog, operation status, scoped busy lock, input validation, safe error handling без unhandled promise rejection, skip auto-refresh during manual operation.
+- `frontend/styles.css`: приглушенная warm-neutral палитра, стили operation status/toast, help dialog, focus-visible, sidebar collapse.
+- `tests/test_frontend_decision_ui.py`: добавлены regression-проверки, что видимые контролы не декоративные, а busy-state не блокирует навигацию.
+
+### Проверка
+
+В этой среде выполнено:
+
+```bash
+node --check frontend/app.js
+python -S -m py_compile tests/test_frontend_decision_ui.py
+python -S <direct frontend regression runner>
+```
+
+Результат direct frontend regression runner: 9 frontend UI checks passed.
+
+Ограничение: `pytest` в контейнере продолжает зависать на уровне окружения, поэтому frontend regression-функции были прогнаны напрямую через `importlib` без pytest runner. Это проверяет сами assertions файла `tests/test_frontend_decision_ui.py`, но не заменяет полноценный browser e2e/visual-regression suite.

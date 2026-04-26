@@ -10,18 +10,18 @@
   <div class="app-frame">
     <nav class="side-nav" aria-label="Основная навигация">
       <div class="side-logo" aria-label="Bybit Research">BYB<span>IT</span></div>
-      <button type="button" class="nav-item active" title="Рабочее место" aria-label="Рабочее место">▦</button>
-      <button type="button" class="nav-item" title="Графики" aria-label="Графики">⌁</button>
-      <button type="button" class="nav-item" title="Протоколы" aria-label="Протоколы">▤</button>
-      <button type="button" class="nav-item" title="База данных" aria-label="База данных">◉</button>
-      <button type="button" class="nav-item" title="Настройки" aria-label="Настройки">⚙</button>
-      <button type="button" class="nav-item push-bottom" title="Помощь" aria-label="Помощь">?</button>
+      <button type="button" class="nav-item active" data-nav-target="workspace" title="Рабочее место" aria-label="Рабочее место" aria-current="page">▦</button>
+      <button type="button" class="nav-item" data-nav-target="equityCanvas" title="Графики" aria-label="Графики">⌁</button>
+      <button type="button" class="nav-item" data-nav-target="operatorProtocol" title="Протоколы" aria-label="Протоколы">▤</button>
+      <button type="button" class="nav-item" data-nav-target="opsPanel" title="Операции с данными" aria-label="Операции с данными">◉</button>
+      <button type="button" class="nav-item" data-nav-target="settings" title="Параметры" aria-label="Параметры">⚙</button>
+      <button type="button" class="nav-item push-bottom" data-nav-target="help" title="Помощь" aria-label="Помощь">?</button>
     </nav>
 
     <div class="app-main">
       <header class="topbar">
         <div class="brand">
-          <button type="button" class="menu-button" aria-label="Свернуть меню">☰</button>
+          <button type="button" id="navToggleBtn" class="menu-button" aria-label="Свернуть меню" aria-pressed="false">☰</button>
           <div class="brand-copy">
             <h1>Рабочее место оператора</h1>
             <p>15m entry · 60m bias · 240m regime · <b>LIVE OFF</b></p>
@@ -35,6 +35,8 @@
           <span id="llmStatusBox" class="status wide">LLM...</span>
         </div>
       </header>
+
+      <div id="operationToast" class="operation-toast" role="status" aria-live="polite">Готово к работе. LIVE OFF.</div>
 
       <main class="terminal-shell">
         <aside class="left-rail">
@@ -62,13 +64,13 @@
                 <p class="eyebrow">Candidate queue</p>
                 <h2>15m рекомендации</h2>
               </div>
-              <button type="button" id="refreshAllBtn" class="icon-button" title="Обновить экран" aria-label="Обновить экран">↻</button>
+              <button type="button" id="refreshAllBtn" class="icon-button" data-busy-lock="true" title="Обновить экран" aria-label="Обновить экран">↻</button>
             </div>
             <div class="queue-filters segmented" role="tablist" aria-label="Фильтр кандидатов">
-              <button type="button" class="filter active" data-filter="all">Все</button>
-              <button type="button" class="filter" data-filter="review">Вход</button>
-              <button type="button" class="filter" data-filter="watch">Watch</button>
-              <button type="button" class="filter" data-filter="reject">Stop</button>
+              <button type="button" class="filter active" data-filter="all" role="tab" aria-selected="true">Все</button>
+              <button type="button" class="filter" data-filter="review" role="tab" aria-selected="false">Вход</button>
+              <button type="button" class="filter" data-filter="watch" role="tab" aria-selected="false">Watch</button>
+              <button type="button" class="filter" data-filter="reject" role="tab" aria-selected="false">Stop</button>
             </div>
             <div id="candidateQueue" class="candidate-queue empty-state" aria-live="polite">Очередь появится после построения рекомендаций.</div>
           </section>
@@ -116,24 +118,25 @@
                 </select>
               </label>
               <div class="button-stack primary-actions">
-                <button type="button" id="signalsAutoBtn" class="primary">Авто-рекомендации сейчас</button>
-                <button type="button" id="buildSignalsBtn" class="secondary">Построить рекомендации</button>
+                <button type="button" id="signalsAutoBtn" class="primary" data-busy-lock="true">Авто-рекомендации сейчас</button>
+                <button type="button" id="buildSignalsBtn" class="secondary" data-busy-lock="true">Построить рекомендации</button>
               </div>
               <div class="button-stack secondary-actions" aria-label="Дополнительные операции">
-                <button type="button" id="rankBtn">Пересчитать очередь</button>
-                <button type="button" id="syncUniverseBtn">Обновить universe</button>
-                <button type="button" id="syncMarketBtn">Загрузить рынок</button>
-                <button type="button" id="syncSentimentBtn">Обновить sentiment</button>
-                <button type="button" id="backtestBtn">Бэктест сетапа</button>
-                <button type="button" id="backtestAutoBtn">Авто-бэктест сейчас</button>
-                <button type="button" id="trainBtn">Обучить ML</button>
-                <button type="button" id="predictBtn">ML‑прогноз</button>
+                <button type="button" id="rankBtn" data-busy-lock="true">Пересчитать очередь</button>
+                <button type="button" id="syncUniverseBtn" data-busy-lock="true">Обновить universe</button>
+                <button type="button" id="syncMarketBtn" data-busy-lock="true">Загрузить рынок</button>
+                <button type="button" id="syncSentimentBtn" data-busy-lock="true">Обновить sentiment</button>
+                <button type="button" id="backtestBtn" data-busy-lock="true">Бэктест сетапа</button>
+                <button type="button" id="backtestAutoBtn" data-busy-lock="true">Авто-бэктест сейчас</button>
+                <button type="button" id="trainBtn" data-busy-lock="true">Обучить ML</button>
+                <button type="button" id="predictBtn" data-busy-lock="true">ML‑прогноз</button>
               </div>
+              <div id="operationStatus" class="operation-status" role="status" aria-live="polite">Операции не запускались.</div>
             </div>
           </section>
         </aside>
 
-        <section class="workspace">
+        <section class="workspace" id="workspace">
           <article class="decision-board panel" id="decisionBoard">
             <div class="decision-copy">
               <p class="eyebrow">Primary decision</p>
@@ -177,11 +180,11 @@
                 </div>
               </div>
               <div class="context-tabs visually-compact" role="tablist" aria-label="Панели проверки">
-                <button type="button" class="context-tab active" data-tab="risk">Risk</button>
-                <button type="button" class="context-tab" data-tab="evidence">Evidence</button>
-                <button type="button" class="context-tab" data-tab="llm">LLM</button>
-                <button type="button" class="context-tab" data-tab="news">News</button>
-                <button type="button" class="context-tab" data-tab="protocol">Protocol</button>
+                <button type="button" class="context-tab active" data-tab="risk" role="tab" aria-selected="true">Risk</button>
+                <button type="button" class="context-tab" data-tab="evidence" role="tab" aria-selected="false">Evidence</button>
+                <button type="button" class="context-tab" data-tab="llm" role="tab" aria-selected="false">LLM</button>
+                <button type="button" class="context-tab" data-tab="news" role="tab" aria-selected="false">News</button>
+                <button type="button" class="context-tab" data-tab="protocol" role="tab" aria-selected="false">Protocol</button>
               </div>
               <section class="context-tab-panel active" data-panel="risk">
                 <div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div>
@@ -192,7 +195,7 @@
               <section class="context-tab-panel" data-panel="llm">
                 <div class="support-headline">
                   <h3>LLM risk review</h3>
-                  <button type="button" id="briefBtn" class="ghost">Обновить LLM сейчас</button>
+                  <button type="button" id="briefBtn" class="ghost" data-busy-lock="true">Обновить LLM сейчас</button>
                 </div>
                 <pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre>
               </section>
@@ -217,7 +220,7 @@
             </article>
           </section>
 
-          <details class="panel technical-details">
+          <details class="panel technical-details" id="technicalDetails">
             <summary>Технические детали и журнал / сырые данные</summary>
             <div class="details-grid">
               <section>
@@ -241,6 +244,23 @@
       </main>
     </div>
   </div>
+  <dialog id="helpDialog" class="help-dialog" aria-labelledby="helpDialogTitle">
+    <form method="dialog" class="help-card">
+      <div class="panel-head compact-head">
+        <div>
+          <p class="eyebrow">Operator help</p>
+          <h2 id="helpDialogTitle">Как пользоваться экраном</h2>
+        </div>
+        <button type="submit" class="icon-button" aria-label="Закрыть помощь">×</button>
+      </div>
+      <ol>
+        <li>Сначала обновите universe и рынок, затем постройте рекомендации.</li>
+        <li>Выберите кандидата в очереди: центральная карточка покажет запрет, наблюдение или ручную проверку.</li>
+        <li>Перед созданием бота вручную проверьте Risk, Evidence, LLM, News и Protocol.</li>
+        <li>График бэктеста и сырой журнал находятся в технических деталях внизу.</li>
+      </ol>
+    </form>
+  </dialog>
   <script src="/static/app.js"></script>
 </body>
 </html>
