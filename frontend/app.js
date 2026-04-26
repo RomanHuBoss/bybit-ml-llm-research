@@ -178,6 +178,73 @@ function withLlmFields(item) {
   };
 }
 
+
+const MTF_STATUS_LABELS = {
+  aligned_intraday: '15m+60m+240m согласованы',
+  aligned_bias: '15m подтвержден 60m',
+  tactical_only: 'Только 15m',
+  weak_alignment: 'Слабая MTF-связь',
+  no_trade_conflict: 'Конфликт старших TF',
+  context_only: 'Контекст, не вход',
+  invalid_direction: 'Нет направления',
+};
+
+const MTF_ACTION_LABELS = {
+  HIGH_CONVICTION_INTRADAY: 'HIGH CONVICTION',
+  BIAS_ALIGNED_INTRADAY: 'BIAS ALIGNED',
+  TACTICAL_ONLY: 'TACTICAL',
+  LOW_CONVICTION_INTRADAY: 'LOW CONVICTION',
+  NO_TRADE_CONFLICT: 'NO TRADE',
+  CONTEXT_ONLY: 'CONTEXT',
+  NO_TRADE_INVALID: 'NO TRADE',
+};
+
+function mtfLabel(s) {
+  if (!s) return 'MTF: нет данных';
+  return MTF_STATUS_LABELS[s.mtf_status] || s.mtf_status || 'MTF: не рассчитан';
+}
+
+function mtfSeverity(s) {
+  if (!s) return 'fail';
+  if (s.mtf_veto || s.higher_tf_conflict || s.mtf_status === 'no_trade_conflict' || s.mtf_status === 'context_only') return 'fail';
+  if (s.mtf_status === 'tactical_only' || s.mtf_status === 'weak_alignment') return 'warn';
+  return 'pass';
+}
+
+function tfCell(title, tf) {
+  const direction = String(tf?.direction || 'neutral').toLowerCase();
+  const cls = direction === 'long' ? 'long' : direction === 'short' ? 'short' : 'neutral';
+  return `
+    <div class="tf-cell ${cls}">
+      <span>${escapeHtml(title)} · ${escapeHtml(tf?.interval || '—')}</span>
+      <b>${escapeHtml(direction.toUpperCase())}</b>
+      <small>L ${fmt(tf?.long_strength, 2)} · S ${fmt(tf?.short_strength, 2)} · n=${escapeHtml(tf?.signals ?? 0)}</small>
+    </div>`;
+}
+
+function renderMtfMatrix(s) {
+  const box = $('mtfMatrix');
+  if (!box) return;
+  if (!s) {
+    box.className = 'mtf-matrix empty-state';
+    box.textContent = 'Нет выбранного кандидата.';
+    return;
+  }
+  const sev = mtfSeverity(s);
+  box.className = `mtf-matrix ${sev}`;
+  box.innerHTML = `
+    <div class="mtf-state-row">
+      <span class="mtf-pill ${sev}">${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || s.mtf_action_class || 'MTF')}</span>
+      <strong>${escapeHtml(mtfLabel(s))}</strong>
+      <small>${escapeHtml(s.mtf_reason || 'MTF-контекст не раскрыт.')}</small>
+    </div>
+    <div class="tf-grid">
+      ${tfCell('ENTRY', s.mtf_entry)}
+      ${tfCell('BIAS', s.mtf_bias)}
+      ${tfCell('REGIME', s.mtf_regime)}
+    </div>`;
+}
+
 function llmStateText(s) {
   if (!s) return 'LLM: нет сетапа';
   if (s.llm_status === 'ok') return `LLM: готово · ${ageText(s.llm_updated_at)}`;
@@ -212,6 +279,12 @@ function checklistFor(s) {
       status: s.direction === 'long' || s.direction === 'short' ? 'pass' : 'fail',
       title: s.direction === 'long' || s.direction === 'short' ? 'Направление задано' : 'Нет направления сделки',
       text: `Направление: ${String(s.direction || 'flat').toUpperCase()}. Flat не является сделкой.`,
+    },
+    {
+      key: 'mtf',
+      status: mtfSeverity(s),
+      title: mtfSeverity(s) === 'pass' ? 'MTF согласован' : mtfSeverity(s) === 'warn' ? 'MTF неполный' : 'MTF запрещает вход',
+      text: `${mtfLabel(s)}. ${s.mtf_reason || '15m — вход; 60m и 240m — фильтры, а не отдельные триггеры.'}`,
     },
     {
       key: 'liquidity',
@@ -273,7 +346,8 @@ function decisionFor(s) {
   const warnings = checks.filter((item) => item.status === 'warn');
   const rr = riskReward(s);
   let score = 0;
-  score += Math.max(0, Math.min(1, num(s.research_score, 0))) * 22;
+  score += Math.max(0, Math.min(1, num(s.research_score, 0))) * 18;
+  score += Math.max(0, Math.min(1, num(s.mtf_score, 0))) * 16;
   score += Math.max(0, Math.min(1, num(s.confidence, 0))) * 18;
   score += Math.max(0, Math.min(1, ((rr?.ratio || 0) - 1) / 1.5)) * 15;
   score += bool(s.is_eligible) ? 10 : 0;
@@ -282,6 +356,7 @@ function decisionFor(s) {
   score += Math.max(0, Math.min(1, num(s.profit_factor, 0) / 2)) * 8;
   score += Math.max(0, Math.min(1, (num(s.roc_auc, 0.5) - 0.5) / 0.2)) * 7;
   score += Math.max(0, 1 - Math.min(1, num(s.max_drawdown, 0.4) / 0.35)) * 4;
+  if (s.mtf_veto || s.higher_tf_conflict || s.mtf_status === 'context_only') score -= 30;
   score = Math.round(Math.max(0, Math.min(100, score)));
 
   if (hardFails.length) {
@@ -317,6 +392,11 @@ function reasonItems(s) {
   const reason = REASON_LABELS[rationale.reason] || rationale.reason || 'причина не раскрыта в сигнале';
   const rr = riskReward(s);
   return [
+    {
+      level: mtfSeverity(s) === 'pass' ? 'good' : mtfSeverity(s) === 'warn' ? 'warn' : 'bad',
+      title: `MTF: ${mtfLabel(s)}`,
+      text: `${s.mtf_reason || '15m/60m/240m согласованность не раскрыта.'} Score: ${fmt(s.mtf_score, 2)}.`,
+    },
     {
       level: num(s.confidence, 0) >= 0.62 ? 'good' : num(s.confidence, 0) >= 0.54 ? 'warn' : 'bad',
       title: `Сигнал: ${STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия неизвестна'}`,
@@ -354,15 +434,19 @@ function operatorProtocol(s) {
       text: d.level === 'reject' ? 'Есть красный пункт. Сделку не открывать.' : 'Красных пунктов нет, но желтые требуют ручной проверки.',
     },
     {
-      title: '2. Сверить график и стакан',
+      title: '2. Сверить MTF-картину',
+      text: '15m должен быть рабочим trigger. 60m не должен быть против направления, 240m не должен давать regime veto.',
+    },
+    {
+      title: '3. Сверить график и стакан',
       text: 'Проверить, что цена не ушла от entry, spread не расширился, нет резкого гэпа или новостного импульса.',
     },
     {
-      title: '3. Проверить риск портфеля',
+      title: '4. Проверить риск портфеля',
       text: 'Не открывать сетап, если уже есть коррелированная позиция или дневной лимит риска исчерпан.',
     },
     {
-      title: '4. Создавать бота только вручную',
+      title: '5. Создавать бота только вручную',
       text: 'Система не создает бота автоматически. Entry, SL и TP копируются оператором только после проверки.',
     },
   ];
@@ -404,6 +488,7 @@ function renderDecision() {
   renderReasons(s);
   renderProtocol(s);
   renderBrief(s);
+  renderMtfMatrix(s);
 }
 
 function renderTicket(s) {
@@ -427,10 +512,11 @@ function renderTicket(s) {
       <div class="metric"><span>Потенциал до TP</span><strong>${rr ? pct(rr.rewardPct, 2) : '—'}</strong></div>
       <div class="metric"><span>R/R</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>
       <div class="metric"><span>Confidence</span><strong>${pct(s.confidence, 0)}</strong></div>
+      <div class="metric"><span>MTF</span><strong>${escapeHtml(mtfLabel(s))}</strong></div>
       <div class="metric"><span>LLM</span><strong>${escapeHtml(llmStateText(s).replace('LLM: ', ''))}</strong></div>
     </div>
     <div class="execution-plan">
-      <b>Правило исполнения:</b> не входить по рынку автоматически. Проверить текущую цену относительно entry, актуальный spread, стакан и новости. Если цена уже ушла, spread расширился или появился красный пункт в чек‑листе — сетап отменяется.
+      <b>Правило исполнения:</b> интрадей-вход рассматривается только по ${escapeHtml(s.mtf_entry_interval || '15')}m. ${escapeHtml(s.mtf_bias_interval || '60')}m задает направление, ${escapeHtml(s.mtf_regime_interval || '240')}m может наложить veto. Не входить по рынку автоматически; если цена ушла, spread расширился или есть красный пункт — сетап отменяется.
     </div>`;
 }
 
@@ -532,13 +618,14 @@ function renderQueue() {
         <div class="candidate-line">
           <span class="chip">#<b>${index + 1}</b></span>
           <span class="chip">TF <b>${escapeHtml(s.interval || '—')}</b></span>
+          <span class="chip mtf-chip ${mtfSeverity(s)}">MTF <b>${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || mtfLabel(s))}</b></span>
           <span class="chip">Score <b>${s.decision.score}</b></span>
           <span class="chip">Conf <b>${pct(s.confidence, 0)}</b></span>
           <span class="chip">R/R <b>${rr ? rr.ratio.toFixed(2) : '—'}</b></span>
           <span class="chip">Spread <b>${pctRaw(s.spread_pct, 3)}</b></span>
           <span class="chip">${escapeHtml(llmStateText(s))}</span>
         </div>
-        <div class="candidate-meta">${escapeHtml(decisionFor(s).subtitle)}</div>
+        <div class="candidate-meta">${escapeHtml(mtfLabel(s))} · ${escapeHtml(decisionFor(s).subtitle)}</div>
       </article>`;
   }).join('');
   queue.querySelectorAll('.candidate').forEach((card) => {
@@ -559,6 +646,7 @@ function renderRawTable(list = candidates()) {
     return `<tr>
       <td>${escapeHtml(s.decision.label)}</td>
       <td>${escapeHtml(s.decision.score)}</td>
+      <td>${escapeHtml(mtfLabel(s))}</td>
       <td>${escapeHtml(s.symbol)}</td>
       <td>${escapeHtml(s.interval || '—')}</td>
       <td>${escapeHtml(String(s.direction || 'flat').toUpperCase())}</td>

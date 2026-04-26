@@ -132,6 +132,11 @@ class Settings:
     signal_auto_refresh_universe: bool = _bool("SIGNAL_AUTO_REFRESH_UNIVERSE", True)
     signal_auto_sync_sentiment: bool = _bool("SIGNAL_AUTO_SYNC_SENTIMENT", True)
 
+    mtf_consensus_enabled: bool = _bool("MTF_CONSENSUS_ENABLED", True)
+    mtf_entry_interval: str = _interval("MTF_ENTRY_INTERVAL", "15")
+    mtf_bias_interval: str = _interval("MTF_BIAS_INTERVAL", "60")
+    mtf_regime_interval: str = _interval("MTF_REGIME_INTERVAL", "240")
+
     backtest_auto_enabled: bool = _bool("BACKTEST_AUTO_ENABLED", True)
     backtest_auto_interval_sec: int = _int("BACKTEST_AUTO_INTERVAL_SEC", 900)
     backtest_auto_startup_delay_sec: int = _int("BACKTEST_AUTO_STARTUP_DELAY_SEC", 45)
@@ -201,6 +206,14 @@ def _validate_settings(s: Settings) -> None:
     for interval in s.signal_auto_intervals:
         if interval not in VALID_BYBIT_INTERVALS:
             problems.append(f"SIGNAL_AUTO_INTERVALS содержит недопустимый interval: {interval}")
+    if s.mtf_entry_interval == s.mtf_bias_interval or s.mtf_entry_interval == s.mtf_regime_interval or s.mtf_bias_interval == s.mtf_regime_interval:
+        problems.append("MTF_ENTRY_INTERVAL, MTF_BIAS_INTERVAL и MTF_REGIME_INTERVAL должны быть разными")
+    if s.mtf_entry_interval not in s.signal_auto_intervals:
+        problems.append("MTF_ENTRY_INTERVAL должен входить в SIGNAL_AUTO_INTERVALS")
+    if s.mtf_bias_interval not in s.signal_auto_intervals:
+        problems.append("MTF_BIAS_INTERVAL должен входить в SIGNAL_AUTO_INTERVALS")
+    if s.mtf_regime_interval not in s.signal_auto_intervals:
+        problems.append("MTF_REGIME_INTERVAL должен входить в SIGNAL_AUTO_INTERVALS")
     if s.backtest_auto_interval_sec < 60:
         problems.append("BACKTEST_AUTO_INTERVAL_SEC должен быть >= 60")
     if s.backtest_auto_startup_delay_sec < 0:

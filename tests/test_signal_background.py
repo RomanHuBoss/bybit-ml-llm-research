@@ -19,7 +19,7 @@ def test_signal_background_run_once_full_pipeline(monkeypatch):
     from dataclasses import replace
 
     import app.signal_background as sb
-    from app.strategies import StrategySignal
+    from types import SimpleNamespace
 
     runner = sb.SignalAutoRefresher()
     calls: list[tuple] = []
@@ -37,7 +37,7 @@ def test_signal_background_run_once_full_pipeline(monkeypatch):
 
     def fake_build(category, symbol, interval):
         calls.append(("build", category, symbol, interval))
-        return [StrategySignal("donchian_atr_breakout", "long", 0.7, 100.0, 98.0, 104.0, 1.0, {}, None)]
+        return [SimpleNamespace(strategy="donchian_atr_breakout", direction="long", confidence=0.7, entry=100.0, stop_loss=98.0, take_profit=104.0, atr=1.0, rationale={}, bar_time=None)]
 
     def fake_persist(category, symbol, interval, signals):
         calls.append(("persist", category, symbol, interval, len(signals)))

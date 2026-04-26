@@ -9,11 +9,33 @@ from .backtest_background import background_backtester
 from .bybit_client import sync_market_bundle
 from .config import settings
 from .llm_background import background_evaluator
-from .sentiment import sync_sentiment_bundle_multi
-from .strategies import build_latest_signals, persist_signals
 from .symbols import build_universe, latest_universe
 
 logger = logging.getLogger(__name__)
+
+
+
+
+def sync_sentiment_bundle_multi(*args, **kwargs):
+    # Market-based sentiment читает feature-frame через pandas; импортируем только
+    # когда фоновой цикл реально дошел до sentiment-стадии.
+    from .sentiment import sync_sentiment_bundle_multi as impl
+
+    return impl(*args, **kwargs)
+
+
+def build_latest_signals(*args, **kwargs):
+    # Стратегии импортируют pandas/numpy. Держим импорт ленивым, чтобы фоновые
+    # статусы и запуск приложения не зависели от тяжелого аналитического стека.
+    from .strategies import build_latest_signals as impl
+
+    return impl(*args, **kwargs)
+
+
+def persist_signals(*args, **kwargs):
+    from .strategies import persist_signals as impl
+
+    return impl(*args, **kwargs)
 
 
 class SignalAutoRefresher:

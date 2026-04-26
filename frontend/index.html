@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bybit Research Lab — рабочее место оператора</title>
+  <title>Bybit Research Lab — intraday MTF cockpit</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
@@ -12,7 +12,7 @@
       <div class="brand-mark">BR</div>
       <div>
         <h1>Рабочее место оператора</h1>
-        <p>Один экран для ответа: входить нельзя, наблюдать или передать сетап на ручную проверку.</p>
+        <p>Intraday MTF cockpit: 15m вход, 60m направление, 240m режимный veto. LIVE OFF.</p>
       </div>
     </div>
     <div class="top-status">
@@ -24,22 +24,29 @@
     </div>
   </header>
 
-  <main class="terminal">
-    <aside class="workflow panel">
-      <div class="section-title">
-        <span>01</span>
-        <div>
-          <h2>Порядок работы</h2>
-          <p>Фоновый анализ сам обновляет LLM‑вердикты. На экране только решение и причины.</p>
-        </div>
-      </div>
+  <main class="shell">
+    <aside class="control-rail panel">
+      <section class="rail-section">
+        <p class="eyebrow">Pipeline</p>
+        <h2>Порядок работы</h2>
+        <p class="muted">Фоновый анализ сам обновляет сигналы, backtest и LLM‑вердикты. На экране — только решение, MTF‑контекст и причины.</p>
+        <ol class="steps compact">
+          <li><b>15m</b><span>Entry trigger</span></li>
+          <li><b>60m</b><span>Directional bias</span></li>
+          <li><b>240m</b><span>Regime / veto</span></li>
+          <li><b>LLM работает в фоне</b><span>Риск‑разбор top‑кандидатов</span></li>
+        </ol>
+      </section>
 
-      <ol class="steps">
-        <li><b>Данные рынка</b><span>Свечи, liquidity и sentiment обновляются по заданным таймфреймам.</span></li>
-        <li><b>Рекомендации</b><span>Signals/rank строят очередь кандидатов с учетом TF 15m/1h/4h.</span></li>
-        <li><b>LLM работает в фоне</b><span>Top-кандидаты по всем включенным TF получают риск‑вердикт без ручной кнопки.</span></li>
-        <li><b>Решение</b><span>Красный пункт или отрицательный LLM‑вердикт = нет входа.</span></li>
-      </ol>
+      <section class="system-card rail-section">
+        <h3>Состояние стенда</h3>
+        <div class="mini-grid">
+          <div><span>Свечей</span><strong id="kpiCandles">—</strong></div>
+          <div><span>Universe</span><strong id="kpiUniverse">—</strong></div>
+          <div><span>Сигналов</span><strong id="kpiSignals">—</strong></div>
+          <div><span>Режим</span><strong>Research</strong></div>
+        </div>
+      </section>
 
       <details class="ops-drawer">
         <summary>Операции с данными</summary>
@@ -80,46 +87,50 @@
           </select>
         </label>
         <div class="button-stack">
-          <button id="refreshAllBtn">Обновить экран</button>
+          <button id="refreshAllBtn" class="primary">Обновить экран</button>
+          <button id="signalsAutoBtn">Авто-рекомендации сейчас</button>
+          <button id="buildSignalsBtn">Построить рекомендации</button>
+          <button id="rankBtn">Пересчитать очередь</button>
           <button id="syncUniverseBtn">Обновить universe</button>
           <button id="syncMarketBtn">Загрузить рынок</button>
           <button id="syncSentimentBtn">Обновить sentiment</button>
-          <button id="buildSignalsBtn" class="primary">Построить рекомендации</button>
-          <button id="signalsAutoBtn">Авто-рекомендации сейчас</button>
-          <button id="rankBtn">Пересчитать очередь</button>
           <button id="backtestBtn">Бэктест выбранного сетапа</button>
           <button id="backtestAutoBtn">Авто-бэктест сейчас</button>
           <button id="trainBtn">Обучить ML</button>
           <button id="predictBtn">ML‑прогноз</button>
         </div>
       </details>
-
-      <section class="system-card">
-        <h3>Состояние стенда</h3>
-        <div class="mini-grid">
-          <div><span>Свечей</span><strong id="kpiCandles">—</strong></div>
-          <div><span>Universe</span><strong id="kpiUniverse">—</strong></div>
-          <div><span>Сигналов</span><strong id="kpiSignals">—</strong></div>
-          <div><span>Режим</span><strong>Research</strong></div>
-        </div>
-      </section>
     </aside>
 
-    <section class="desk">
-      <section class="decision-board panel" id="decisionBoard">
-        <div class="decision-copy">
-          <p class="eyebrow">Что делать сейчас</p>
-          <h2 id="decisionTitle">Нет выбранного сетапа</h2>
-          <p id="decisionSubtitle">Обновите данные и постройте рекомендации. По умолчанию вход запрещён.</p>
-        </div>
-        <div class="decision-badge" id="decisionBadge">НЕТ ВХОДА</div>
-        <div class="decision-score">
-          <span>Оценка допуска</span>
-          <strong id="decisionScore">0</strong>
-        </div>
+    <section class="workspace">
+      <section class="hero-grid">
+        <article class="decision-board panel" id="decisionBoard">
+          <div class="decision-copy">
+            <p class="eyebrow">Что делать сейчас</p>
+            <h2 id="decisionTitle">Нет выбранного сетапа</h2>
+            <p id="decisionSubtitle">Обновите данные и постройте рекомендации. По умолчанию вход запрещён.</p>
+          </div>
+          <div class="decision-actions">
+            <div class="decision-badge" id="decisionBadge">НЕТ ВХОДА</div>
+            <div class="decision-score">
+              <span>Оценка допуска</span>
+              <strong id="decisionScore">0</strong>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel mtf-panel" id="mtfPanel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">MTF consensus</p>
+              <h2>15m вход · 60m bias · 240m veto</h2>
+            </div>
+          </div>
+          <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
+        </article>
       </section>
 
-      <section class="primary-grid">
+      <section class="main-grid">
         <article class="ticket panel">
           <div class="panel-head">
             <div>
@@ -142,12 +153,28 @@
         </article>
       </section>
 
-      <section class="reason-grid">
+      <section class="queue panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Очередь кандидатов</p>
+            <h2>Сначала aligned 15m, потом наблюдение и запреты</h2>
+          </div>
+          <div class="queue-filters">
+            <button class="filter active" data-filter="all">Все</button>
+            <button class="filter" data-filter="review">К проверке</button>
+            <button class="filter" data-filter="watch">Наблюдать</button>
+            <button class="filter" data-filter="reject">Запрет</button>
+          </div>
+        </div>
+        <div id="candidateQueue" class="candidate-queue empty-state">Очередь появится после построения рекомендаций.</div>
+      </section>
+
+      <section class="analysis-grid">
         <article class="panel reasons">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Почему система вообще показала сетап</p>
-              <h2>Доказательства</h2>
+              <p class="eyebrow">Доказательства</p>
+              <h2>Почему система вообще показала сетап</h2>
             </div>
           </div>
           <div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div>
@@ -162,22 +189,6 @@
           </div>
           <div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div>
         </article>
-      </section>
-
-      <section class="queue panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Очередь кандидатов</p>
-            <h2>Выбирать сверху вниз</h2>
-          </div>
-          <div class="queue-filters">
-            <button class="filter active" data-filter="all">Все</button>
-            <button class="filter" data-filter="review">К проверке</button>
-            <button class="filter" data-filter="watch">Наблюдать</button>
-            <button class="filter" data-filter="reject">Запрет</button>
-          </div>
-        </div>
-        <div id="candidateQueue" class="candidate-queue empty-state">Очередь появится после построения рекомендаций.</div>
       </section>
 
       <section class="lower-grid">
@@ -218,7 +229,7 @@
         </div>
         <div class="table-wrap">
           <table id="rawTable">
-            <thead><tr><th>Решение</th><th>Score</th><th>Символ</th><th>TF</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th><th>LLM</th></tr></thead>
+            <thead><tr><th>Решение</th><th>Score</th><th>MTF</th><th>Символ</th><th>TF</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th><th>LLM</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>

@@ -5,7 +5,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .backtest import STRATEGY_MAP, run_backtest
 from .backtest_background import background_backtester, backtest_background_summary
 from .bybit_client import sync_market_bundle
 from .config import settings
@@ -13,13 +12,67 @@ from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .research import rank_candidates, rank_candidates_multi
-from .sentiment import sentiment_summary, sync_sentiment_bundle
 from .signal_background import signal_refresher
-from .strategies import build_latest_signals, persist_signals
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
 from .validation import bounded_int, normalize_category, normalize_interval, normalize_intervals, normalize_symbol, normalize_symbols
 
 router = APIRouter(prefix="/api")
+
+STRATEGY_NAMES = (
+    "regime_adaptive_combo",
+    "donchian_atr_breakout",
+    "ema_pullback_trend",
+    "bollinger_rsi_reversion",
+    "funding_extreme_contrarian",
+    "oi_trend_confirmation",
+    "volatility_squeeze_breakout",
+    "sentiment_fear_reversal",
+    "sentiment_greed_reversal",
+)
+
+
+def _strategy_map():
+    # Backtest/strategies подтягивают pandas/numpy; импортируем их только для
+    # ручного backtest или построения сигналов, а не при старте всего API.
+    from .backtest import STRATEGY_MAP
+
+    return STRATEGY_MAP
+
+
+def _build_latest_signals(*args, **kwargs):
+    from .strategies import build_latest_signals
+
+    return build_latest_signals(*args, **kwargs)
+
+
+def _persist_signals(*args, **kwargs):
+    from .strategies import persist_signals
+
+    return persist_signals(*args, **kwargs)
+
+
+def _run_backtest(*args, **kwargs):
+    from .backtest import run_backtest
+
+    return run_backtest(*args, **kwargs)
+
+
+def _sync_sentiment_bundle(*args, **kwargs):
+    from .sentiment import sync_sentiment_bundle
+
+    return sync_sentiment_bundle(*args, **kwargs)
+
+
+def _sync_sentiment_bundle_multi(*args, **kwargs):
+    from .sentiment import sync_sentiment_bundle_multi
+
+    return sync_sentiment_bundle_multi(*args, **kwargs)
+
+
+def _sentiment_summary(*args, **kwargs):
+    from .sentiment import sentiment_summary
+
+    return sentiment_summary(*args, **kwargs)
 
 
 class MarketSyncRequest(BaseModel):
@@ -88,7 +141,7 @@ def status() -> dict[str, Any]:
         "default_symbols": settings.default_symbols,
         "core_symbols": settings.core_symbols,
         "symbol_mode": settings.symbol_mode,
-        "strategies": sorted(set(STRATEGY_MAP.keys())),
+        "strategies": sorted(set(STRATEGY_NAMES)),
         "risk_controls": {
             "risk_per_trade": settings.risk_per_trade,
             "max_position_notional_usdt": settings.max_position_notional_usdt,
@@ -101,6 +154,12 @@ def status() -> dict[str, Any]:
             "interval_sec": settings.backtest_auto_interval_sec,
             "max_candidates": settings.backtest_auto_max_candidates,
             "ttl_hours": settings.backtest_auto_ttl_hours,
+        },
+        "mtf_consensus": {
+            "enabled": settings.mtf_consensus_enabled,
+            "entry_interval": settings.mtf_entry_interval,
+            "bias_interval": settings.mtf_bias_interval,
+            "regime_interval": settings.mtf_regime_interval,
         },
         "signal_auto_refresh": {
             "enabled": settings.signal_auto_refresh_enabled,
@@ -194,11 +253,9 @@ def sync_sentiment(req: SentimentSyncRequest) -> dict[str, Any]:
         symbols = normalize_symbols(req.symbols)
         days = bounded_int(req.days, "days", 1, 60)
         if len(intervals) == 1:
-            result = sync_sentiment_bundle(symbols, days, req.use_llm, category, intervals[0])
+            result = _sync_sentiment_bundle(symbols, days, req.use_llm, category, intervals[0])
         else:
-            from .sentiment import sync_sentiment_bundle_multi
-
-            result = sync_sentiment_bundle_multi(symbols, days, intervals, req.use_llm, category)
+            result = _sync_sentiment_bundle_multi(symbols, days, intervals, req.use_llm, category)
         return {"ok": True, "intervals": intervals, "result": result}
     except ValueError as exc:
         raise _bad_request(exc) from exc
@@ -209,7 +266,7 @@ def sync_sentiment(req: SentimentSyncRequest) -> dict[str, Any]:
 @router.get("/sentiment/summary")
 def api_sentiment_summary(symbol: str = "BTCUSDT", limit: int = 20) -> dict[str, Any]:
     try:
-        return {"ok": True, "result": sentiment_summary(normalize_symbol(symbol), bounded_int(limit, "limit", 1, 200))}
+        return {"ok": True, "result": _sentiment_summary(normalize_symbol(symbol), bounded_int(limit, "limit", 1, 200))}
     except ValueError as exc:
         raise _bad_request(exc) from exc
 
@@ -226,8 +283,8 @@ def build_signals(req: SignalBuildRequest) -> dict[str, Any]:
             if len(intervals) > 1:
                 output[symbol] = {}
             for interval in intervals:
-                signals = build_latest_signals(category, symbol, interval)
-                inserted = persist_signals(category, symbol, interval, signals)
+                signals = _build_latest_signals(category, symbol, interval)
+                inserted = _persist_signals(category, symbol, interval, signals)
                 total_inserted += int(inserted or 0)
                 payload = {"built": len(signals), "upserted": inserted, "signals": [s.__dict__ for s in signals]}
                 if len(intervals) == 1:
@@ -305,9 +362,9 @@ def api_backtest(req: BacktestRequest) -> dict[str, Any]:
         category = normalize_category(req.category)
         symbol = normalize_symbol(req.symbol)
         interval = normalize_interval(req.interval)
-        if req.strategy not in STRATEGY_MAP:
+        if req.strategy not in _strategy_map():
             raise ValueError(f"Unknown strategy: {req.strategy}")
-        return {"ok": True, "result": run_backtest(category, symbol, interval, req.strategy, req.limit)}
+        return {"ok": True, "result": _run_backtest(category, symbol, interval, req.strategy, req.limit)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

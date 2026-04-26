@@ -4,6 +4,7 @@ from typing import Any
 
 from .config import settings
 from .db import fetch_all
+from .mtf import apply_mtf_consensus
 
 
 def rank_candidates(category: str = "linear", interval: str = "60", limit: int = 30) -> list[dict[str, Any]]:
@@ -14,6 +15,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
     interval_list = [str(interval).strip().upper() for interval in intervals if str(interval).strip()]
     if not interval_list:
         return []
+    query_limit = max(limit * 6, limit)
     rows = fetch_all(
         """
         WITH latest_signals AS (
@@ -86,7 +88,14 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
             category,
             category,
             settings.max_spread_pct,
-            limit,
+            query_limit,
         ),
     )
-    return rows
+    if settings.mtf_consensus_enabled:
+        rows = apply_mtf_consensus(
+            rows,
+            entry_interval=settings.mtf_entry_interval,
+            bias_interval=settings.mtf_bias_interval,
+            regime_interval=settings.mtf_regime_interval,
+        )
+    return rows[:limit]

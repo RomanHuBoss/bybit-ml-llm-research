@@ -5,11 +5,18 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from .backtest import run_backtest
 from .config import settings
 from .db import fetch_all, fetch_one
 
 logger = logging.getLogger(__name__)
+
+
+def run_backtest(*args, **kwargs):
+    # pandas/numpy-heavy backtest импортируется только перед реальным расчетом.
+    # Фоновые статусы и запуск API не должны зависеть от тяжелого аналитического стека.
+    from .backtest import run_backtest as impl
+
+    return impl(*args, **kwargs)
 
 
 class BacktestBackgroundRunner:

@@ -596,16 +596,37 @@ POST /api/signals/background/run-now
 
 Это именно автоматизация обновления рекомендательной витрины, а не автоматическая торговля. Оператор по-прежнему принимает решение вручную.
 
-### Multi-timeframe логика
+### Multi-timeframe логика и intraday consensus
 
-MTF в проекте реализован как параллельное построение независимых сигналов по нескольким Bybit interval, а не как скрытое смешивание индикаторов разных TF внутри одной строки. Это безопаснее для аудита: каждая рекомендация сохраняется с собственным `interval`, собственным `bar_time`, собственным backtest/LLM-статусом и отдельной дедупликацией в БД.
+MTF строится в два этапа. Сначала проект независимо сохраняет сигналы по каждому Bybit `interval`: у каждой строки свой `interval`, `bar_time`, backtest/LLM-статус и дедупликация. Затем слой `app/mtf.py` группирует свежие сигналы одного символа и рассчитывает intraday-consensus.
 
-По умолчанию:
+По умолчанию используется безопасная иерархия:
 
 ```text
-15  — тактический краткосрочный контур;
-60  — основной рабочий 1h-контур;
-240 — старший 4h-фильтр/режим.
+15m  — entry trigger, единственный TF, который может быть кандидатом на вход;
+60m  — directional bias, подтверждает или запрещает 15m-направление;
+240m — старший regime/veto, запрещает вход против выраженного старшего режима.
+```
+
+Классы MTF:
+
+```text
+HIGH_CONVICTION_INTRADAY — 15m, 60m и 240m согласованы;
+BIAS_ALIGNED_INTRADAY   — 15m подтвержден 60m, 240m нейтрален/без сигнала;
+TACTICAL_ONLY           — есть только 15m без подтверждения 60m;
+NO_TRADE_CONFLICT       — 60m или 240m против направления 15m;
+CONTEXT_ONLY            — сигнал 60m/240m, он показан как контекст, но не как entry.
+```
+
+`research_score` теперь пересчитывается с учетом `mtf_score`, `mtf_veto`, `higher_tf_conflict` и роли таймфрейма. Исходная оценка сохраняется в поле `research_score_base`. Для LLM в payload добавляются `mtf_status`, `mtf_action_class`, `mtf_entry`, `mtf_bias`, `mtf_regime` и причина решения.
+
+Параметры `.env`:
+
+```env
+MTF_CONSENSUS_ENABLED=true
+MTF_ENTRY_INTERVAL=15
+MTF_BIAS_INTERVAL=60
+MTF_REGIME_INTERVAL=240
 ```
 
 Ручные endpoints `/api/sync/market`, `/api/sync/sentiment`, `/api/signals/build` принимают как старый параметр `interval`, так и новый `intervals`. UI отправляет оба поля для обратной совместимости. `/api/research/rank` умеет принимать `interval=15,60,240`, `interval=all`, `interval=multi` или один конкретный TF.
