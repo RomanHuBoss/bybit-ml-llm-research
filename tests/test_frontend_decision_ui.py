@@ -97,16 +97,19 @@ def test_left_rail_keeps_data_operations_visible():
         "display: flex",
         "flex-direction: column",
         "height: calc(100dvh - 82px)",
-        ".queue-panel",
-        "flex: 1 1 auto",
         "overflow: hidden",
+        ".queue-panel",
+        "flex: 1 1 0",
+        "min-height: 128px",
         ".candidate-queue",
         "overflow-y: auto",
         "scrollbar-gutter: stable",
         ".ops-panel.open",
-        "position: fixed",
-        "max-height: calc(100dvh - 88px)",
+        "position: relative",
+        "flex: 0 1 min(44dvh, 390px)",
+        "max-height: min(44dvh, 390px)",
         ".ops-body",
+        "flex: 1 1 auto",
         "overflow-y: auto",
         "overscroll-behavior: contain",
         "scrollbar-width: thin",
@@ -114,6 +117,11 @@ def test_left_rail_keeps_data_operations_visible():
     ]
     for fragment in required_css_fragments:
         assert fragment in css
+
+    desktop_open_rule = css.split("@media (max-width: 980px)", 1)[0]
+    assert "position: fixed" not in desktop_open_rule
+    assert "bottom: 12px" not in desktop_open_rule
+    assert "left: max" not in desktop_open_rule
 
     required_js_fragments = [
         "function setOpsPanelOpen",
