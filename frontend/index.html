@@ -3,31 +3,43 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bybit Research Decision Cockpit</title>
+  <title>Bybit Research Lab — рабочее место оператора</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark">BR</span>
+      <div class="brand-mark">BR</div>
       <div>
-        <h1>Bybit Research Decision Cockpit</h1>
-        <p>Рекомендательный экран для оператора: сигнал → качество → риск → ручное решение.</p>
+        <h1>Рабочее место оператора</h1>
+        <p>Один экран для ответа: входить нельзя, наблюдать или передать сетап на ручную проверку.</p>
       </div>
     </div>
-    <div class="topbar-actions">
-      <span class="mode-pill">LIVE TRADING OFF</span>
-      <span class="status" id="statusBox">Проверка...</span>
+    <div class="top-status">
+      <span class="safe-mode">LIVE OFF</span>
+      <span id="statusBox" class="status">Подключение...</span>
     </div>
   </header>
 
-  <main class="shell">
-    <aside class="sidebar">
-      <section class="panel compact-panel">
-        <div class="panel-head">
-          <h2>Рабочий контекст</h2>
-          <button id="refreshAllBtn" class="ghost small">Обновить</button>
+  <main class="terminal">
+    <aside class="workflow panel">
+      <div class="section-title">
+        <span>01</span>
+        <div>
+          <h2>Порядок работы</h2>
+          <p>Сначала очередь кандидатов, потом чек‑лист. Технические таблицы скрыты.</p>
         </div>
+      </div>
+
+      <ol class="steps">
+        <li><b>Обновить рынок</b><span>Universe → свечи → sentiment.</span></li>
+        <li><b>Построить рекомендации</b><span>Система отберет только кандидатов, а не торговые приказы.</span></li>
+        <li><b>Открыть кандидата</b><span>Смотреть только decision, чек‑лист и ticket.</span></li>
+        <li><b>Отменить при стоп‑факторе</b><span>Любой красный пункт = нет входа.</span></li>
+      </ol>
+
+      <details class="ops-drawer">
+        <summary>Операции с данными</summary>
         <label>Символы
           <input id="symbols" value="BTCUSDT,ETHUSDT,SOLUSDT" autocomplete="off" />
         </label>
@@ -51,7 +63,7 @@
             </select>
           </label>
         </div>
-        <label>Стратегия для бэктеста
+        <label>Стратегия для ручного бэктеста
           <select id="strategy">
             <option>regime_adaptive_combo</option>
             <option>donchian_atr_breakout</option>
@@ -64,142 +76,146 @@
             <option>sentiment_greed_reversal</option>
           </select>
         </label>
-      </section>
-
-      <section class="panel compact-panel">
-        <h2>Операции</h2>
         <div class="button-stack">
-          <button id="syncUniverseBtn">1 · Обновить universe</button>
-          <button id="syncMarketBtn">2 · Загрузить рынок</button>
-          <button id="syncSentimentBtn">3 · Обновить sentiment</button>
-          <button id="buildSignalsBtn" class="primary">4 · Построить рекомендации</button>
-          <button id="rankBtn">Пересчитать рейтинг</button>
-          <button id="backtestBtn">Бэктест выбранной стратегии</button>
-          <button id="trainBtn">Обучить ML по выбранному символу</button>
-          <button id="predictBtn">ML-прогноз по выбранному символу</button>
+          <button id="refreshAllBtn">Обновить экран</button>
+          <button id="syncUniverseBtn">Обновить universe</button>
+          <button id="syncMarketBtn">Загрузить рынок</button>
+          <button id="syncSentimentBtn">Обновить sentiment</button>
+          <button id="buildSignalsBtn" class="primary">Построить рекомендации</button>
+          <button id="rankBtn">Пересчитать очередь</button>
+          <button id="backtestBtn">Бэктест выбранного сетапа</button>
+          <button id="trainBtn">Обучить ML</button>
+          <button id="predictBtn">ML‑прогноз</button>
         </div>
-      </section>
+      </details>
 
-      <section class="panel compact-panel system-panel">
-        <h2>Система</h2>
+      <section class="system-card">
+        <h3>Состояние стенда</h3>
         <div class="mini-grid">
           <div><span>Свечей</span><strong id="kpiCandles">—</strong></div>
           <div><span>Universe</span><strong id="kpiUniverse">—</strong></div>
+          <div><span>Сигналов</span><strong id="kpiSignals">—</strong></div>
           <div><span>Режим</span><strong>Research</strong></div>
-          <div><span>Sentiment</span><strong id="kpiSentiment">Free</strong></div>
         </div>
-        <details>
-          <summary>Журнал операций</summary>
-          <pre id="log" class="log"></pre>
-        </details>
       </section>
     </aside>
 
-    <section class="workspace">
-      <section class="decision-hero" id="decisionHero">
-        <div class="decision-status no-data" id="decisionStatus">NO DATA</div>
-        <div class="decision-main">
-          <p class="eyebrow">Главное решение</p>
-          <h2 id="decisionTitle">Нет свежих торговых рекомендаций</h2>
-          <p id="decisionSubtitle">Сначала синхронизируйте рынок и постройте рекомендации. Экран не отправляет ордера и не создает ботов автоматически.</p>
+    <section class="desk">
+      <section class="decision-board panel" id="decisionBoard">
+        <div class="decision-copy">
+          <p class="eyebrow">Что делать сейчас</p>
+          <h2 id="decisionTitle">Нет выбранного сетапа</h2>
+          <p id="decisionSubtitle">Обновите данные и постройте рекомендации. По умолчанию вход запрещён.</p>
         </div>
+        <div class="decision-badge" id="decisionBadge">НЕТ ВХОДА</div>
         <div class="decision-score">
-          <span>Оценка</span>
-          <strong id="decisionScore">—</strong>
+          <span>Оценка допуска</span>
+          <strong id="decisionScore">0</strong>
         </div>
       </section>
 
-      <section class="decision-grid">
-        <article class="panel action-card">
+      <section class="primary-grid">
+        <article class="ticket panel">
           <div class="panel-head">
-            <h2>План кандидата</h2>
-            <button id="briefBtn" class="ghost small">LLM brief</button>
+            <div>
+              <p class="eyebrow">Trade ticket</p>
+              <h2 id="ticketTitle">Сетап не выбран</h2>
+            </div>
+            <button id="briefBtn" class="ghost">LLM brief</button>
           </div>
-          <div id="tradePlan" class="trade-plan empty-state">Выберите кандидата из списка ниже.</div>
+          <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди ниже.</div>
         </article>
 
-        <article class="panel evidence-card">
-          <h2>Почему / почему нет</h2>
-          <div id="evidenceList" class="evidence-list empty-state">Нет выбранного сигнала.</div>
+        <article class="checklist panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Чек‑лист допуска</p>
+              <h2>Красный пункт = отмена</h2>
+            </div>
+          </div>
+          <div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div>
+        </article>
+      </section>
+
+      <section class="reason-grid">
+        <article class="panel reasons">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Почему система вообще показала сетап</p>
+              <h2>Доказательства</h2>
+            </div>
+          </div>
+          <div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div>
         </article>
 
-        <article class="panel guard-card">
-          <h2>Стоп-факторы</h2>
-          <div id="guardrails" class="guardrails empty-state">Нет данных для проверки ограничений.</div>
+        <article class="panel protocol">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Протокол оператора</p>
+              <h2>Что проверить руками</h2>
+            </div>
+          </div>
+          <div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div>
         </article>
       </section>
 
-      <section class="panel candidates-panel">
+      <section class="queue panel">
         <div class="panel-head">
           <div>
-            <h2>Кандидаты для ручного решения</h2>
-            <p>Сначала смотрите статус и риск/прибыль, затем доказательства и LLM-brief. Таблицы ниже — только детализация.</p>
+            <p class="eyebrow">Очередь кандидатов</p>
+            <h2>Выбирать сверху вниз</h2>
           </div>
-          <div class="legend">
-            <span><i class="dot good"></i>можно проверять</span>
-            <span><i class="dot warn"></i>наблюдать</span>
-            <span><i class="dot bad"></i>запрет</span>
+          <div class="queue-filters">
+            <button class="filter active" data-filter="all">Все</button>
+            <button class="filter" data-filter="review">К проверке</button>
+            <button class="filter" data-filter="watch">Наблюдать</button>
+            <button class="filter" data-filter="reject">Запрет</button>
           </div>
         </div>
-        <div id="candidateList" class="candidate-list empty-state">Кандидаты появятся после построения сигналов.</div>
+        <div id="candidateQueue" class="candidate-queue empty-state">Очередь появится после построения рекомендаций.</div>
       </section>
 
-      <section class="panel chart-panel">
-        <div class="panel-head">
-          <h2>Equity curve последнего бэктеста</h2>
-          <span id="equityMeta" class="muted">—</span>
-        </div>
-        <canvas id="equityCanvas" width="960" height="300"></canvas>
-      </section>
-
-      <section class="panel brief-panel">
-        <div class="panel-head">
-          <h2>LLM brief / протокол оператора</h2>
-          <span class="muted">Использовать как объяснение, не как приказ на вход.</span>
-        </div>
-        <pre id="briefBox" class="brief">Выберите сигнал и нажмите LLM brief.</pre>
-      </section>
-
-      <section class="panel context-panel">
-        <div class="panel-head">
-          <h2>Контекст рынка и новостей</h2>
-          <span id="sentimentSummary" class="muted">—</span>
-        </div>
-        <div id="newsList" class="news-list"></div>
-      </section>
-
-      <details class="panel raw-section">
-        <summary>Технические детали: рейтинг, сигналы, universe</summary>
-        <div class="raw-tabs">
-          <div>
-            <h3>Research ranking</h3>
-            <div class="table-wrap">
-              <table id="rankTable">
-                <thead><tr><th>Score</th><th>Символ</th><th>Стратегия</th><th>Dir</th><th>Conf</th><th>PF</th><th>Sharpe</th><th>DD</th><th>ROC AUC</th><th>Spread</th></tr></thead>
-                <tbody></tbody>
-              </table>
+      <section class="lower-grid">
+        <article class="panel brief-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">LLM brief</p>
+              <h2>Краткое объяснение по выбранному сетапу</h2>
             </div>
           </div>
-          <div>
-            <h3>Последние сигналы</h3>
-            <div class="table-wrap">
-              <table id="signalsTable">
-                <thead>
-                  <tr><th>ID</th><th>Время</th><th>Символ</th><th>Стратегия</th><th>Dir</th><th>Conf</th><th>Entry</th><th>SL</th><th>TP</th></tr>
-                </thead>
-                <tbody></tbody>
-              </table>
+          <pre id="briefBox" class="brief">Выберите кандидата и нажмите LLM brief.</pre>
+        </article>
+
+        <article class="panel news-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Контекст</p>
+              <h2>Новости / sentiment</h2>
             </div>
+            <span id="sentimentSummary" class="muted">—</span>
           </div>
-          <div>
-            <h3>Dynamic / Hybrid universe</h3>
-            <div class="table-wrap">
-              <table id="universeTable">
-                <thead><tr><th>#</th><th>Символ</th><th>Reason</th><th>Liquidity</th><th>Spread %</th><th>Turnover 24h</th><th>OI value</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-          </div>
+          <div id="newsList" class="news-list empty-state">Новостей пока нет.</div>
+        </article>
+      </section>
+
+      <details class="panel technical-details">
+        <summary>Технические детали и журнал</summary>
+        <div class="details-grid">
+          <section>
+            <h3>Последний бэктест</h3>
+            <span id="equityMeta" class="muted">—</span>
+            <canvas id="equityCanvas" width="900" height="240"></canvas>
+          </section>
+          <section>
+            <h3>Журнал операций</h3>
+            <pre id="log" class="log"></pre>
+          </section>
+        </div>
+        <div class="table-wrap">
+          <table id="rawTable">
+            <thead><tr><th>Решение</th><th>Score</th><th>Символ</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </details>
     </section>
