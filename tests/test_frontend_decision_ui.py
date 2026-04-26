@@ -140,3 +140,27 @@ def test_left_rail_keeps_data_operations_visible():
     for fragment in required_js_fragments:
         assert fragment in js
 
+
+
+def test_frontend_has_fetch_timeout_busy_guard_and_safe_links():
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    required_js_fragments = [
+        "function cssToken",
+        "function safeExternalUrl",
+        "new URL(String(value), window.location.origin)",
+        "['http:', 'https:'].includes(url.protocol)",
+        "AbortController",
+        "API timeout after",
+        "function setBusy",
+        "aria-busy",
+        "document.body.classList.contains('is-busy')",
+        "noopener noreferrer",
+    ]
+    for fragment in required_js_fragments:
+        assert fragment in js
+
+    assert 'id="candidateQueue"' in html
+    assert 'aria-live="polite"' in html
+    assert html.count('type="button"') >= 12

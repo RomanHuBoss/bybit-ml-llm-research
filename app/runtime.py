@@ -65,6 +65,22 @@ def _suppress_known_loky_warning() -> None:
     )
 
 
+def _configure_numeric_thread_limits() -> None:
+    """Ограничивает фоновые потоки BLAS/NumExpr для локального research-сервера.
+
+    Pandas/numpy/sklearn могут подтягивать OpenBLAS/MKL и пытаться создать десятки
+    worker-thread'ов уже на импорте. Для UI-сервиса рекомендаций это опасно:
+    старт приложения и тестов становится недетерминированным, а тяжелые операции
+    начинают конкурировать с HTTP-потоком. Пользовательские значения не
+    перезаписываем; если они не заданы, ставим умеренный локальный предел.
+    """
+    logical = max(1, os.cpu_count() or 1)
+    default_threads = str(max(1, min(4, logical)))
+    for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        if _parse_positive_int(os.environ.get(name)) is None:
+            os.environ[name] = default_threads
+
+
 def configure_runtime_environment() -> None:
     """
     Настраивает безопасные переменные окружения до импорта sklearn/joblib.
@@ -76,6 +92,7 @@ def configure_runtime_environment() -> None:
     Пользовательское значение из окружения или .env имеет приоритет.
     """
     _suppress_known_loky_warning()
+    _configure_numeric_thread_limits()
 
     if _parse_positive_int(os.environ.get("LOKY_MAX_CPU_COUNT")) is not None:
         return

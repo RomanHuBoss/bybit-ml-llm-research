@@ -444,3 +444,56 @@
 - добавлены тесты `tests/test_mtf_consensus.py` на aligned intraday, conflict-veto и context-only поведение.
 
 Принятое безопасное допущение: для intraday вход разрешается только по entry-TF. 60m и 240m могут усиливать, ослаблять или запрещать сигнал, но не являются точкой входа сами по себе.
+
+## Дополнение ревизии 2026-04-26: фронтенд, UX и Bybit edge-cases
+
+### Найденные проблемы
+
+#### High
+
+1. **Фронтенд не имел timeout для API-вызовов.** При зависшем backend, сетевом обрыве или подвисшем reverse-proxy оператор мог получить бесконечное ожидание без явного отказа. Исправлено: `api()` использует `AbortController` и возвращает понятную ошибку timeout.
+2. **Операционные кнопки можно было запускать повторно во время уже выполняющейся операции.** Это могло параллельно инициировать загрузку рынка, пересчет сигналов или фоновые циклы из UI. Исправлено: введен `setBusy()` и single-flight guard в `runOperation()`.
+3. **Bybit `retCode` парсился через прямой `int(ret_code)`.** Нестандартный gateway/body с нечисловым `retCode` приводил бы к `ValueError` вне нормального контракта `BybitAPIError`. Исправлено: `_parse_ret_code()` и корректная ошибка API без маскировки причины.
+4. **Pagination instruments-info не имела защиты от повторяющегося cursor.** При дефекте API/gateway цикл мог стать бесконечным. Исправлено: `MAX_BYBIT_CURSOR_PAGES`, `seen_cursors`, валидация типа `result.list`.
+
+#### Medium
+
+1. **URL новостей вставлялся в `href` без whitelist схемы.** HTML escaping не запрещает `javascript:` как URL-схему. Исправлено: `safeExternalUrl()` разрешает только `http:` и `https:`.
+2. **CSS-классы частично строились из данных backend.** Неожиданные значения могли ломать селекторы и визуальные состояния. Исправлено: `cssToken()` для токенов классов.
+3. **Локальные numeric-библиотеки могли создавать избыточное число потоков.** Это особенно опасно для Windows/desktop research-стенда и тестового окружения. Исправлено: `sitecustomize.py` и `app.runtime` задают безопасные `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `NUMEXPR_NUM_THREADS`, не перезаписывая пользовательские значения.
+
+### Что исправлено
+
+- `frontend/styles.css`: переработан cockpit-дизайн, visual hierarchy, spacing, scroll-контейнеры, responsive behavior, busy-state.
+- `frontend/app.js`: timeout API, single-flight UI operations, safe external links, class-token normalization.
+- `frontend/index.html`: `type="button"`, `aria-live="polite"` для очереди кандидатов.
+- `app/bybit_client.py`: устойчивый parse `retCode`, cursor-loop guard и лимит страниц.
+- `app/runtime.py`, `sitecustomize.py`: безопасные лимиты потоков numeric runtime.
+
+### Что добавлено в тесты
+
+- `tests/test_frontend_decision_ui.py`: regression-тест timeout/busy/safe-link/button/aria инвариантов фронтенда.
+- `tests/test_bybit_client_resilience.py`: тест нечислового `retCode` и тест повторяющегося Bybit cursor.
+- `tests/test_runtime_environment.py`: тесты установки и сохранения numeric thread limits.
+
+### Проверка этой доработки
+
+Команды, выполненные в текущей среде:
+
+```bash
+node --check frontend/app.js
+python -S -m compileall -q app tests run.py install.py sitecustomize.py
+pytest -q -p no:cacheprovider tests/test_frontend_decision_ui.py
+pytest -q -p no:cacheprovider tests/test_bybit_client_resilience.py
+pytest -q -p no:cacheprovider tests/test_runtime_environment.py
+```
+
+Результаты целевых регрессий:
+
+- `tests/test_frontend_decision_ui.py`: 7 passed;
+- `tests/test_bybit_client_resilience.py`: 2 passed;
+- `tests/test_runtime_environment.py`: 5 passed;
+- `tests/smoke_test.py`: 1 passed;
+- `tests/test_backtest_background.py`: 3 passed до зависания тестового runner на завершении процесса в контейнерной среде.
+
+Ограничение проверки: в текущем контейнере импорт `pandas` может зависать на уровне окружения, поэтому полный `tests/test_core_safety.py` здесь не был надежно прогнан повторно. Код и targeted regression-тесты для внесенных изменений проверены отдельно; ранее существующий полный набор в проектной документации оставлен как baseline, но эта среда не позволяет честно подтвердить его полным прогоном после UX-доработки.

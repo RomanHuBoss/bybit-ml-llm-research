@@ -23,6 +23,16 @@ class BybitAPIError(RuntimeError):
 
 
 TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+MAX_BYBIT_CURSOR_PAGES = 200
+
+
+def _parse_ret_code(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 TRANSIENT_BYBIT_RET_CODES = {
     10000,  # Server timeout.
     10006,  # Too many visits / rate limit.
@@ -65,12 +75,16 @@ class BybitClient:
                     payload = response.json()
                 except ValueError as exc:
                     raise BybitAPIError(f"Bybit returned non-JSON response: {response.text[:300]}") from exc
-                ret_code = payload.get("retCode")
+                ret_code_raw = payload.get("retCode")
+                ret_code = _parse_ret_code(ret_code_raw)
                 if ret_code != 0:
-                    transient = int(ret_code) in TRANSIENT_BYBIT_RET_CODES if ret_code is not None else False
+                    # Bybit обычно возвращает retCode числом, но защитный парсер нужен,
+                    # чтобы нестандартный gateway/body не превращался в ValueError вне
+                    # retry-контракта клиента и не маскировал реальную ошибку API.
+                    transient = ret_code in TRANSIENT_BYBIT_RET_CODES if ret_code is not None else False
                     raise BybitAPIError(
-                        f"Bybit retCode={ret_code}, retMsg={payload.get('retMsg')}, params={params}",
-                        ret_code=int(ret_code) if ret_code is not None else None,
+                        f"Bybit retCode={ret_code_raw}, retMsg={payload.get('retMsg')}, params={params}",
+                        ret_code=ret_code,
                         transient=transient,
                     )
                 result = payload.get("result", {})
@@ -150,15 +164,26 @@ class BybitClient:
     def get_instruments_info(self, category: str = "linear") -> list[dict[str, Any]]:
         all_items: list[dict[str, Any]] = []
         cursor: str | None = None
-        while True:
+        seen_cursors: set[str] = set()
+        for _page_no in range(MAX_BYBIT_CURSOR_PAGES):
             params: dict[str, Any] = {"category": category, "limit": 1000}
             if cursor:
                 params["cursor"] = cursor
             result = self._get("/v5/market/instruments-info", params)
-            all_items.extend(result.get("list", []))
-            cursor = result.get("nextPageCursor") or None
-            if not cursor:
+            items = result.get("list", [])
+            if not isinstance(items, list):
+                raise BybitAPIError("Bybit instruments-info result.list has unexpected type")
+            all_items.extend(items)
+            next_cursor = result.get("nextPageCursor") or None
+            if not next_cursor:
                 break
+            next_cursor = str(next_cursor)
+            if next_cursor in seen_cursors:
+                raise BybitAPIError(f"Bybit instruments-info cursor loop detected: {next_cursor!r}")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise BybitAPIError(f"Bybit instruments-info exceeded {MAX_BYBIT_CURSOR_PAGES} cursor pages")
         return all_items
 
 

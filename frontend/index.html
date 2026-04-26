@@ -40,15 +40,15 @@
             <p class="eyebrow">Candidate queue</p>
             <h2>15m рекомендации</h2>
           </div>
-          <button id="refreshAllBtn" class="icon-button primary" title="Обновить экран">↻</button>
+          <button type="button" id="refreshAllBtn" class="icon-button primary" title="Обновить экран">↻</button>
         </div>
         <div class="queue-filters segmented" role="tablist" aria-label="Фильтр кандидатов">
-          <button class="filter active" data-filter="all">Все</button>
-          <button class="filter" data-filter="review">Вход</button>
-          <button class="filter" data-filter="watch">Watch</button>
-          <button class="filter" data-filter="reject">Stop</button>
+          <button type="button" class="filter active" data-filter="all">Все</button>
+          <button type="button" class="filter" data-filter="review">Вход</button>
+          <button type="button" class="filter" data-filter="watch">Watch</button>
+          <button type="button" class="filter" data-filter="reject">Stop</button>
         </div>
-        <div id="candidateQueue" class="candidate-queue empty-state">Очередь появится после построения рекомендаций.</div>
+        <div id="candidateQueue" class="candidate-queue empty-state" aria-live="polite">Очередь появится после построения рекомендаций.</div>
       </section>
 
       <section class="panel ops-panel" id="opsPanel">
@@ -94,16 +94,16 @@
             </select>
           </label>
           <div class="button-stack">
-            <button id="signalsAutoBtn" class="primary">Авто-рекомендации сейчас</button>
-            <button id="buildSignalsBtn">Построить рекомендации</button>
-            <button id="rankBtn">Пересчитать очередь</button>
-            <button id="syncUniverseBtn">Обновить universe</button>
-            <button id="syncMarketBtn">Загрузить рынок</button>
-            <button id="syncSentimentBtn">Обновить sentiment</button>
-            <button id="backtestBtn">Бэктест сетапа</button>
-            <button id="backtestAutoBtn">Авто-бэктест сейчас</button>
-            <button id="trainBtn">Обучить ML</button>
-            <button id="predictBtn">ML‑прогноз</button>
+            <button type="button" id="signalsAutoBtn" class="primary">Авто-рекомендации сейчас</button>
+            <button type="button" id="buildSignalsBtn">Построить рекомендации</button>
+            <button type="button" id="rankBtn">Пересчитать очередь</button>
+            <button type="button" id="syncUniverseBtn">Обновить universe</button>
+            <button type="button" id="syncMarketBtn">Загрузить рынок</button>
+            <button type="button" id="syncSentimentBtn">Обновить sentiment</button>
+            <button type="button" id="backtestBtn">Бэктест сетапа</button>
+            <button type="button" id="backtestAutoBtn">Авто-бэктест сейчас</button>
+            <button type="button" id="trainBtn">Обучить ML</button>
+            <button type="button" id="predictBtn">ML‑прогноз</button>
           </div>
         </div>
       </section>
@@ -151,11 +151,11 @@
             <h2>Проверка сетапа</h2>
           </div>
           <div class="context-tabs" role="tablist" aria-label="Панели проверки">
-            <button class="context-tab active" data-tab="risk">Risk</button>
-            <button class="context-tab" data-tab="evidence">Evidence</button>
-            <button class="context-tab" data-tab="llm">LLM</button>
-            <button class="context-tab" data-tab="news">News</button>
-            <button class="context-tab" data-tab="protocol">Protocol</button>
+            <button type="button" class="context-tab active" data-tab="risk">Risk</button>
+            <button type="button" class="context-tab" data-tab="evidence">Evidence</button>
+            <button type="button" class="context-tab" data-tab="llm">LLM</button>
+            <button type="button" class="context-tab" data-tab="news">News</button>
+            <button type="button" class="context-tab" data-tab="protocol">Protocol</button>
           </div>
         </div>
 
@@ -185,7 +185,7 @@
               <h3>LLM risk review</h3>
               <p>Независимый риск-разбор, не торговый приказ.</p>
             </div>
-            <button id="briefBtn" class="ghost">Обновить LLM сейчас</button>
+            <button type="button" id="briefBtn" class="ghost">Обновить LLM сейчас</button>
           </div>
           <pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre>
         </section>

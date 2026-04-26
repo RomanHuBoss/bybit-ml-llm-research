@@ -52,6 +52,15 @@ def _safe_default_loky_cpu_count() -> int:
     return max(1, min(4, logical - 1))
 
 
+def _configure_numeric_thread_limits() -> None:
+    """Задает безопасный верхний предел потоков BLAS до импорта pandas/sklearn."""
+    logical = max(1, os.cpu_count() or 1)
+    default_threads = str(max(1, min(4, logical)))
+    for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        if _parse_positive_int(os.environ.get(name)) is None:
+            os.environ[name] = default_threads
+
+
 def _configure_loky_cpu_count() -> None:
     """
     Защищает Windows-запуск от предупреждения joblib/loky об отсутствующем wmic.
@@ -91,5 +100,6 @@ def _suppress_known_loky_warning() -> None:
     )
 
 
+_configure_numeric_thread_limits()
 _configure_loky_cpu_count()
 _suppress_known_loky_warning()

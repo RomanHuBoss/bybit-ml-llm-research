@@ -58,6 +58,30 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+
+function cssToken(value, fallback = 'neutral') {
+  const token = String(value ?? '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  return token || fallback;
+}
+
+function safeExternalUrl(value) {
+  if (!value) return '';
+  try {
+    const url = new URL(String(value), window.location.origin);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function setBusy(isBusy) {
+  document.body.classList.toggle('is-busy', isBusy);
+  document.body.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+  document.querySelectorAll('button').forEach((button) => {
+    button.disabled = isBusy;
+  });
+}
+
 function symbols() {
   return $('symbols').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 }
@@ -111,20 +135,33 @@ function ageText(value) {
   return `${(minutes / 1440).toFixed(1)} дн назад`;
 }
 
-async function api(path, options = {}) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  const text = await res.text();
-  let data;
+async function api(path, options = {}, timeoutMs = 45_000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
   try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
+    const res = await fetch(path, {
+      ...options,
+      headers,
+      signal: options.signal || controller.signal,
+    });
+    const text = await res.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
+    }
+    if (!res.ok) throw new Error(data.detail || data.raw || res.statusText);
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`API timeout after ${Math.round(timeoutMs / 1000)}s: ${path}`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
   }
-  if (!res.ok) throw new Error(data.detail || data.raw || res.statusText);
-  return data;
 }
 
 function log(title, obj) {
@@ -652,19 +689,21 @@ function renderQueue() {
   queue.innerHTML = filtered.map((s, index) => {
     const rr = riskReward(s);
     const selected = Number(s.id) === Number(selectedCandidate()?.id);
+    const decisionLevel = cssToken(s.decision.level, 'reject');
+    const directionToken = cssToken(s.direction, 'flat');
     return `
-      <article class="candidate ${s.decision.level} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}">
+      <article class="candidate ${decisionLevel} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}">
         <div class="candidate-head">
           <div>
             <div class="symbol">${escapeHtml(s.symbol)} <span>${escapeHtml(s.interval || '—')}m</span></div>
-            <div class="candidate-meta"><span class="direction-${escapeHtml(s.direction)}">${escapeHtml(String(s.direction || 'flat').toUpperCase())}</span> · ${escapeHtml(STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия')}</div>
+            <div class="candidate-meta"><span class="direction-${directionToken}">${escapeHtml(String(s.direction || 'flat').toUpperCase())}</span> · ${escapeHtml(STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия')}</div>
           </div>
-          <span class="badge ${s.decision.level}">${escapeHtml(s.decision.label)}</span>
+          <span class="badge ${decisionLevel}">${escapeHtml(s.decision.label)}</span>
         </div>
         <div class="candidate-line">
           <span class="chip">#<b>${index + 1}</b></span>
           <span class="chip">Score <b>${s.decision.score}</b></span>
-          <span class="chip mtf-chip ${mtfSeverity(s)}"><b>${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || mtfLabel(s))}</b></span>
+          <span class="chip mtf-chip ${cssToken(mtfSeverity(s), 'fail')}"><b>${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || mtfLabel(s))}</b></span>
           <span class="chip">Conf <b>${pct(s.confidence, 0)}</b></span>
           <span class="chip">R/R <b>${rr ? rr.ratio.toFixed(2) : '—'}</b></span>
           <span class="chip">Spr <b>${pctRaw(s.spread_pct, 3)}</b></span>
@@ -674,7 +713,8 @@ function renderQueue() {
   }).join('');
   queue.querySelectorAll('.candidate').forEach((card) => {
     card.addEventListener('click', () => {
-      state.selectedId = Number(card.dataset.id);
+      const parsedId = Number(card.dataset.id);
+      state.selectedId = Number.isFinite(parsedId) ? parsedId : null;
       renderQueue();
       renderDecision();
     });
@@ -844,12 +884,15 @@ async function refreshNews() {
     box.textContent = 'Новостей пока нет.';
   } else {
     box.className = 'news-list';
-    box.innerHTML = state.news.map((n) => `
+    box.innerHTML = state.news.map((n) => {
+      const url = safeExternalUrl(n.url);
+      return `
       <div class="news-item">
         <b>${escapeHtml(n.title || 'Без заголовка')}</b>
         <p>${escapeHtml(n.source_domain || n.source || '')} · ${dt(n.published_at)} · score ${fmt(n.llm_score ?? n.sentiment_score, 3)}</p>
-        ${n.url ? `<a href="${escapeHtml(n.url)}" target="_blank" rel="noreferrer">Открыть источник</a>` : ''}
-      </div>`).join('');
+        ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Открыть источник</a>` : ''}
+      </div>`;
+    }).join('');
   }
   try {
     const s = await api(`/api/sentiment/summary?symbol=${encodeURIComponent(sym)}&limit=6`);
@@ -875,6 +918,11 @@ async function refreshAll() {
 }
 
 async function runOperation(title, fn) {
+  if (document.body.classList.contains('is-busy')) {
+    log(`SKIP ${title}: предыдущая операция еще выполняется`);
+    return null;
+  }
+  setBusy(true);
   try {
     const result = await fn();
     log(title, result);
@@ -882,6 +930,8 @@ async function runOperation(title, fn) {
   } catch (e) {
     log(`ERROR ${title}: ${e.message}`);
     throw e;
+  } finally {
+    setBusy(false);
   }
 }
 
