@@ -35,12 +35,20 @@ def rank_candidates(category: str = "linear", interval: str = "60", limit: int =
             FROM liquidity_snapshots l
             JOIN latest_liq_time t ON t.captured_at = l.captured_at
             WHERE l.category=%s
+        ), latest_llm AS (
+            SELECT DISTINCT ON (signal_id)
+                   signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
+                   model AS llm_model, updated_at AS llm_updated_at, duration_ms AS llm_duration_ms,
+                   payload_hash AS llm_payload_hash
+            FROM llm_evaluations
+            ORDER BY signal_id, updated_at DESC
         )
         SELECT s.id, s.created_at, s.bar_time, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
                s.entry, s.stop_loss, s.take_profit, s.sentiment_score, s.rationale,
                b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
                m.roc_auc, m.precision_score, m.recall_score,
                l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
+               e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
                (
                    COALESCE(s.confidence::float, 0) * 0.30
                  + LEAST(GREATEST(COALESCE(b.profit_factor::float, 1) / 2.0, 0), 1) * 0.14 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
@@ -56,6 +64,7 @@ def rank_candidates(category: str = "linear", interval: str = "60", limit: int =
         LEFT JOIN latest_backtests b ON b.symbol=s.symbol AND b.strategy=s.strategy
         LEFT JOIN latest_models m ON m.symbol=s.symbol
         LEFT JOIN latest_liq l ON l.symbol=s.symbol
+        LEFT JOIN latest_llm e ON e.signal_id=s.id
         ORDER BY research_score DESC NULLS LAST, s.created_at DESC
         LIMIT %s
         """,

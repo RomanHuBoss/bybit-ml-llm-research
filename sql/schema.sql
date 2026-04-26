@@ -237,3 +237,32 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','cancelled','rejected')),
     rationale JSONB
 );
+
+
+CREATE TABLE IF NOT EXISTS llm_evaluations (
+    id BIGSERIAL PRIMARY KEY,
+    signal_id BIGINT REFERENCES signals(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    category TEXT,
+    symbol TEXT NOT NULL,
+    interval TEXT,
+    strategy TEXT,
+    direction TEXT,
+    model TEXT,
+    payload_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','ok','error','skipped')),
+    brief TEXT,
+    error TEXT,
+    duration_ms INTEGER,
+    payload JSONB,
+    UNIQUE(signal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_evaluations_lookup
+ON llm_evaluations(status, updated_at DESC, symbol);
+
+CREATE INDEX IF NOT EXISTS idx_llm_evaluations_symbol_time
+ON llm_evaluations(symbol, updated_at DESC);

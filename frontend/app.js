@@ -9,6 +9,9 @@ const state = {
   selectedId: null,
   filter: 'all',
   equityRun: null,
+  llmStatus: null,
+  llmSummary: null,
+  llmEvaluations: [],
 };
 
 const STRATEGY_LABELS = {
@@ -122,7 +125,7 @@ function rankBySignal(signal) {
 
 function enrichedSignal(signal) {
   const rank = rankBySignal(signal);
-  return { ...rank, ...signal, rank };
+  return withLlmFields({ ...rank, ...signal, rank });
 }
 
 function riskReward(s) {
@@ -142,6 +145,34 @@ function riskReward(s) {
 
 function bool(value) {
   return value === true || String(value).toLowerCase() === 'true';
+}
+
+function evaluationBySignal(item) {
+  if (!item?.id) return null;
+  return state.llmEvaluations.find((e) => Number(e.signal_id) === Number(item.id)) || null;
+}
+
+function withLlmFields(item) {
+  const evalRow = evaluationBySignal(item);
+  if (!evalRow) return item;
+  return {
+    ...item,
+    llm_status: item.llm_status || evalRow.status,
+    llm_brief: item.llm_brief || evalRow.brief,
+    llm_error: item.llm_error || evalRow.error,
+    llm_model: item.llm_model || evalRow.model,
+    llm_updated_at: item.llm_updated_at || evalRow.updated_at,
+    llm_duration_ms: item.llm_duration_ms || evalRow.duration_ms,
+    llm_payload_hash: item.llm_payload_hash || evalRow.payload_hash,
+  };
+}
+
+function llmStateText(s) {
+  if (!s) return 'LLM: нет сетапа';
+  if (s.llm_status === 'ok') return `LLM: готово · ${ageText(s.llm_updated_at)}`;
+  if (s.llm_status === 'running') return 'LLM: анализируется';
+  if (s.llm_status === 'error') return `LLM: ошибка · ${escapeHtml(s.llm_error || 'см. журнал')}`;
+  return 'LLM: ожидает фонового цикла';
 }
 
 function checklistFor(s) {
@@ -206,6 +237,12 @@ function checklistFor(s) {
       status: rocAuc >= 0.58 ? 'pass' : rocAuc >= 0.52 ? 'warn' : 'fail',
       title: `ML ROC AUC ${fmt(rocAuc, 3)}`,
       text: `Research score ${fmt(research, 3)}. AUC около 0.5 означает отсутствие ML-подтверждения.`,
+    },
+    {
+      key: 'llm',
+      status: s.llm_status === 'ok' ? 'pass' : 'warn',
+      title: s.llm_status === 'ok' ? 'LLM‑оценка готова' : s.llm_status === 'running' ? 'LLM‑оценка выполняется' : 'LLM‑оценка ожидается',
+      text: `${llmStateText(s)}. Фоновый LLM — независимый риск‑разбор, не торговый приказ.`,
     },
   ];
 }
@@ -321,8 +358,8 @@ function operatorProtocol(s) {
 }
 
 function candidates() {
-  const source = state.signals.length ? state.signals.map(enrichedSignal) : state.rank;
-  const mapped = source.map((item) => ({ ...item, decision: decisionFor(item) }));
+  const source = state.signals.length ? state.signals.map(enrichedSignal) : state.rank.map(withLlmFields);
+  const mapped = source.map((item) => ({ ...withLlmFields(item), decision: decisionFor(item) }));
   mapped.sort((a, b) => {
     const priority = { review: 3, watch: 2, reject: 1 };
     const levelDiff = (priority[b.decision.level] || 0) - (priority[a.decision.level] || 0);
@@ -355,6 +392,7 @@ function renderDecision() {
   renderChecklist(s);
   renderReasons(s);
   renderProtocol(s);
+  renderBrief(s);
 }
 
 function renderTicket(s) {
@@ -378,6 +416,7 @@ function renderTicket(s) {
       <div class="metric"><span>Потенциал до TP</span><strong>${rr ? pct(rr.rewardPct, 2) : '—'}</strong></div>
       <div class="metric"><span>R/R</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>
       <div class="metric"><span>Confidence</span><strong>${pct(s.confidence, 0)}</strong></div>
+      <div class="metric"><span>LLM</span><strong>${escapeHtml(llmStateText(s).replace('LLM: ', ''))}</strong></div>
     </div>
     <div class="execution-plan">
       <b>Правило исполнения:</b> не входить по рынку автоматически. Проверить текущую цену относительно entry, актуальный spread, стакан и новости. Если цена уже ушла, spread расширился или появился красный пункт в чек‑листе — сетап отменяется.
@@ -432,6 +471,28 @@ function renderProtocol(s) {
     </div>`).join('');
 }
 
+
+function renderBrief(s) {
+  const box = $('briefBox');
+  if (!s) {
+    box.textContent = 'Нет выбранного сетапа. LLM‑оценка запустится после появления кандидатов.';
+    return;
+  }
+  if (s.llm_status === 'ok' && s.llm_brief) {
+    box.textContent = `${llmStateText(s)}\n\n${s.llm_brief}`;
+    return;
+  }
+  if (s.llm_status === 'running') {
+    box.textContent = 'Фоновый LLM сейчас анализирует этот сетап. Экран обновляется автоматически.';
+    return;
+  }
+  if (s.llm_status === 'error') {
+    box.textContent = `Фоновая LLM‑оценка не получена: ${s.llm_error || 'ошибка LLM endpoint'}. Это не блокирует приложение, но сетап нельзя считать полностью разобранным.`;
+    return;
+  }
+  box.textContent = 'LLM‑оценка ещё не готова. Фоновый сервис периодически берет top‑кандидатов из очереди и сохраняет вердикт без ручного запроса.';
+}
+
 function renderQueue() {
   const list = candidates();
   $('kpiSignals').textContent = state.signals.length || '—';
@@ -463,6 +524,7 @@ function renderQueue() {
           <span class="chip">Conf <b>${pct(s.confidence, 0)}</b></span>
           <span class="chip">R/R <b>${rr ? rr.ratio.toFixed(2) : '—'}</b></span>
           <span class="chip">Spread <b>${pctRaw(s.spread_pct, 3)}</b></span>
+          <span class="chip">${escapeHtml(llmStateText(s))}</span>
         </div>
         <div class="candidate-meta">${escapeHtml(decisionFor(s).subtitle)}</div>
       </article>`;
@@ -470,7 +532,6 @@ function renderQueue() {
   queue.querySelectorAll('.candidate').forEach((card) => {
     card.addEventListener('click', () => {
       state.selectedId = Number(card.dataset.id);
-      $('briefBox').textContent = 'Выбран новый сетап. Нажмите LLM brief для краткого объяснения.';
       renderQueue();
       renderDecision();
     });
@@ -494,6 +555,7 @@ function renderRawTable(list = candidates()) {
       <td>${fmt(s.profit_factor, 2)}</td>
       <td>${pct(s.max_drawdown, 1)}</td>
       <td>${pctRaw(s.spread_pct, 3)}</td>
+      <td>${escapeHtml(s.llm_status || 'pending')}</td>
     </tr>`;
   }).join('');
 }
@@ -504,6 +566,27 @@ async function refreshStatus() {
   $('statusBox').textContent = `OK · DB ${data.db_time || '—'}`;
   $('statusBox').className = 'status ok';
   $('kpiCandles').textContent = data.candles ?? '—';
+}
+
+
+async function refreshLlmStatus() {
+  try {
+    const data = await api('/api/llm/background/status');
+    state.llmStatus = data.status || null;
+    state.llmSummary = data.summary || null;
+    const evals = await api('/api/llm/evaluations/latest?limit=100');
+    state.llmEvaluations = evals.items || [];
+    const status = state.llmStatus || {};
+    const summary = state.llmSummary || {};
+    const text = status.enabled
+      ? `LLM: авто · ok ${summary.ok || 0}/${summary.total || 0} · след. ${dt(status.next_run_at)}`
+      : 'LLM: авто выключен';
+    $('llmStatusBox').textContent = text;
+    $('llmStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
+  } catch (e) {
+    $('llmStatusBox').textContent = `LLM: статус недоступен`;
+    $('llmStatusBox').className = 'status error';
+  }
 }
 
 async function refreshUniverse() {
@@ -597,6 +680,7 @@ async function refreshNews() {
 async function refreshAll() {
   try {
     await refreshStatus();
+    await refreshLlmStatus();
     await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews()]);
   } catch (e) {
     $('statusBox').textContent = 'DB/API error';
@@ -661,6 +745,8 @@ function bindControls() {
       });
       await refreshRank();
       await refreshSignals();
+      await api('/api/llm/background/run-now', { method: 'POST' });
+      await refreshLlmStatus();
       await refreshNews();
       return data.result;
     });
@@ -706,19 +792,12 @@ function bindControls() {
   };
 
   $('briefBtn').onclick = async () => {
-    const s = selectedCandidate();
-    if (!s) {
-      $('briefBox').textContent = 'Нет выбранного сетапа.';
-      return;
-    }
-    try {
-      $('briefBox').textContent = 'LLM формирует brief...';
-      const payload = { ...s, operator_decision: decisionFor(s), checklist: checklistFor(s) };
-      const b = await api('/api/llm/brief', { method: 'POST', body: JSON.stringify({ payload }) });
-      $('briefBox').textContent = b.brief;
-    } catch (e) {
-      $('briefBox').textContent = e.message;
-    }
+    await runOperation('LLM background refresh requested', async () => {
+      const data = await api('/api/llm/background/run-now', { method: 'POST' });
+      await refreshLlmStatus();
+      renderQueue();
+      return data.status;
+    });
   };
 
   document.querySelectorAll('.filter').forEach((button) => {
@@ -733,3 +812,12 @@ function bindControls() {
 
 bindControls();
 refreshAll();
+setInterval(async () => {
+  try {
+    await refreshLlmStatus();
+    await refreshRank();
+    await refreshSignals();
+  } catch (e) {
+    log(`ERROR auto refresh: ${e.message}`);
+  }
+}, 30_000);

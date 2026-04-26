@@ -517,3 +517,41 @@ Endpoint `POST /api/llm/brief` принимает пользовательски
 
 Важно: интерфейс не отправляет ордера и не создает ботов автоматически. Статус `ПРОВЕРИТЬ` означает только, что кандидата можно передать оператору на ручную проверку стакана, новостей, риска портфеля и актуальности цены.
 
+
+## Фоновая LLM-оценка кандидатов
+
+LLM-разбор больше не является обязательным ручным действием оператора. При запуске FastAPI стартует фоновый сервис `llm-auto-evaluator`:
+
+```text
+/api/research/rank -> top-кандидаты -> worker threads -> Ollama -> PostgreSQL llm_evaluations -> UI
+```
+
+Поведение:
+
+- сервис периодически берет top-кандидатов из research ranking;
+- оценивает их в отдельных worker-thread'ах;
+- сохраняет результат в таблицу `llm_evaluations`;
+- UI показывает готовый LLM-вердикт, статус `running/error/pending` и время обновления;
+- ручная кнопка `Обновить LLM сейчас` не формирует brief синхронно, а только просит фоновый сервис выполнить ближайший цикл;
+- сервис не отправляет ордера, не создает ботов и не меняет торговое состояние.
+
+Параметры `.env`:
+
+```env
+LLM_AUTO_EVAL_ENABLED=true
+LLM_AUTO_EVAL_INTERVAL_SEC=300
+LLM_AUTO_EVAL_STARTUP_DELAY_SEC=15
+LLM_AUTO_EVAL_MAX_CANDIDATES=8
+LLM_AUTO_EVAL_WORKERS=2
+LLM_AUTO_EVAL_TTL_MINUTES=60
+```
+
+Проверка состояния:
+
+```text
+GET /api/llm/background/status
+GET /api/llm/evaluations/latest?limit=100
+POST /api/llm/background/run-now
+```
+
+Что остается ручным намеренно: обновление рынка, liquidity, sentiment, построение новых сигналов, backtest и ML-train. Эти операции меняют исходные данные и могут нагружать Bybit/API/локальную машину, поэтому они не запускаются молча без оператора.

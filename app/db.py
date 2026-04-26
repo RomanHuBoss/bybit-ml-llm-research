@@ -145,9 +145,19 @@ def fetch_one(sql: str, params: tuple | dict | None = None) -> dict[str, Any] | 
         return dict(row) if row else None
 
 
+def _adapt_params(params: tuple | dict | None) -> tuple | dict | None:
+    if params is None:
+        return None
+    if isinstance(params, tuple):
+        return tuple(_adapt_value(value) for value in params)
+    if isinstance(params, dict):
+        return {key: _adapt_value(value) for key, value in params.items()}
+    return params
+
+
 def execute(sql: str, params: tuple | dict | None = None) -> int:
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(sql, params)
+        cur.execute(sql, _adapt_params(params))
         return cur.rowcount
 
 

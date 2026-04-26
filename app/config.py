@@ -89,6 +89,13 @@ class Settings:
     ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
     ollama_timeout_sec: int = _int("OLLAMA_TIMEOUT_SEC", 60)
 
+    llm_auto_eval_enabled: bool = _bool("LLM_AUTO_EVAL_ENABLED", True)
+    llm_auto_eval_interval_sec: int = _int("LLM_AUTO_EVAL_INTERVAL_SEC", 300)
+    llm_auto_eval_startup_delay_sec: int = _int("LLM_AUTO_EVAL_STARTUP_DELAY_SEC", 15)
+    llm_auto_eval_max_candidates: int = _int("LLM_AUTO_EVAL_MAX_CANDIDATES", 8)
+    llm_auto_eval_workers: int = _int("LLM_AUTO_EVAL_WORKERS", 2)
+    llm_auto_eval_ttl_minutes: int = _int("LLM_AUTO_EVAL_TTL_MINUTES", 60)
+
     start_equity_usdt: float = _float("START_EQUITY_USDT", 500.0)
     risk_per_trade: float = _float("RISK_PER_TRADE", 0.005)
     max_daily_drawdown: float = _float("MAX_DAILY_DRAWDOWN", 0.03)
@@ -128,6 +135,16 @@ def _validate_settings(s: Settings) -> None:
         problems.append("MAX_LEVERAGE должен быть > 0")
     if s.max_position_notional_usdt <= 0:
         problems.append("MAX_POSITION_NOTIONAL_USDT должен быть > 0")
+    if s.llm_auto_eval_interval_sec < 30:
+        problems.append("LLM_AUTO_EVAL_INTERVAL_SEC должен быть >= 30")
+    if s.llm_auto_eval_startup_delay_sec < 0:
+        problems.append("LLM_AUTO_EVAL_STARTUP_DELAY_SEC не может быть отрицательным")
+    if not (1 <= s.llm_auto_eval_max_candidates <= 50):
+        problems.append("LLM_AUTO_EVAL_MAX_CANDIDATES должен быть в диапазоне [1; 50]")
+    if not (1 <= s.llm_auto_eval_workers <= 4):
+        problems.append("LLM_AUTO_EVAL_WORKERS должен быть в диапазоне [1; 4]")
+    if s.llm_auto_eval_ttl_minutes < 1:
+        problems.append("LLM_AUTO_EVAL_TTL_MINUTES должен быть >= 1")
     if s.universe_limit <= 0 or s.dynamic_symbol_limit <= 0:
         problems.append("UNIVERSE_LIMIT и DYNAMIC_SYMBOL_LIMIT должны быть > 0")
     if s.bybit_max_retries < 0:

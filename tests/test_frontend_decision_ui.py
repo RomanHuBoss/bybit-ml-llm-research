@@ -20,6 +20,7 @@ def test_frontend_has_operator_workstation_structure():
         "operatorProtocol",
         "candidateQueue",
         "briefBtn",
+        "llmStatusBox",
     ]
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
@@ -50,6 +51,10 @@ def test_frontend_logic_contains_operator_trade_guards():
         "НЕТ ВХОДА",
         "К ПРОВЕРКЕ",
         "не создает бота автоматически",
+        "refreshLlmStatus",
+        "/api/llm/background/status",
+        "/api/llm/background/run-now",
+        "Фоновый LLM",
     ]
     for fragment in required_fragments:
         assert fragment in js
@@ -59,3 +64,14 @@ def test_status_api_exposes_signal_age_for_ui():
     api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
 
     assert '"max_signal_age_hours": settings.max_signal_age_hours' in api
+
+
+def test_frontend_explains_background_llm_instead_of_manual_brief():
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "LLM работает в фоне" in html
+    assert "Обновить LLM сейчас" in html
+    assert "LLM‑оценка появится автоматически" in html
+    assert "market_brief" not in js
+    assert "/api/llm/brief" not in js

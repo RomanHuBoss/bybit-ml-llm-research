@@ -18,6 +18,7 @@
     <div class="top-status">
       <span class="safe-mode">LIVE OFF</span>
       <span id="statusBox" class="status">Подключение...</span>
+      <span id="llmStatusBox" class="status">LLM: проверка...</span>
     </div>
   </header>
 
@@ -27,15 +28,15 @@
         <span>01</span>
         <div>
           <h2>Порядок работы</h2>
-          <p>Сначала очередь кандидатов, потом чек‑лист. Технические таблицы скрыты.</p>
+          <p>Фоновый анализ сам обновляет LLM‑вердикты. На экране только решение и причины.</p>
         </div>
       </div>
 
       <ol class="steps">
-        <li><b>Обновить рынок</b><span>Universe → свечи → sentiment.</span></li>
-        <li><b>Построить рекомендации</b><span>Система отберет только кандидатов, а не торговые приказы.</span></li>
-        <li><b>Открыть кандидата</b><span>Смотреть только decision, чек‑лист и ticket.</span></li>
-        <li><b>Отменить при стоп‑факторе</b><span>Любой красный пункт = нет входа.</span></li>
+        <li><b>Данные рынка</b><span>Свечи, liquidity и sentiment обновляются операцией с данными.</span></li>
+        <li><b>Рекомендации</b><span>Signals/rank строят очередь кандидатов.</span></li>
+        <li><b>LLM работает в фоне</b><span>Top-кандидаты периодически получают риск‑вердикт без ручной кнопки.</span></li>
+        <li><b>Решение</b><span>Красный пункт или отрицательный LLM‑вердикт = нет входа.</span></li>
       </ol>
 
       <details class="ops-drawer">
@@ -121,7 +122,7 @@
               <p class="eyebrow">Trade ticket</p>
               <h2 id="ticketTitle">Сетап не выбран</h2>
             </div>
-            <button id="briefBtn" class="ghost">LLM brief</button>
+            <button id="briefBtn" class="ghost">Обновить LLM сейчас</button>
           </div>
           <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди ниже.</div>
         </article>
@@ -179,11 +180,11 @@
         <article class="panel brief-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">LLM brief</p>
-              <h2>Краткое объяснение по выбранному сетапу</h2>
+              <p class="eyebrow">Фоновая LLM‑оценка</p>
+              <h2>Вердикт по выбранному сетапу</h2>
             </div>
           </div>
-          <pre id="briefBox" class="brief">Выберите кандидата и нажмите LLM brief.</pre>
+          <pre id="briefBox" class="brief">LLM‑оценка появится автоматически после фонового цикла.</pre>
         </article>
 
         <article class="panel news-panel">
@@ -213,7 +214,7 @@
         </div>
         <div class="table-wrap">
           <table id="rawTable">
-            <thead><tr><th>Решение</th><th>Score</th><th>Символ</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th></tr></thead>
+            <thead><tr><th>Решение</th><th>Score</th><th>Символ</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th><th>LLM</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>

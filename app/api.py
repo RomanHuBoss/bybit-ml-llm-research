@@ -10,6 +10,7 @@ from .bybit_client import sync_market_bundle
 from .config import settings
 from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
+from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .ml import predict_latest, train_model
 from .research import rank_candidates
 from .sentiment import sentiment_summary, sync_sentiment_bundle
@@ -272,6 +273,30 @@ def api_llm_brief(req: BriefRequest) -> dict[str, Any]:
         return {"ok": True, "brief": market_brief(payload)}
     except LLMUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/llm/background/status")
+def api_llm_background_status() -> dict[str, Any]:
+    try:
+        return {"ok": True, "status": background_evaluator.status(), "summary": evaluation_summary()}
+    except Exception as exc:
+        # Статус LLM не должен ломать основной торговый экран: отдаем деградированную
+        # диагностику, чтобы UI явно показал проблему фонового анализа.
+        return {"ok": False, "status": background_evaluator.status(), "summary": {}, "error": str(exc)}
+
+
+@router.post("/llm/background/run-now")
+def api_llm_background_run_now() -> dict[str, Any]:
+    background_evaluator.request_run()
+    return {"ok": True, "status": background_evaluator.status()}
+
+
+@router.get("/llm/evaluations/latest")
+def api_llm_evaluations_latest(limit: int = 100) -> dict[str, Any]:
+    try:
+        return {"ok": True, "items": latest_evaluations(bounded_int(limit, "limit", 1, 500))}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
 
 
 @router.get("/equity/latest")
