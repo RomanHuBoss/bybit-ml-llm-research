@@ -31,6 +31,10 @@ FEATURE_COLUMNS = [
 ]
 
 
+def _to_utc(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, utc=True, errors="coerce")
+
+
 def load_market_frame(category: str, symbol: str, interval: str, limit: int = 5000) -> pd.DataFrame:
     df = query_df(
         """
@@ -44,7 +48,8 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
     )
     if df.empty:
         return df
-    df = df.sort_values("start_time").reset_index(drop=True)
+    df["start_time"] = _to_utc(df["start_time"])
+    df = df.dropna(subset=["start_time"]).sort_values("start_time").reset_index(drop=True)
     df = add_indicators(df)
 
     funding = query_df(
@@ -58,12 +63,10 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
     )
     if not funding.empty:
         funding["funding_rate"] = pd.to_numeric(funding["funding_rate"], errors="coerce")
-        df = pd.merge_asof(
-            df.sort_values("start_time"),
-            funding.rename(columns={"funding_time": "start_time"}).sort_values("start_time"),
-            on="start_time",
-            direction="backward",
-        )
+        funding["start_time"] = _to_utc(funding.pop("funding_time"))
+        funding = funding.dropna(subset=["start_time"]).sort_values("start_time")
+        df = pd.merge_asof(df.sort_values("start_time"), funding, on="start_time", direction="backward")
+        df["funding_rate"] = df["funding_rate"].ffill().fillna(0.0)
     else:
         df["funding_rate"] = 0.0
 
@@ -78,12 +81,10 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
     )
     if not oi.empty:
         oi["open_interest"] = pd.to_numeric(oi["open_interest"], errors="coerce")
-        df = pd.merge_asof(
-            df.sort_values("start_time"),
-            oi.rename(columns={"ts": "start_time"}).sort_values("start_time"),
-            on="start_time",
-            direction="backward",
-        )
+        oi["start_time"] = _to_utc(oi.pop("ts"))
+        oi = oi.dropna(subset=["start_time"]).sort_values("start_time")
+        df = pd.merge_asof(df.sort_values("start_time"), oi, on="start_time", direction="backward")
+        df["open_interest"] = df["open_interest"].ffill().fillna(0.0)
         df["oi_change_24"] = df["open_interest"].pct_change(24)
     else:
         df["open_interest"] = 0.0
@@ -102,11 +103,12 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
         (symbol.upper(),),
     )
     if not daily.empty:
-        df["day"] = pd.to_datetime(df["start_time"]).dt.date
-        daily["day"] = pd.to_datetime(daily["day"]).dt.date
+        df["day"] = pd.to_datetime(df["start_time"], utc=True).dt.date
+        daily["day"] = pd.to_datetime(daily["day"], errors="coerce").dt.date
+        daily = daily.dropna(subset=["day"])
         df = df.merge(daily, on="day", how="left")
-        df["sentiment_score"] = df["sentiment_score"].ffill().fillna(0.0)
-        df["news_sentiment_score"] = df["news_sentiment_score"].ffill().fillna(0.0)
+        df["sentiment_score"] = pd.to_numeric(df["sentiment_score"], errors="coerce").ffill().fillna(0.0)
+        df["news_sentiment_score"] = pd.to_numeric(df["news_sentiment_score"], errors="coerce").ffill().fillna(0.0)
     else:
         df["sentiment_score"] = 0.0
         df["news_sentiment_score"] = 0.0
@@ -123,19 +125,16 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
     )
     if not intraday.empty:
         intraday["micro_sentiment_score"] = pd.to_numeric(intraday["micro_sentiment_score"], errors="coerce")
-        df = pd.merge_asof(
-            df.sort_values("start_time"),
-            intraday.rename(columns={"ts": "start_time"}).sort_values("start_time"),
-            on="start_time",
-            direction="backward",
-        )
+        intraday["start_time"] = _to_utc(intraday.pop("ts"))
+        intraday = intraday.dropna(subset=["start_time"]).sort_values("start_time")
+        df = pd.merge_asof(df.sort_values("start_time"), intraday, on="start_time", direction="backward")
         df["micro_sentiment_score"] = df["micro_sentiment_score"].ffill().fillna(0.0)
     else:
         df["micro_sentiment_score"] = 0.0
 
     liquidity = query_df(
         """
-        SELECT captured_at AS start_time, liquidity_score, spread_pct
+        SELECT captured_at AS start_time, liquidity_score, spread_pct, is_eligible
         FROM liquidity_snapshots
         WHERE category=%s AND symbol=%s
         ORDER BY captured_at
@@ -143,17 +142,18 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
         (category, symbol.upper()),
     )
     if not liquidity.empty:
+        liquidity["start_time"] = _to_utc(liquidity["start_time"])
         liquidity["liquidity_score"] = pd.to_numeric(liquidity["liquidity_score"], errors="coerce")
         liquidity["spread_pct"] = pd.to_numeric(liquidity["spread_pct"], errors="coerce")
-        df = pd.merge_asof(
-            df.sort_values("start_time"),
-            liquidity.sort_values("start_time"),
-            on="start_time",
-            direction="backward",
-        )
+        liquidity = liquidity.dropna(subset=["start_time"]).sort_values("start_time")
+        df = pd.merge_asof(df.sort_values("start_time"), liquidity, on="start_time", direction="backward")
+        df["liquidity_score"] = df["liquidity_score"].ffill().fillna(0.0)
+        df["spread_pct"] = df["spread_pct"].ffill().fillna(999.0)
+        df["is_eligible"] = df["is_eligible"].ffill().fillna(False)
     else:
         df["liquidity_score"] = 0.0
-        df["spread_pct"] = 0.0
+        df["spread_pct"] = 999.0
+        df["is_eligible"] = False
 
     df["ema20_gap"] = df["close"] / df["ema_20"] - 1
     df["ema50_gap"] = df["close"] / df["ema_50"] - 1
@@ -173,8 +173,11 @@ def build_ml_dataset(category: str, symbol: str, interval: str, horizon_bars: in
         return pd.DataFrame(), pd.Series(dtype=int), df
     df["future_ret"] = df["close"].shift(-horizon_bars) / df["close"] - 1
     threshold = df["atr_pct"].rolling(100).median().fillna(df["atr_pct"].median()) * 0.35
-    df["target"] = (df["future_ret"] > threshold).astype(int)
-    clean = df.dropna(subset=FEATURE_COLUMNS + ["target"]).copy()
+    # Последние horizon_bars строк нельзя маркировать как отрицательный класс: будущая доходность там неизвестна.
+    df["target"] = pd.NA
+    valid_future = df["future_ret"].notna()
+    df.loc[valid_future, "target"] = (df.loc[valid_future, "future_ret"] > threshold.loc[valid_future]).astype(int)
+    clean = df.dropna(subset=FEATURE_COLUMNS + ["future_ret", "target"]).copy()
     X = clean[FEATURE_COLUMNS].replace([float("inf"), float("-inf")], pd.NA).fillna(0.0)
     y = clean["target"].astype(int)
     return X, y, clean

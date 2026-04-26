@@ -2,7 +2,7 @@
 
 Локальная исследовательская система для Bybit: сбор рыночных данных, автоотбор ликвидных пар, расчёт признаков, бэктестинг стратегий, ML-ранжирование сетапов, бесплатный sentiment pipeline, LLM-резюме и paper-research.
 
-Проект рассчитан на Windows 11 x64, PostgreSQL, Python и фронтенд на Vanilla JS/CSS/HTML. Docker не используется.
+Проект рассчитан на Windows 11 x64 и Linux, PostgreSQL, Python и фронтенд на Vanilla JS/CSS/HTML. Docker не используется. Для установки и запуска добавлены кроссплатформенные `install.py` и `run.py`.
 
 > Важно: проект не отправляет реальные ордера. Live-trading отсутствует намеренно. Система предназначена для исследования, отбора статистически проверяемых сетапов и paper-trading.
 
@@ -154,10 +154,12 @@ bybit_ml_llm_research_lab/
     app.js
   sql/
     schema.sql
+  install.py            # кроссплатформенная установка: venv + requirements + optional init-db
+  run.py                # кроссплатформенный запуск: server/init-db/test/check/doctor
   scripts/
     setup_windows.ps1
     run_windows.ps1
-    init_db.ps1
+    init_db.ps1         # legacy PowerShell helper'ы для Windows
   docs/
     SENTIMENT.md
     STRATEGIES.md
@@ -166,9 +168,11 @@ bybit_ml_llm_research_lab/
     smoke_test.py
 ```
 
-## Быстрый старт на Windows 11 x64
+## Быстрый старт Windows/Linux
 
 ### 1. PostgreSQL
+
+Создайте БД и пользователя. Команды одинаковы по смыслу для Windows/Linux, выполняются в `psql` от пользователя с правами администратора PostgreSQL:
 
 ```sql
 CREATE DATABASE bybit_lab;
@@ -178,29 +182,56 @@ GRANT ALL ON SCHEMA public TO bybit_lab_user;
 ALTER SCHEMA public OWNER TO bybit_lab_user;
 ```
 
-### 2. `.env`
+### 2. Установка Python-зависимостей
+
+Windows PowerShell / CMD:
 
 ```powershell
-copy .env.example .env
-notepad .env
+python install.py
 ```
 
-### 3. Установка зависимостей
+Linux/macOS shell:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+```bash
+python3 install.py
+```
+
+`install.py` создает `.venv`, ставит зависимости из `requirements.txt` и, если `.env` отсутствует, создает его из `.env.example` без перезаписи существующего файла.
+
+### 3. `.env`
+
+Проверьте параметры PostgreSQL и остальные настройки в `.env`:
+
+```env
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=bybit_lab
+POSTGRES_USER=bybit_lab_user
+POSTGRES_PASSWORD=change_me
 ```
 
 ### 4. Инициализация БД
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init_db.ps1
+```bash
+python run.py init-db
+```
+
+Альтернативно можно выполнить установку и инициализацию одной командой, если PostgreSQL уже создан и `.env` корректен:
+
+```bash
+python install.py --init-db
 ```
 
 ### 5. Запуск
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_windows.ps1
+```bash
+python run.py
+```
+
+Эквивалентно:
+
+```bash
+python run.py server
 ```
 
 Открыть:
@@ -208,6 +239,24 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_windows.ps1
 ```text
 http://127.0.0.1:8000
 ```
+
+### 6. Проверка проекта
+
+```bash
+python run.py check
+```
+
+Команды `run.py`:
+
+```text
+python run.py server          # backend + frontend через uvicorn
+python run.py init-db         # применить sql/schema.sql
+python run.py test            # pytest -q
+python run.py check           # compileall + pytest -q
+python run.py doctor          # диагностика путей, .env и параметров запуска
+```
+
+PowerShell helper'ы в `scripts/` сохранены для совместимости, но основной путь запуска теперь кроссплатформенный.
 
 ## Рекомендуемый рабочий процесс
 
@@ -267,3 +316,95 @@ GET  /api/news/latest
 - Портфельный риск-модуль.
 - Read-only подключение аккаунта для оценки реальных комиссий.
 - Отдельный live-trading модуль только после аудита и kill-switch.
+
+## Production-hardening после аудита v2.1
+
+Проект был усилен в сторону безопасного research/paper-рекомендателя. Он по-прежнему **не отправляет реальные ордера**, не создаёт ботов автоматически и не должен интерпретироваться как автономный торговый исполнитель.
+
+### Критичные изменения безопасности
+
+- Бэктест больше не входит по цене уже закрытой сигнальной свечи. Сигнал формируется на закрытой свече, а исполнение моделируется по `open` следующей свечи с учётом `SLIPPAGE_RATE`.
+- Equity curve теперь учитывает mark-to-market по открытой позиции, а не только реализованный PnL. Это делает drawdown более консервативным.
+- Если в одной свече достигнуты и stop-loss, и take-profit, бэктест выбирает stop-loss. Это намеренно консервативное допущение из-за неизвестного внутрисвечного порядка цен.
+- Добавлены лимиты позиции: `MAX_POSITION_NOTIONAL_USDT` и `MAX_LEVERAGE`. Размер сделки ограничивается не только риском до stop-loss, но и предельным notional.
+- Стратегии по умолчанию блокируются, если нет подтверждённого liquidity snapshot или инструмент не прошёл фильтры ликвидности. Управляется `REQUIRE_LIQUIDITY_FOR_SIGNALS=true`.
+- Core symbols больше не обходят фильтры ликвидности молча. Для ручного override нужен явный флаг `ALLOW_UNVERIFIED_CORE_SYMBOLS=true`.
+- PreLaunch-инструменты Bybit исключаются из universe.
+- Funding и open interest синхронизируются chunk/page-подходом, чтобы не терять историю из-за лимита API.
+- Bybit REST client получил retry/backoff для transient HTTP/status/retCode ошибок и явную обработку не-JSON ответов.
+- Сигналы дедуплицируются по `category + symbol + interval + strategy + direction + bar_time`, чтобы повторный `Build signals` не создавал серию одинаковых рекомендаций.
+- ML target больше не маркирует последние `horizon_bars` строк как отрицательный класс, если будущая доходность ещё неизвестна.
+- Research ranking использует только свежие сигналы (`MAX_SIGNAL_AGE_HOURS`) и штрафует сигналы без ликвидности/с малым числом сделок в бэктесте.
+
+### Новые настройки `.env`
+
+```env
+POSTGRES_CONNECT_TIMEOUT_SEC=5
+BYBIT_TIMEOUT_SEC=30
+BYBIT_MAX_RETRIES=4
+BYBIT_RETRY_BACKOFF_SEC=0.75
+ALLOW_UNVERIFIED_CORE_SYMBOLS=false
+MAX_POSITION_NOTIONAL_USDT=1000
+MAX_LEVERAGE=2
+REQUIRE_LIQUIDITY_FOR_SIGNALS=true
+MAX_SIGNAL_AGE_HOURS=48
+MAX_SYMBOLS_PER_REQUEST=50
+MAX_SYNC_DAYS=730
+```
+
+### Миграция БД
+
+`sql/schema.sql` теперь содержит backward-compatible DDL:
+
+```sql
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS bar_time TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_signals_bar_dedup
+ON signals(category, symbol, interval, strategy, direction, bar_time)
+WHERE bar_time IS NOT NULL;
+```
+
+Для существующей базы достаточно повторно выполнить:
+
+```bash
+python run.py init-db
+```
+
+На старой Windows-схеме также можно использовать legacy helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\init_db.ps1
+```
+
+### Тесты
+
+Добавлены unit/scenario-тесты для:
+
+- удаления незамаркированного хвоста ML dataset;
+- блокировки сигналов без проверенной ликвидности;
+- ограничения notional размера позиции;
+- входа бэктеста на следующей свече, а не на сигнальной;
+- валидации символов;
+- retry после transient Bybit retCode `10006`;
+- исключения unverified core symbols из universe;
+- базового smoke-теста индикаторов.
+
+Запуск:
+
+```bash
+python run.py test
+```
+
+или напрямую:
+
+```bash
+python -m pytest -q
+```
+
+Ожидаемый результат текущей ревизии: `11 passed`.
+
+### Оставшиеся ограничения
+
+- Это research/paper-рекомендатель, а не execution engine.
+- Нет WebSocket reconciliation, account-state reconciliation и exchange-side order idempotency, потому что live orders отсутствуют.
+- Для реального исполнения нужен отдельный модуль с read-only/account sync, kill-switch, order lifecycle FSM, durable outbox, idempotency keys, circuit breakers и пост-трейд аудитом.
+- Profitability не доказана. Перед любым capital-at-risk обязательны walk-forward, out-of-sample, sensitivity analysis по комиссиям/slippage/funding и проверка по нескольким рыночным режимам.

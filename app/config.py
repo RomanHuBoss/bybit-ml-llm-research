@@ -50,12 +50,16 @@ class Settings:
     postgres_db: str = os.getenv("POSTGRES_DB", "bybit_lab")
     postgres_user: str = os.getenv("POSTGRES_USER", "bybit_lab_user")
     postgres_password: str = os.getenv("POSTGRES_PASSWORD", "change_me")
+    postgres_connect_timeout_sec: int = _int("POSTGRES_CONNECT_TIMEOUT_SEC", 5)
 
     app_host: str = os.getenv("APP_HOST", "127.0.0.1")
     app_port: int = _int("APP_PORT", 8000)
 
     bybit_base_url: str = os.getenv("BYBIT_BASE_URL", "https://api.bybit.com").rstrip("/")
     bybit_request_sleep_sec: float = _float("BYBIT_REQUEST_SLEEP_SEC", 0.12)
+    bybit_timeout_sec: float = _float("BYBIT_TIMEOUT_SEC", 30.0)
+    bybit_max_retries: int = _int("BYBIT_MAX_RETRIES", 4)
+    bybit_retry_backoff_sec: float = _float("BYBIT_RETRY_BACKOFF_SEC", 0.75)
 
     default_category: str = os.getenv("DEFAULT_CATEGORY", "linear")
     default_symbols: tuple[str, ...] = tuple(s.upper() for s in _csv("DEFAULT_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
@@ -70,6 +74,7 @@ class Settings:
     min_open_interest_value: float = _float("MIN_OPEN_INTEREST_VALUE", 15_000_000.0)
     max_spread_pct: float = _float("MAX_SPREAD_PCT", 0.05)
     min_listing_age_days: int = _int("MIN_LISTING_AGE_DAYS", 45)
+    allow_unverified_core_symbols: bool = _bool("ALLOW_UNVERIFIED_CORE_SYMBOLS", False)
 
     use_fear_greed: bool = _bool("USE_FEAR_GREED", True)
     use_gdelt: bool = _bool("USE_GDELT", True)
@@ -89,13 +94,47 @@ class Settings:
     max_daily_drawdown: float = _float("MAX_DAILY_DRAWDOWN", 0.03)
     fee_rate: float = _float("FEE_RATE", 0.00055)
     slippage_rate: float = _float("SLIPPAGE_RATE", 0.00020)
+    max_position_notional_usdt: float = _float("MAX_POSITION_NOTIONAL_USDT", 1_000.0)
+    max_leverage: float = _float("MAX_LEVERAGE", 2.0)
+    require_liquidity_for_signals: bool = _bool("REQUIRE_LIQUIDITY_FOR_SIGNALS", True)
+    max_signal_age_hours: int = _int("MAX_SIGNAL_AGE_HOURS", 48)
+    max_symbols_per_request: int = _int("MAX_SYMBOLS_PER_REQUEST", 50)
+    max_sync_days: int = _int("MAX_SYNC_DAYS", 730)
 
     @property
     def dsn(self) -> str:
         return (
             f"host={self.postgres_host} port={self.postgres_port} dbname={self.postgres_db} "
-            f"user={self.postgres_user} password={self.postgres_password}"
+            f"user={self.postgres_user} password={self.postgres_password} "
+            f"connect_timeout={self.postgres_connect_timeout_sec}"
         )
 
 
+def _validate_settings(s: Settings) -> None:
+    problems: list[str] = []
+    if s.default_category not in {"linear", "inverse", "spot"}:
+        problems.append("DEFAULT_CATEGORY должен быть linear, inverse или spot")
+    if s.symbol_mode not in {"core", "dynamic", "hybrid"}:
+        problems.append("SYMBOL_MODE должен быть core, dynamic или hybrid")
+    if not (0 < s.risk_per_trade <= 0.05):
+        problems.append("RISK_PER_TRADE должен быть в диапазоне (0; 0.05]")
+    if not (0 <= s.max_daily_drawdown <= 0.5):
+        problems.append("MAX_DAILY_DRAWDOWN должен быть в диапазоне [0; 0.5]")
+    if not (0 <= s.fee_rate <= 0.01):
+        problems.append("FEE_RATE должен быть в диапазоне [0; 0.01]")
+    if not (0 <= s.slippage_rate <= 0.02):
+        problems.append("SLIPPAGE_RATE должен быть в диапазоне [0; 0.02]")
+    if s.max_leverage <= 0:
+        problems.append("MAX_LEVERAGE должен быть > 0")
+    if s.max_position_notional_usdt <= 0:
+        problems.append("MAX_POSITION_NOTIONAL_USDT должен быть > 0")
+    if s.universe_limit <= 0 or s.dynamic_symbol_limit <= 0:
+        problems.append("UNIVERSE_LIMIT и DYNAMIC_SYMBOL_LIMIT должны быть > 0")
+    if s.bybit_max_retries < 0:
+        problems.append("BYBIT_MAX_RETRIES не может быть отрицательным")
+    if problems:
+        raise ValueError("Некорректная конфигурация: " + "; ".join(problems))
+
+
 settings = Settings()
+_validate_settings(settings)

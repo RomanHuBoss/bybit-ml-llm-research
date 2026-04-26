@@ -41,7 +41,24 @@ def latest_liquidity(category: str = "linear", limit: int = 100) -> list[dict[st
 
 def refresh_liquidity(category: str = "linear") -> dict[str, Any]:
     inserted = sync_liquidity_snapshots(category)
-    return {"inserted": inserted, "latest": latest_liquidity(category, settings.dynamic_symbol_limit)}
+    return {"upserted": inserted, "latest": latest_liquidity(category, settings.dynamic_symbol_limit)}
+
+
+def _select_core_symbols(latest_rows: list[dict[str, Any]]) -> tuple[list[str], dict[str, str]]:
+    latest_by_symbol = {str(r["symbol"]).upper(): r for r in latest_rows}
+    selected: list[str] = []
+    reasons: dict[str, str] = {}
+    for sym in settings.core_symbols:
+        if sym in settings.exclude_symbols:
+            continue
+        row = latest_by_symbol.get(sym)
+        if row and row.get("is_eligible"):
+            selected.append(sym)
+            reasons[sym] = "core_liquidity_verified"
+        elif settings.allow_unverified_core_symbols:
+            selected.append(sym)
+            reasons[sym] = "core_unverified_manual_override"
+    return selected, reasons
 
 
 def build_universe(category: str = "linear", mode: str | None = None, limit: int | None = None, refresh: bool = False) -> dict[str, Any]:
@@ -50,29 +67,34 @@ def build_universe(category: str = "linear", mode: str | None = None, limit: int
     if refresh:
         sync_liquidity_snapshots(category)
 
-    dynamic = [r for r in latest_liquidity(category, max(limit * 3, settings.dynamic_symbol_limit)) if r.get("is_eligible")]
+    latest_rows = latest_liquidity(category, max(limit * 3, settings.dynamic_symbol_limit, len(settings.core_symbols)))
+    dynamic = [r for r in latest_rows if r.get("is_eligible")]
     dynamic_symbols = [str(r["symbol"]).upper() for r in dynamic]
-    score_map = {str(r["symbol"]).upper(): float(r.get("liquidity_score") or 0) for r in dynamic}
-    components_map = {str(r["symbol"]).upper(): _jsonable(r) for r in dynamic}
+    score_map = {str(r["symbol"]).upper(): float(r.get("liquidity_score") or 0) for r in latest_rows}
+    components_map = {str(r["symbol"]).upper(): _jsonable(r) for r in latest_rows}
+    core_symbols, reason_map = _select_core_symbols(latest_rows)
 
     if mode == "core":
-        symbols = [s for s in settings.core_symbols if s not in settings.exclude_symbols]
+        symbols = core_symbols
     elif mode == "dynamic":
         symbols = dynamic_symbols
-    else:
+        reason_map.update({sym: "dynamic_liquidity" for sym in symbols})
+    elif mode == "hybrid":
         merged: list[str] = []
-        for sym in list(settings.core_symbols) + dynamic_symbols:
+        for sym in core_symbols + dynamic_symbols:
             if sym not in merged and sym not in settings.exclude_symbols:
                 merged.append(sym)
+                reason_map.setdefault(sym, "dynamic_liquidity")
         symbols = merged
+    else:
+        raise ValueError(f"Unknown symbol universe mode: {mode}")
 
     symbols = symbols[:limit]
     selected_at = datetime.now(timezone.utc)
     rows = []
     for idx, sym in enumerate(symbols, start=1):
         comp = components_map.get(sym, {})
-        reason = "core" if sym in settings.core_symbols else "dynamic_liquidity"
-        rows.append((selected_at, category, mode, sym, idx, score_map.get(sym, 0.0), reason, comp))
+        rows.append((selected_at, category, mode, sym, idx, score_map.get(sym, 0.0), reason_map.get(sym, "dynamic_liquidity"), comp))
     inserted = execute_many_values(
         """
         INSERT INTO symbol_universe(selected_at, category, mode, symbol, rank_no, liquidity_score, reason, components)

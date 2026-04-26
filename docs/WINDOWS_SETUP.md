@@ -1,14 +1,20 @@
 # Установка на Windows 11 x64
 
+Основной способ установки теперь общий для Windows/Linux: `install.py` и `run.py`. PowerShell-скрипты в `scripts/` сохранены как legacy-вариант.
+
 ## 1. Python
 
-Рекомендуется Python 3.11 x64.
+Рекомендуется Python 3.11+ x64.
+
+```powershell
+python --version
+```
+
+Если используется Python Launcher:
 
 ```powershell
 py -3.11 --version
 ```
-
-Если Python 3.11 не установлен, можно использовать актуальный Python 3.12, но проект тестировался под 3.11-совместимый стек зависимостей.
 
 ## 2. PostgreSQL
 
@@ -27,17 +33,34 @@ GRANT ALL ON SCHEMA public TO bybit_lab_user;
 ALTER SCHEMA public OWNER TO bybit_lab_user;
 ```
 
-## 3. Виртуальное окружение
+## 3. Установка зависимостей
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+python install.py
+```
+
+Скрипт создает `.venv`, ставит зависимости из `requirements.txt` и создает `.env` из `.env.example`, если `.env` еще отсутствует.
+
+Если нужно использовать конкретный интерпретатор:
+
+```powershell
+python install.py --python "C:\Path\To\python.exe"
 ```
 
 ## 4. .env
 
 ```powershell
-copy .env.example .env
 notepad .env
+```
+
+Проверьте PostgreSQL-параметры:
+
+```env
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=bybit_lab
+POSTGRES_USER=bybit_lab_user
+POSTGRES_PASSWORD=change_me
 ```
 
 CryptoPanic-ключ не обязателен. По умолчанию:
@@ -50,13 +73,13 @@ CRYPTOPANIC_TOKEN=
 ## 5. Инициализация БД
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\init_db.ps1
+python run.py init-db
 ```
 
 ## 6. Запуск
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_windows.ps1
+python run.py
 ```
 
 Открыть:
@@ -65,7 +88,24 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_windows.ps1
 http://127.0.0.1:8000
 ```
 
-## 7. Ollama / LLM
+## 7. Диагностика и тесты
+
+```powershell
+python run.py doctor
+python run.py check
+```
+
+## 8. Legacy PowerShell helper'ы
+
+Старый способ по-прежнему доступен:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\init_db.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run_windows.ps1
+```
+
+## 9. Ollama / LLM
 
 Установите Ollama отдельно. Затем скачайте модель:
 
@@ -81,7 +121,7 @@ curl http://127.0.0.1:11434/api/generate -d '{"model":"llama3.1:8b","prompt":"te
 
 Для RTX 3060 12GB лучше начинать с 7B/8B quantized-модели.
 
-## 8. Рекомендуемый порядок работы
+## 10. Рекомендуемый порядок работы
 
 1. `Sync universe` — обновить ликвидность Bybit и выбрать hybrid universe.
 2. `Sync market` — загрузить свечи/funding/OI.
@@ -91,6 +131,6 @@ curl http://127.0.0.1:11434/api/generate -d '{"model":"llama3.1:8b","prompt":"te
 6. `Train ML` — обучить модель на выбранном символе.
 7. `Rank candidates` — выбрать лучшие paper-trading кандидаты.
 
-## 9. Live trading
+## 11. Live trading
 
 Проект не отправляет реальные ордера. Это сделано намеренно. Добавление live-trading требует отдельного аудита API-ключей, лимитов, ошибок исполнения, ликвидаций и kill-switch.

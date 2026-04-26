@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import logging
+import random
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
 from .config import settings
 from .db import execute_many_values
 
+logger = logging.getLogger(__name__)
+
 
 class BybitAPIError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, ret_code: int | None = None, transient: bool = False) -> None:
+        super().__init__(message)
+        self.ret_code = ret_code
+        self.transient = transient
+
+
+TRANSIENT_HTTP_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+TRANSIENT_BYBIT_RET_CODES = {
+    10000,  # Server timeout.
+    10006,  # Too many visits / rate limit.
+    10016,  # Service is restarting / internal error.
+    170007,  # Timeout waiting for response from backend service.
+}
 
 
 @dataclass
@@ -20,20 +36,61 @@ class BybitClient:
     base_url: str = settings.bybit_base_url
     sleep_sec: float = settings.bybit_request_sleep_sec
 
+    def _sleep_before_retry(self, attempt: int) -> None:
+        delay = settings.bybit_retry_backoff_sec * (2 ** attempt)
+        delay += random.uniform(0, settings.bybit_retry_backoff_sec)
+        time.sleep(min(delay, 20.0))
+
     def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
-        response = requests.get(
-            url,
-            params=params,
-            timeout=30,
-            headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"},
-        )
-        time.sleep(self.sleep_sec)
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("retCode") != 0:
-            raise BybitAPIError(f"Bybit error: {payload}")
-        return payload.get("result", {})
+        last_exc: Exception | None = None
+        for attempt in range(settings.bybit_max_retries + 1):
+            transient = False
+            try:
+                response = requests.get(
+                    url,
+                    params=params,
+                    timeout=settings.bybit_timeout_sec,
+                    headers={"User-Agent": "bybit-ml-llm-research-lab/2.1"},
+                )
+                if response.status_code in TRANSIENT_HTTP_STATUSES:
+                    transient = True
+                    raise BybitAPIError(
+                        f"Bybit transient HTTP status {response.status_code}: {response.text[:300]}",
+                        transient=True,
+                    )
+                response.raise_for_status()
+                try:
+                    payload = response.json()
+                except ValueError as exc:
+                    raise BybitAPIError(f"Bybit returned non-JSON response: {response.text[:300]}") from exc
+                ret_code = payload.get("retCode")
+                if ret_code != 0:
+                    transient = int(ret_code) in TRANSIENT_BYBIT_RET_CODES if ret_code is not None else False
+                    raise BybitAPIError(
+                        f"Bybit retCode={ret_code}, retMsg={payload.get('retMsg')}, params={params}",
+                        ret_code=int(ret_code) if ret_code is not None else None,
+                        transient=transient,
+                    )
+                result = payload.get("result", {})
+                if not isinstance(result, dict):
+                    raise BybitAPIError(f"Bybit result has unexpected type: {type(result).__name__}")
+                return result
+            except requests.RequestException as exc:
+                transient = True
+                last_exc = exc
+            except BybitAPIError as exc:
+                last_exc = exc
+                transient = exc.transient or transient
+            finally:
+                if self.sleep_sec > 0:
+                    time.sleep(self.sleep_sec)
+
+            if not transient or attempt >= settings.bybit_max_retries:
+                break
+            logger.warning("Transient Bybit error on %s, retry %s/%s: %s", path, attempt + 1, settings.bybit_max_retries, last_exc)
+            self._sleep_before_retry(attempt)
+        raise BybitAPIError(f"Bybit request failed after retries: {last_exc}") from last_exc
 
     def get_kline(
         self,
@@ -130,19 +187,28 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _page_ranges(start: datetime, end: datetime, step: timedelta) -> list[tuple[datetime, datetime]]:
+    ranges: list[tuple[datetime, datetime]] = []
+    cursor = start
+    while cursor < end:
+        chunk_end = min(cursor + step, end)
+        ranges.append((cursor, chunk_end))
+        cursor = chunk_end + timedelta(milliseconds=1)
+    return ranges
+
+
 def sync_candles(category: str, symbol: str, interval: str, days: int) -> int:
     client = BybitClient()
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     step_minutes = _interval_to_minutes(interval) * 900
     inserted = 0
-    cursor = start
-
-    while cursor < end:
-        chunk_end = min(cursor + timedelta(minutes=step_minutes), end)
+    for cursor, chunk_end in _page_ranges(start, end, timedelta(minutes=step_minutes)):
         rows = client.get_kline(category, symbol, interval, _dt_to_ms(cursor), _dt_to_ms(chunk_end), limit=1000)
         parsed = []
         for item in rows:
+            if len(item) < 6:
+                continue
             parsed.append(
                 (
                     category,
@@ -167,7 +233,6 @@ def sync_candles(category: str, symbol: str, interval: str, days: int) -> int:
             """,
             parsed,
         )
-        cursor = chunk_end
     return inserted
 
 
@@ -177,8 +242,21 @@ def sync_funding(category: str, symbol: str, days: int) -> int:
     client = BybitClient()
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
-    rows = client.get_funding_history(category, symbol, _dt_to_ms(start), _dt_to_ms(end), limit=200)
-    parsed = [(category, symbol.upper(), _ms_to_dt(item["fundingRateTimestamp"]), item["fundingRate"]) for item in rows]
+    # Funding обычно публикуется раз в 8 часов. Окно меньше лимита API защищает от тихой потери старых записей.
+    step = timedelta(hours=8 * 180)
+    seen: set[datetime] = set()
+    parsed = []
+    for cursor, chunk_end in _page_ranges(start, end, step):
+        rows = client.get_funding_history(category, symbol, _dt_to_ms(cursor), _dt_to_ms(chunk_end), limit=200)
+        for item in rows:
+            ts_raw = item.get("fundingRateTimestamp")
+            if ts_raw is None:
+                continue
+            ts = _ms_to_dt(ts_raw)
+            if ts in seen:
+                continue
+            seen.add(ts)
+            parsed.append((category, symbol.upper(), ts, item.get("fundingRate", 0)))
     return execute_many_values(
         """
         INSERT INTO funding_rates(category, symbol, funding_time, funding_rate)
@@ -206,6 +284,10 @@ def interval_to_oi_interval(interval: str) -> str:
     return "1h"
 
 
+def _oi_interval_minutes(oi_interval: str) -> int:
+    return {"5min": 5, "15min": 15, "30min": 30, "1h": 60, "4h": 240, "1d": 1440}.get(oi_interval, 60)
+
+
 def sync_open_interest(category: str, symbol: str, interval: str, days: int) -> int:
     if category not in {"linear", "inverse"}:
         return 0
@@ -213,8 +295,20 @@ def sync_open_interest(category: str, symbol: str, interval: str, days: int) -> 
     oi_interval = interval_to_oi_interval(interval)
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
-    rows = client.get_open_interest(category, symbol, oi_interval, _dt_to_ms(start), _dt_to_ms(end), limit=200)
-    parsed = [(category, symbol.upper(), oi_interval, _ms_to_dt(item["timestamp"]), item["openInterest"]) for item in rows]
+    step = timedelta(minutes=_oi_interval_minutes(oi_interval) * 180)
+    seen: set[datetime] = set()
+    parsed = []
+    for cursor, chunk_end in _page_ranges(start, end, step):
+        rows = client.get_open_interest(category, symbol, oi_interval, _dt_to_ms(cursor), _dt_to_ms(chunk_end), limit=200)
+        for item in rows:
+            ts_raw = item.get("timestamp")
+            if ts_raw is None:
+                continue
+            ts = _ms_to_dt(ts_raw)
+            if ts in seen:
+                continue
+            seen.add(ts)
+            parsed.append((category, symbol.upper(), oi_interval, ts, item.get("openInterest", 0)))
     return execute_many_values(
         """
         INSERT INTO open_interest(category, symbol, interval_time, ts, open_interest)
@@ -248,7 +342,8 @@ def sync_liquidity_snapshots(category: str = "linear") -> int:
         if not symbol.endswith("USDT") or symbol in settings.exclude_symbols:
             continue
         inst = instruments.get(symbol, {})
-        if inst and inst.get("status") not in {"Trading", "PreLaunch", None, ""}:
+        # PreLaunch исключён намеренно: в исследовательский universe не должны попадать инструменты без нормальной торговли.
+        if inst and inst.get("status") not in {"Trading", None, ""}:
             continue
         turnover = _to_float(item.get("turnover24h"))
         volume = _to_float(item.get("volume24h"))
@@ -256,22 +351,22 @@ def sync_liquidity_snapshots(category: str = "linear") -> int:
         bid = _to_float(item.get("bid1Price"))
         ask = _to_float(item.get("ask1Price"))
         last = _to_float(item.get("lastPrice"))
-        spread_pct = ((ask - bid) / ((ask + bid) / 2) * 100) if bid > 0 and ask > 0 else 999.0
+        spread_pct = ((ask - bid) / ((ask + bid) / 2) * 100) if bid > 0 and ask > 0 and ask >= bid else 999.0
         funding = _to_float(item.get("fundingRate"))
         age_days = _listing_age_days(inst)
         eligible = (
             turnover >= settings.min_turnover_24h
             and oi_value >= settings.min_open_interest_value
             and spread_pct <= settings.max_spread_pct
-            and (age_days is None or age_days >= settings.min_listing_age_days)
+            and age_days is not None
+            and age_days >= settings.min_listing_age_days
         )
-        # Log-compressed liquidity score. Spread penalty makes high-volume but thin markets rank lower.
         import math
 
         turnover_score = math.log10(max(turnover, 1.0))
         oi_score = math.log10(max(oi_value, 1.0))
         spread_score = max(0.0, 1.0 - min(spread_pct / max(settings.max_spread_pct, 0.001), 2.0) / 2.0)
-        age_score = min((age_days or settings.min_listing_age_days) / 180.0, 1.0)
+        age_score = min((age_days or 0) / 180.0, 1.0)
         score = 0.45 * turnover_score + 0.35 * oi_score + 0.15 * spread_score + 0.05 * age_score
         rows.append(
             (

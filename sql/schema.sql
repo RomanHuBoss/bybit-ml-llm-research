@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS signals (
     symbol TEXT NOT NULL,
     interval TEXT NOT NULL,
     strategy TEXT NOT NULL,
+    bar_time TIMESTAMPTZ,
     direction TEXT NOT NULL CHECK (direction IN ('long', 'short', 'flat')),
     confidence NUMERIC NOT NULL,
     entry NUMERIC,
@@ -151,8 +152,14 @@ CREATE TABLE IF NOT EXISTS signals (
     rationale JSONB
 );
 
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS bar_time TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_signals_created
 ON signals(created_at DESC, symbol, strategy);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_signals_bar_dedup
+ON signals(category, symbol, interval, strategy, direction, bar_time)
+WHERE bar_time IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS backtest_runs (
     id BIGSERIAL PRIMARY KEY,
@@ -175,6 +182,9 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     equity_curve JSONB
 );
 
+CREATE INDEX IF NOT EXISTS idx_backtest_runs_lookup
+ON backtest_runs(category, interval, symbol, strategy, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS backtest_trades (
     id BIGSERIAL PRIMARY KEY,
     run_id BIGINT NOT NULL REFERENCES backtest_runs(id) ON DELETE CASCADE,
@@ -189,6 +199,9 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
     pnl_pct NUMERIC NOT NULL,
     reason TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_backtest_trades_run
+ON backtest_trades(run_id);
 
 CREATE TABLE IF NOT EXISTS model_runs (
     id BIGSERIAL PRIMARY KEY,
@@ -208,6 +221,9 @@ CREATE TABLE IF NOT EXISTS model_runs (
     params JSONB
 );
 
+CREATE INDEX IF NOT EXISTS idx_model_runs_lookup
+ON model_runs(category, interval, symbol, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS paper_trades (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -218,6 +234,6 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     stop_loss NUMERIC,
     take_profit NUMERIC,
     qty NUMERIC,
-    status TEXT NOT NULL DEFAULT 'open',
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','cancelled','rejected')),
     rationale JSONB
 );

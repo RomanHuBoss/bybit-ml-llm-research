@@ -6,8 +6,21 @@ from decimal import Decimal
 from typing import Any, Iterable
 
 import pandas as pd
-import psycopg2
-from psycopg2.extras import Json, RealDictCursor, execute_values
+
+try:
+    import psycopg2
+    from psycopg2.extras import Json, RealDictCursor, execute_values
+except ModuleNotFoundError:  # pragma: no cover - используется только в средах без установленного PostgreSQL-драйвера.
+    psycopg2 = None  # type: ignore[assignment]
+
+    class Json:  # type: ignore[no-redef]
+        def __init__(self, value: Any) -> None:
+            self.value = value
+
+    RealDictCursor = None  # type: ignore[assignment]
+
+    def execute_values(*_args: Any, **_kwargs: Any) -> None:  # type: ignore[no-redef]
+        raise RuntimeError("psycopg2-binary is not installed; database writes are unavailable")
 
 from .config import settings
 
@@ -22,6 +35,8 @@ def _adapt_value(value: Any) -> Any:
 
 @contextmanager
 def get_conn():
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2-binary is not installed. Install requirements.txt before using the database.")
     conn = psycopg2.connect(settings.dsn)
     try:
         yield conn

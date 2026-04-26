@@ -15,20 +15,21 @@ from .research import rank_candidates
 from .sentiment import sentiment_summary, sync_sentiment_bundle
 from .strategies import build_latest_signals, persist_signals
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
+from .validation import bounded_int, normalize_category, normalize_interval, normalize_symbol, normalize_symbols
 
 router = APIRouter(prefix="/api")
 
 
 class MarketSyncRequest(BaseModel):
     category: str = settings.default_category
-    symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols))
+    symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols), min_length=1)
     interval: str = settings.default_interval
-    days: int = 90
+    days: int = Field(default=90, ge=1, le=settings.max_sync_days)
 
 
 class SentimentSyncRequest(BaseModel):
-    symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols))
-    days: int = settings.sentiment_lookback_days
+    symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols), min_length=1)
+    days: int = Field(default=settings.sentiment_lookback_days, ge=1, le=60)
     use_llm: bool = False
     category: str = settings.default_category
     interval: str = settings.default_interval
@@ -36,7 +37,7 @@ class SentimentSyncRequest(BaseModel):
 
 class SignalBuildRequest(BaseModel):
     category: str = settings.default_category
-    symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols))
+    symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols), min_length=1)
     interval: str = settings.default_interval
 
 
@@ -45,14 +46,14 @@ class BacktestRequest(BaseModel):
     symbol: str = "BTCUSDT"
     interval: str = settings.default_interval
     strategy: str = "donchian_atr_breakout"
-    limit: int = 5000
+    limit: int = Field(default=5000, ge=300, le=100000)
 
 
 class TrainRequest(BaseModel):
     category: str = settings.default_category
     symbol: str = "BTCUSDT"
     interval: str = settings.default_interval
-    horizon_bars: int = 12
+    horizon_bars: int = Field(default=12, ge=1, le=240)
 
 
 class BriefRequest(BaseModel):
@@ -63,8 +64,12 @@ class BriefRequest(BaseModel):
 class UniverseRequest(BaseModel):
     category: str = settings.default_category
     mode: str = settings.symbol_mode
-    limit: int = settings.universe_limit
+    limit: int = Field(default=settings.universe_limit, ge=1, le=100)
     refresh: bool = True
+
+
+def _bad_request(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/status")
@@ -79,6 +84,12 @@ def status() -> dict[str, Any]:
         "core_symbols": settings.core_symbols,
         "symbol_mode": settings.symbol_mode,
         "strategies": sorted(set(STRATEGY_MAP.keys())),
+        "risk_controls": {
+            "risk_per_trade": settings.risk_per_trade,
+            "max_position_notional_usdt": settings.max_position_notional_usdt,
+            "max_leverage": settings.max_leverage,
+            "require_liquidity_for_signals": settings.require_liquidity_for_signals,
+        },
         "sentiment_sources": {
             "fear_greed": settings.use_fear_greed,
             "gdelt": settings.use_gdelt,
@@ -93,36 +104,61 @@ def status() -> dict[str, Any]:
 @router.post("/symbols/liquidity/sync")
 def api_refresh_liquidity(category: str = settings.default_category) -> dict[str, Any]:
     try:
+        category = normalize_category(category)
         return {"ok": True, "result": refresh_liquidity(category)}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/symbols/liquidity/latest")
 def api_latest_liquidity(category: str = settings.default_category, limit: int = 50) -> dict[str, Any]:
-    return {"ok": True, "items": latest_liquidity(category, limit)}
+    try:
+        return {"ok": True, "items": latest_liquidity(normalize_category(category), bounded_int(limit, "limit", 1, 500))}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
 
 
 @router.post("/symbols/universe/build")
 def api_build_universe(req: UniverseRequest) -> dict[str, Any]:
     try:
-        return {"ok": True, "result": build_universe(req.category, req.mode, req.limit, req.refresh)}
+        category = normalize_category(req.category)
+        mode = req.mode.strip().lower()
+        if mode not in {"core", "dynamic", "hybrid"}:
+            raise ValueError("mode должен быть core, dynamic или hybrid")
+        return {"ok": True, "result": build_universe(category, mode, req.limit, req.refresh)}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/symbols/universe/latest")
 def api_latest_universe(category: str = settings.default_category, mode: str | None = None, limit: int = 50) -> dict[str, Any]:
-    return {"ok": True, "items": latest_universe(category, mode, limit)}
+    try:
+        category = normalize_category(category)
+        mode = mode.strip().lower() if mode else None
+        if mode and mode not in {"core", "dynamic", "hybrid"}:
+            raise ValueError("mode должен быть core, dynamic или hybrid")
+        return {"ok": True, "items": latest_universe(category, mode, bounded_int(limit, "limit", 1, 500))}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
 
 
 @router.post("/sync/market")
 def sync_market(req: MarketSyncRequest) -> dict[str, Any]:
     result = {}
     try:
-        for symbol in req.symbols:
-            result[symbol.upper()] = sync_market_bundle(req.category, symbol, req.interval, req.days)
+        category = normalize_category(req.category)
+        interval = normalize_interval(req.interval)
+        symbols = normalize_symbols(req.symbols)
+        days = bounded_int(req.days, "days", 1, settings.max_sync_days)
+        for symbol in symbols:
+            result[symbol] = sync_market_bundle(category, symbol, interval, days)
         return {"ok": True, "result": result}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -130,34 +166,52 @@ def sync_market(req: MarketSyncRequest) -> dict[str, Any]:
 @router.post("/sync/sentiment")
 def sync_sentiment(req: SentimentSyncRequest) -> dict[str, Any]:
     try:
-        return {"ok": True, "result": sync_sentiment_bundle(req.symbols, req.days, req.use_llm, req.category, req.interval)}
+        category = normalize_category(req.category)
+        interval = normalize_interval(req.interval)
+        symbols = normalize_symbols(req.symbols)
+        days = bounded_int(req.days, "days", 1, 60)
+        return {"ok": True, "result": sync_sentiment_bundle(symbols, days, req.use_llm, category, interval)}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/sentiment/summary")
 def api_sentiment_summary(symbol: str = "BTCUSDT", limit: int = 20) -> dict[str, Any]:
-    return {"ok": True, "result": sentiment_summary(symbol, limit)}
+    try:
+        return {"ok": True, "result": sentiment_summary(normalize_symbol(symbol), bounded_int(limit, "limit", 1, 200))}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
 
 
 @router.post("/signals/build")
 def build_signals(req: SignalBuildRequest) -> dict[str, Any]:
     output = {}
     try:
-        for symbol in req.symbols:
-            signals = build_latest_signals(req.category, symbol, req.interval)
-            inserted = persist_signals(req.category, symbol, req.interval, signals)
-            output[symbol.upper()] = {"built": len(signals), "inserted": inserted, "signals": [s.__dict__ for s in signals]}
+        category = normalize_category(req.category)
+        interval = normalize_interval(req.interval)
+        symbols = normalize_symbols(req.symbols)
+        for symbol in symbols:
+            signals = build_latest_signals(category, symbol, interval)
+            inserted = persist_signals(category, symbol, interval, signals)
+            output[symbol] = {"built": len(signals), "upserted": inserted, "signals": [s.__dict__ for s in signals]}
         return {"ok": True, "result": output}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/signals/latest")
 def latest_signals(limit: int = 50) -> dict[str, Any]:
+    try:
+        limit = bounded_int(limit, "limit", 1, 500)
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
     rows = fetch_all(
         """
-        SELECT id, created_at, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit,
+        SELECT id, created_at, bar_time, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit,
                atr, ml_probability, sentiment_score, rationale
         FROM signals
         ORDER BY created_at DESC
@@ -170,13 +224,21 @@ def latest_signals(limit: int = 50) -> dict[str, Any]:
 
 @router.get("/research/rank")
 def api_rank_candidates(category: str = settings.default_category, interval: str = settings.default_interval, limit: int = 30) -> dict[str, Any]:
-    return {"ok": True, "items": rank_candidates(category, interval, limit)}
+    try:
+        return {"ok": True, "items": rank_candidates(normalize_category(category), normalize_interval(interval), bounded_int(limit, "limit", 1, 200))}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
 
 
 @router.post("/backtest/run")
 def api_backtest(req: BacktestRequest) -> dict[str, Any]:
     try:
-        return {"ok": True, "result": run_backtest(req.category, req.symbol, req.interval, req.strategy, req.limit)}
+        category = normalize_category(req.category)
+        symbol = normalize_symbol(req.symbol)
+        interval = normalize_interval(req.interval)
+        if req.strategy not in STRATEGY_MAP:
+            raise ValueError(f"Unknown strategy: {req.strategy}")
+        return {"ok": True, "result": run_backtest(category, symbol, interval, req.strategy, req.limit)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -184,7 +246,7 @@ def api_backtest(req: BacktestRequest) -> dict[str, Any]:
 @router.post("/ml/train")
 def api_train(req: TrainRequest) -> dict[str, Any]:
     try:
-        return {"ok": True, "result": train_model(req.category, req.symbol, req.interval, req.horizon_bars)}
+        return {"ok": True, "result": train_model(normalize_category(req.category), normalize_symbol(req.symbol), normalize_interval(req.interval), req.horizon_bars)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -192,7 +254,7 @@ def api_train(req: TrainRequest) -> dict[str, Any]:
 @router.get("/ml/predict/latest")
 def api_predict(symbol: str = "BTCUSDT", category: str = settings.default_category, interval: str = settings.default_interval, horizon_bars: int = 12) -> dict[str, Any]:
     try:
-        return {"ok": True, "result": predict_latest(category, symbol, interval, horizon_bars)}
+        return {"ok": True, "result": predict_latest(normalize_category(category), normalize_symbol(symbol), normalize_interval(interval), bounded_int(horizon_bars, "horizon_bars", 1, 240))}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -213,6 +275,10 @@ def api_llm_brief(req: BriefRequest) -> dict[str, Any]:
 
 @router.get("/equity/latest")
 def latest_equity(limit: int = 10) -> dict[str, Any]:
+    try:
+        limit = bounded_int(limit, "limit", 1, 100)
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
     runs = fetch_all(
         """
         SELECT id, created_at, symbol, interval, strategy, initial_equity, final_equity, total_return,
@@ -228,6 +294,11 @@ def latest_equity(limit: int = 10) -> dict[str, Any]:
 
 @router.get("/news/latest")
 def latest_news(symbol: str = "BTCUSDT", limit: int = 30) -> dict[str, Any]:
+    try:
+        symbol = normalize_symbol(symbol)
+        limit = bounded_int(limit, "limit", 1, 200)
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
     rows = fetch_all(
         """
         SELECT source, symbol, published_at, title, url, source_domain, sentiment_score, llm_score, llm_label
@@ -236,6 +307,6 @@ def latest_news(symbol: str = "BTCUSDT", limit: int = 30) -> dict[str, Any]:
         ORDER BY published_at DESC NULLS LAST, created_at DESC
         LIMIT %s
         """,
-        (symbol.upper(), limit),
+        (symbol, limit),
     )
     return {"ok": True, "news": rows}
