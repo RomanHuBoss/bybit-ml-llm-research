@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -35,6 +36,16 @@ def _dotenv_value(key: str) -> str | None:
     return None
 
 
+def _suppress_known_loky_warning() -> None:
+    """Подавляет только известный warning loky об отсутствующем wmic на Windows."""
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Could not find the number of physical cores.*",
+        category=UserWarning,
+        module=r"joblib\.externals\.loky\.backend\.context",
+    )
+
+
 def configure_runtime_environment() -> None:
     """
     Настраивает безопасные переменные окружения до импорта sklearn/joblib.
@@ -42,9 +53,11 @@ def configure_runtime_environment() -> None:
     На современных Windows wmic часто отсутствует. joblib/loky при попытке
     определить физические ядра вызывает wmic и пишет шумный warning, хотя затем
     все равно использует число логических ядер. Поэтому мы явно задаем
-    LOKY_MAX_CPU_COUNT заранее. Пользовательское значение из окружения или .env
-    имеет приоритет.
+    LOKY_MAX_CPU_COUNT заранее и дополнительно ставим точечный фильтр warning.
+    Пользовательское значение из окружения или .env имеет приоритет.
     """
+    _suppress_known_loky_warning()
+
     if _parse_positive_int(os.environ.get("LOKY_MAX_CPU_COUNT")) is not None:
         return
 

@@ -116,3 +116,15 @@
 
 - `python -m compileall -q app tests`: успешно;
 - `python -m pytest -q`: `18 passed`.
+
+## Дополнение: усиленное подавление warning joblib/loky на Windows
+
+После проверки на пользовательском Windows-стенде выяснилось, что одной ранней установки `LOKY_MAX_CPU_COUNT` недостаточно для всех связок Windows/Python/joblib: в некоторых сценариях loky все равно пытается определить физические ядра через отсутствующий `wmic` и печатает `UserWarning`.
+
+Исправление усилено:
+
+- добавлен корневой `sitecustomize.py`, который Python импортирует до запуска модулей проекта;
+- `LOKY_MAX_CPU_COUNT` задается еще до импорта `app`, `uvicorn`, `sklearn` и `joblib`, если пользователь не задал его вручную;
+- добавлен точечный фильтр только для известного warning `joblib.externals.loky.backend.context` об отсутствующем `wmic`;
+- фильтр продублирован в `app.runtime.configure_runtime_environment()` как резервный уровень защиты;
+- добавлены regression-тесты, проверяющие раннюю настройку окружения и подавление именно этого предупреждения.
