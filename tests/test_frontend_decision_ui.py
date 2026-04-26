@@ -98,44 +98,46 @@ def test_frontend_has_light_fintech_redesign_and_sidebar():
     assert 'class="side-nav"' in html
     assert 'class="side-logo"' in html
     assert 'class="support-grid"' in html
-    assert 'class="protocol-mini"' in html
+    assert 'id="decisionVerdict"' in html
+    assert 'id="opsHelper"' in html
+    assert 'id="refreshQueueBtn"' in html
     assert 'aria-expanded="true"' in html
     assert 'id="opsBody"' in html
     assert 'id="opsBody" hidden' not in html
+    assert 'queue-header' in html
+    assert 'Свернуть панель' in html
 
     required_css_fragments = [
         "color-scheme: light",
-        "--page: #ece8df",
-        "--surface: #fbfaf6",
-        "--blue: #3f5f85",
+        "--page: #f4f2ee",
+        "--surface: #ffffff",
+        "--blue: #2456a6",
         ".app-frame",
-        "grid-template-columns: 78px minmax(0, 1fr)",
+        "grid-template-columns: 76px minmax(0, 1fr)",
         ".side-nav",
         ".topbar",
-        "background: rgba(248, 246, 240",
+        "background: rgba(250,249,246",
         ".operation-toast",
         ".decision-board",
         ".support-grid",
         ".candidate",
-        "grid-template-columns: 24px minmax(0, 1fr) auto 24px",
-        ".ops-panel.open",
-        "position: relative",
-        "flex: 0 1 min(48dvh, 420px)",
+        "grid-template-columns: 24px minmax(0,1fr) 112px 48px 20px",
+        ".ops-panel:not(.open) .ops-body",
         ".ops-body",
-        "overflow-y: auto",
-        "overscroll-behavior: contain",
-        "scrollbar-width: thin",
-        "::-webkit-scrollbar-thumb",
+        "grid-template-columns: minmax(220px,1.7fr)",
+        "scrollbar-gutter: stable",
+        ".tf-grid",
         ".help-dialog",
     ]
     for fragment in required_css_fragments:
         assert fragment in css
 
     assert "decisionBadge').className" in js
+    assert "decisionVerdict" in js
+    assert "opsHelper" in js
     assert 'role="button" tabindex="0"' in js
     assert "event.key === 'Enter'" in js
     assert "event.key === ' '" in js
-
 
 def test_frontend_has_fetch_timeout_busy_guard_and_safe_links():
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")

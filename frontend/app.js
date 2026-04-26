@@ -280,7 +280,8 @@ function setOpsPanelOpen(open) {
   panel.classList.toggle('open', open);
   body.hidden = !open;
   toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if (stateLabel) stateLabel.textContent = open ? 'Скрыть' : 'Открыть';
+  if (stateLabel) stateLabel.textContent = open ? 'Свернуть панель ↑' : 'Открыть панель ↓';
+  setText('opsHelper', open ? 'Панель развернута. Нажмите, чтобы свернуть.' : 'Панель свернута. Нажмите, чтобы открыть параметры.');
 }
 
 function toggleOpsPanel() {
@@ -618,7 +619,8 @@ function renderDecision() {
   board.className = `decision-board panel ${d.level}`;
   $('decisionBadge').textContent = d.label;
   $('decisionBadge').className = `decision-badge ${d.level}`;
-  $('decisionTitle').textContent = d.title;
+  $('decisionTitle').textContent = s?.symbol || d.title;
+  setText('decisionVerdict', d.label === 'НЕТ ВХОДА' ? 'Вход запрещён' : d.label === 'ВХОД' ? 'Вход возможен' : d.label);
   $('decisionSubtitle').textContent = d.subtitle;
   $('decisionScore').textContent = d.score;
 
@@ -1009,6 +1011,8 @@ async function runOperation(title, fn) {
 
 function bindControls() {
   $('refreshAllBtn').onclick = async () => runOperation('Обновление экрана', refreshAll);
+  const refreshQueueBtn = $('refreshQueueBtn');
+  if (refreshQueueBtn) refreshQueueBtn.onclick = async () => runOperation('Обновление очереди', async () => { await refreshRank(); await refreshSignals(); return { ok: true }; });
 
   $('syncUniverseBtn').onclick = async () => {
     await runOperation('Universe built', async () => {

@@ -562,3 +562,22 @@ python -S <direct frontend regression runner>
 Результат direct frontend regression runner: 9 frontend UI checks passed.
 
 Ограничение: `pytest` в контейнере продолжает зависать на уровне окружения, поэтому frontend regression-функции были прогнаны напрямую через `importlib` без pytest runner. Это проверяет сами assertions файла `tests/test_frontend_decision_ui.py`, но не заменяет полноценный browser e2e/visual-regression suite.
+
+## Дополнение: UI v5
+
+После повторной пользовательской проверки исправлены конкретные дефекты интерфейса:
+
+- очередь кандидатов была визуально схлопнута и плохо использовалась как рабочий список;
+- `Операции с данными` выглядели раскрытыми, но не давали надежного визуального и программного ощущения открытия/закрытия;
+- decision-banner занимал непропорционально много места и визуально ломал экран;
+- палитра оставалась слишком тяжелой и устаревшей.
+
+Принятое решение: перестроить страницу как компактный операторский cockpit с тремя основными рабочими зонами: очередь кандидатов, trade sheet и MTF consensus. Операции с данными вынесены ниже в полноширинную accordion-панель, а вспомогательные Risk/News/Protocol оставлены вторым уровнем.
+
+Дополнительные проверки:
+
+```text
+node --check frontend/app.js — OK
+python -S -m compileall -q app tests run.py install.py sitecustomize.py — OK
+static_frontend_checks — OK
+```

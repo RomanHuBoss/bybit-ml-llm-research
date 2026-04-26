@@ -9,7 +9,7 @@
 <body>
   <div class="app-frame">
     <nav class="side-nav" aria-label="Основная навигация">
-      <div class="side-logo" aria-label="Bybit Research">BYB<span>IT</span></div>
+      <div class="side-logo" aria-label="Bybit Research">BYB</div>
       <button type="button" class="nav-item active" data-nav-target="workspace" title="Рабочее место" aria-label="Рабочее место" aria-current="page">▦</button>
       <button type="button" class="nav-item" data-nav-target="equityCanvas" title="Графики" aria-label="Графики">⌁</button>
       <button type="button" class="nav-item" data-nav-target="operatorProtocol" title="Протоколы" aria-label="Протоколы">▤</button>
@@ -24,7 +24,7 @@
           <button type="button" id="navToggleBtn" class="menu-button" aria-label="Свернуть меню" aria-pressed="false">☰</button>
           <div class="brand-copy">
             <h1>Рабочее место оператора</h1>
-            <p>15m entry · 60m bias · 240m regime · <b>LIVE OFF</b></p>
+            <p>15m entry · 60m bias · 240m regime</p>
           </div>
         </div>
         <div class="top-status" aria-label="Состояние сервисов">
@@ -33,226 +33,168 @@
           <span id="signalStatusBox" class="status wide">Signals...</span>
           <span id="backtestStatusBox" class="status wide">Backtest...</span>
           <span id="llmStatusBox" class="status wide">LLM...</span>
+          <button type="button" id="refreshAllBtn" class="refresh-all" data-busy-lock="true" title="Обновить все данные">↻ <span>Обновить все</span></button>
         </div>
       </header>
 
       <div id="operationToast" class="operation-toast" role="status" aria-live="polite">Готово к работе. LIVE OFF.</div>
 
-      <main class="terminal-shell">
-        <aside class="left-rail">
-          <section class="kpi-panel" aria-label="Сводка данных">
-            <div class="kpi-card">
-              <span>Свечи</span>
-              <b id="kpiCandles">—</b>
-              <small>обновление рынка</small>
-            </div>
-            <div class="kpi-card">
-              <span>Universe</span>
-              <b id="kpiUniverse">—</b>
-              <small>активных рынков</small>
-            </div>
-            <div class="kpi-card">
-              <span>15m setups</span>
-              <b id="kpiSignals">—</b>
-              <small>кандидатов</small>
-            </div>
-          </section>
+      <main class="terminal-shell" id="workspace">
+        <section class="kpi-panel" aria-label="Сводка данных">
+          <div class="kpi-card"><span>Свечи</span><b id="kpiCandles">—</b><small>обновление рынка</small></div>
+          <div class="kpi-card"><span>Universe</span><b id="kpiUniverse">—</b><small>активных рынков</small></div>
+          <div class="kpi-card"><span>15m setups</span><b id="kpiSignals">—</b><small>кандидатов</small></div>
+        </section>
 
-          <section class="panel queue-panel">
-            <div class="panel-head compact-head">
-              <div>
-                <p class="eyebrow">Candidate queue</p>
-                <h2>15m рекомендации</h2>
-              </div>
-              <button type="button" id="refreshAllBtn" class="icon-button" data-busy-lock="true" title="Обновить экран" aria-label="Обновить экран">↻</button>
-            </div>
-            <div class="queue-filters segmented" role="tablist" aria-label="Фильтр кандидатов">
-              <button type="button" class="filter active" data-filter="all" role="tab" aria-selected="true">Все</button>
-              <button type="button" class="filter" data-filter="review" role="tab" aria-selected="false">Вход</button>
-              <button type="button" class="filter" data-filter="watch" role="tab" aria-selected="false">Watch</button>
-              <button type="button" class="filter" data-filter="reject" role="tab" aria-selected="false">Stop</button>
-            </div>
-            <div id="candidateQueue" class="candidate-queue empty-state" aria-live="polite">Очередь появится после построения рекомендаций.</div>
-          </section>
+        <article class="decision-board panel" id="decisionBoard">
+          <div class="decision-symbol">
+            <p class="eyebrow">Первичное решение</p>
+            <h2 id="decisionTitle">Нет выбранного сетапа</h2>
+          </div>
+          <div class="decision-copy">
+            <strong id="decisionVerdict">Вход запрещён</strong>
+            <p id="decisionSubtitle">Обновите данные и постройте рекомендации. По умолчанию вход запрещён.</p>
+          </div>
+          <div class="decision-actions">
+            <div class="decision-badge" id="decisionBadge">НЕТ ВХОДА</div>
+            <div class="decision-score"><span>Оценка</span><strong id="decisionScore">0</strong><small>/100</small></div>
+          </div>
+        </article>
 
-          <section class="panel ops-panel open" id="opsPanel">
-            <button id="opsToggleBtn" class="ops-toggle" type="button" aria-expanded="true" aria-controls="opsBody">
-              <span>Операции с данными</span>
-              <span class="ops-toggle-state" id="opsToggleState">Скрыть</span>
-            </button>
-            <div class="ops-body" id="opsBody">
-              <label>Символы
-                <input id="symbols" value="BTCUSDT,ETHUSDT,SOLUSDT" autocomplete="off" />
-              </label>
-              <div class="field-grid">
-                <label>Категория
-                  <input id="category" value="linear" autocomplete="off" />
-                </label>
-                <label>MTF контур
-                  <input id="interval" value="15,60,240" autocomplete="off" />
-                </label>
-              </div>
-              <div class="field-grid">
-                <label>Дней истории
-                  <input id="days" type="number" value="120" min="1" max="1000" />
-                </label>
-                <label>Universe
-                  <select id="universeMode">
-                    <option>hybrid</option>
-                    <option>core</option>
-                    <option>dynamic</option>
-                  </select>
-                </label>
-              </div>
-              <label>Стратегия для ручного бэктеста
-                <select id="strategy">
-                  <option>regime_adaptive_combo</option>
-                  <option>donchian_atr_breakout</option>
-                  <option>ema_pullback_trend</option>
-                  <option>bollinger_rsi_reversion</option>
-                  <option>funding_extreme_contrarian</option>
-                  <option>oi_trend_confirmation</option>
-                  <option>volatility_squeeze_breakout</option>
-                  <option>sentiment_fear_reversal</option>
-                  <option>sentiment_greed_reversal</option>
-                </select>
-              </label>
-              <div class="button-stack primary-actions">
-                <button type="button" id="signalsAutoBtn" class="primary" data-busy-lock="true">Авто-рекомендации сейчас</button>
-                <button type="button" id="buildSignalsBtn" class="secondary" data-busy-lock="true">Построить рекомендации</button>
-              </div>
-              <div class="button-stack secondary-actions" aria-label="Дополнительные операции">
-                <button type="button" id="rankBtn" data-busy-lock="true">Пересчитать очередь</button>
-                <button type="button" id="syncUniverseBtn" data-busy-lock="true">Обновить universe</button>
-                <button type="button" id="syncMarketBtn" data-busy-lock="true">Загрузить рынок</button>
-                <button type="button" id="syncSentimentBtn" data-busy-lock="true">Обновить sentiment</button>
-                <button type="button" id="backtestBtn" data-busy-lock="true">Бэктест сетапа</button>
-                <button type="button" id="backtestAutoBtn" data-busy-lock="true">Авто-бэктест сейчас</button>
-                <button type="button" id="trainBtn" data-busy-lock="true">Обучить ML</button>
-                <button type="button" id="predictBtn" data-busy-lock="true">ML‑прогноз</button>
-              </div>
-              <div id="operationStatus" class="operation-status" role="status" aria-live="polite">Операции не запускались.</div>
-            </div>
-          </section>
-        </aside>
+        <section class="panel queue-panel">
+          <div class="panel-head compact-head">
+            <div><p class="eyebrow">Candidate queue</p><h2>15m рекомендации</h2></div>
+            <button type="button" id="refreshQueueBtn" class="icon-button" data-busy-lock="true" title="Обновить очередь" aria-label="Обновить очередь">↻</button>
+          </div>
+          <div class="queue-filters segmented" role="tablist" aria-label="Фильтр кандидатов">
+            <button type="button" class="filter active" data-filter="all" role="tab" aria-selected="true">Все</button>
+            <button type="button" class="filter" data-filter="review" role="tab" aria-selected="false">Вход</button>
+            <button type="button" class="filter" data-filter="watch" role="tab" aria-selected="false">Watch</button>
+            <button type="button" class="filter" data-filter="reject" role="tab" aria-selected="false">Stop</button>
+          </div>
+          <div class="queue-header" aria-hidden="true"><span>Инструмент</span><span>Статус</span><span>Оценка</span></div>
+          <div id="candidateQueue" class="candidate-queue empty-state" aria-live="polite">Очередь появится после построения рекомендаций.</div>
+          <button type="button" class="queue-more ghost">Открыть полный список <span>›</span></button>
+        </section>
 
-        <section class="workspace" id="workspace">
-          <article class="decision-board panel" id="decisionBoard">
-            <div class="decision-copy">
-              <p class="eyebrow">Primary decision</p>
-              <h2 id="decisionTitle">Нет выбранного сетапа</h2>
-              <p id="decisionSubtitle">Обновите данные и постройте рекомендации. По умолчанию вход запрещён.</p>
+        <article class="panel ticket">
+          <div class="panel-head compact-head">
+            <div><p class="eyebrow">Trade sheet</p><h2 id="ticketTitle">Сетап не выбран</h2></div>
+            <div class="panel-tools"><button type="button" class="icon-button ghost-icon" title="Редактировать">✎</button><button type="button" class="icon-button ghost-icon" data-busy-lock="true" title="Обновить">↻</button></div>
+          </div>
+          <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди.</div>
+        </article>
+
+        <article class="panel mtf-panel" id="mtfPanel">
+          <div class="panel-head compact-head">
+            <div><p class="eyebrow">MTF consensus</p><h2>Entry / bias / regime</h2></div>
+            <span class="confidence-badge">HIGH CONVICTION</span>
+          </div>
+          <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
+        </article>
+
+        <section class="panel ops-panel open" id="opsPanel">
+          <button id="opsToggleBtn" class="ops-toggle" type="button" aria-expanded="true" aria-controls="opsBody">
+            <span class="ops-title"><span class="ops-icon">◉</span>Операции с данными</span>
+            <span class="ops-helper" id="opsHelper">Панель развернута. Нажмите, чтобы свернуть.</span>
+            <span class="ops-toggle-state" id="opsToggleState">Свернуть панель ↑</span>
+          </button>
+          <div class="ops-body" id="opsBody">
+            <label class="wide-field">Символы
+              <input id="symbols" value="BTCUSDT, ETHUSDT, SOLUSDT" autocomplete="off" />
+            </label>
+            <label>Категория
+              <select id="category"><option>linear</option><option>inverse</option><option>spot</option></select>
+            </label>
+            <label>MTF контур
+              <select id="interval"><option>15,60,240</option><option>5,15,60</option><option>60,240,D</option></select>
+            </label>
+            <label>Дней истории
+              <input id="days" type="number" value="120" min="1" max="1000" />
+            </label>
+            <label>Universe
+              <select id="universeMode"><option>hybrid</option><option>core</option><option>dynamic</option></select>
+            </label>
+            <label class="strategy-field">Стратегия
+              <select id="strategy">
+                <option>regime_adaptive_combo</option>
+                <option>donchian_atr_breakout</option>
+                <option>ema_pullback_trend</option>
+                <option>bollinger_rsi_reversion</option>
+                <option>funding_extreme_contrarian</option>
+                <option>oi_trend_confirmation</option>
+                <option>volatility_squeeze_breakout</option>
+                <option>sentiment_fear_reversal</option>
+                <option>sentiment_greed_reversal</option>
+              </select>
+            </label>
+            <div class="ops-actions">
+              <button type="button" id="signalsAutoBtn" class="primary" data-busy-lock="true">⚡ Авто-рекомендации сейчас</button>
+              <button type="button" id="buildSignalsBtn" class="secondary" data-busy-lock="true">▥ Построить рекомендации</button>
             </div>
-            <div class="decision-actions">
-              <div class="decision-badge" id="decisionBadge">НЕТ ВХОДА</div>
-              <div class="decision-score"><span>Score</span><strong id="decisionScore">0</strong><small>/100</small></div>
+            <div class="secondary-actions" aria-label="Дополнительные операции">
+              <button type="button" id="rankBtn" data-busy-lock="true">Пересчитать очередь</button>
+              <button type="button" id="syncUniverseBtn" data-busy-lock="true">Обновить universe</button>
+              <button type="button" id="syncMarketBtn" data-busy-lock="true">Загрузить рынок</button>
+              <button type="button" id="syncSentimentBtn" data-busy-lock="true">Обновить sentiment</button>
+              <button type="button" id="backtestBtn" data-busy-lock="true">Бэктест сетапа</button>
+              <button type="button" id="backtestAutoBtn" data-busy-lock="true">Авто-бэктест сейчас</button>
+              <button type="button" id="trainBtn" data-busy-lock="true">Обучить ML</button>
+              <button type="button" id="predictBtn" data-busy-lock="true">ML‑прогноз</button>
             </div>
+            <div id="operationStatus" class="operation-status" role="status" aria-live="polite">Операции не запускались.</div>
+          </div>
+        </section>
+
+        <section class="support-grid" aria-label="Контекст ручной проверки">
+          <article class="panel support-card risk-support">
+            <div class="panel-head compact-head"><div><p class="eyebrow">Risk & evidence</p><h2>Красный пункт = отмена</h2></div></div>
+            <div class="context-tabs visually-compact" role="tablist" aria-label="Панели проверки">
+              <button type="button" class="context-tab active" data-tab="risk" role="tab" aria-selected="true">Risk</button>
+              <button type="button" class="context-tab" data-tab="evidence" role="tab" aria-selected="false">Evidence</button>
+              <button type="button" class="context-tab" data-tab="llm" role="tab" aria-selected="false">LLM</button>
+              <button type="button" class="context-tab" data-tab="news" role="tab" aria-selected="false">News</button>
+              <button type="button" class="context-tab" data-tab="protocol" role="tab" aria-selected="false">Protocol</button>
+            </div>
+            <section class="context-tab-panel active" data-panel="risk"><div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div></section>
+            <section class="context-tab-panel" data-panel="evidence"><div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div></section>
+            <section class="context-tab-panel" data-panel="llm"><div class="support-headline"><h3>LLM risk review</h3><button type="button" id="briefBtn" class="ghost" data-busy-lock="true">Обновить LLM сейчас</button></div><pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre></section>
+            <section class="context-tab-panel" data-panel="news"><div class="support-headline"><h3>Новости / sentiment</h3><span id="sentimentSummary" class="muted">—</span></div><div id="newsList" class="news-list empty-state">Новостей пока нет.</div></section>
+            <section class="context-tab-panel" data-panel="protocol"><div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div></section>
           </article>
 
-          <section class="review-grid" aria-label="Разбор выбранного кандидата">
-            <article class="panel ticket">
-              <div class="panel-head compact-head">
-                <div>
-                  <p class="eyebrow">Trade sheet</p>
-                  <h2 id="ticketTitle">Сетап не выбран</h2>
-                </div>
-              </div>
-              <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди слева.</div>
-            </article>
+          <article class="panel support-card compact-news">
+            <p class="eyebrow">News & sentiment</p>
+            <h2>Рыночный фон</h2>
+            <div class="support-kv"><span>Настроение рынка</span><b>Нейтральное <i class="dot amber"></i></b><span>Индекс страха и жадности</span><b>48</b><span>Ключевые события (24ч)</span><b>2</b><span>Новости по ZEC</span><b>Спокойно</b></div>
+            <a href="#newsList" class="support-link">Открыть ленту ›</a>
+          </article>
 
-            <article class="panel mtf-panel" id="mtfPanel">
-              <div class="panel-head compact-head">
-                <div>
-                  <p class="eyebrow">MTF consensus</p>
-                  <h2>Entry / bias / regime</h2>
-                </div>
-              </div>
-              <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
-            </article>
-          </section>
-
-          <section class="support-grid" aria-label="Контекст ручной проверки">
-            <article class="panel support-card risk-support">
-              <div class="panel-head compact-head">
-                <div>
-                  <p class="eyebrow">Risk & evidence</p>
-                  <h2>Красный пункт = отмена</h2>
-                </div>
-              </div>
-              <div class="context-tabs visually-compact" role="tablist" aria-label="Панели проверки">
-                <button type="button" class="context-tab active" data-tab="risk" role="tab" aria-selected="true">Risk</button>
-                <button type="button" class="context-tab" data-tab="evidence" role="tab" aria-selected="false">Evidence</button>
-                <button type="button" class="context-tab" data-tab="llm" role="tab" aria-selected="false">LLM</button>
-                <button type="button" class="context-tab" data-tab="news" role="tab" aria-selected="false">News</button>
-                <button type="button" class="context-tab" data-tab="protocol" role="tab" aria-selected="false">Protocol</button>
-              </div>
-              <section class="context-tab-panel active" data-panel="risk">
-                <div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div>
-              </section>
-              <section class="context-tab-panel" data-panel="evidence">
-                <div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div>
-              </section>
-              <section class="context-tab-panel" data-panel="llm">
-                <div class="support-headline">
-                  <h3>LLM risk review</h3>
-                  <button type="button" id="briefBtn" class="ghost" data-busy-lock="true">Обновить LLM сейчас</button>
-                </div>
-                <pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre>
-              </section>
-              <section class="context-tab-panel" data-panel="news">
-                <div class="support-headline"><h3>Новости / sentiment</h3><span id="sentimentSummary" class="muted">—</span></div>
-                <div id="newsList" class="news-list empty-state">Новостей пока нет.</div>
-              </section>
-              <section class="context-tab-panel" data-panel="protocol">
-                <div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div>
-              </section>
-            </article>
-
-            <article class="panel support-card compact-news" aria-label="Быстрый статус">
-              <p class="eyebrow">Operator protocol</p>
-              <h2>Ручная проверка</h2>
-              <p class="muted">Система не создает бота автоматически. Итог — рекомендация оператору, а не торговый приказ.</p>
-              <div class="protocol-mini">
-                <span>Risk gate</span><b>обязателен</b>
-                <span>LLM</span><b>фон</b>
-                <span>News</span><b>проверить</b>
-              </div>
-            </article>
-          </section>
-
-          <details class="panel technical-details" id="technicalDetails">
-            <summary>Технические детали и журнал / сырые данные</summary>
-            <div class="details-grid">
-              <section>
-                <h3>Последний бэктест</h3>
-                <span id="equityMeta" class="muted">—</span>
-                <canvas id="equityCanvas" width="900" height="240"></canvas>
-              </section>
-              <section>
-                <h3>Журнал операций</h3>
-                <pre id="log" class="log"></pre>
-              </section>
-            </div>
-            <div class="raw-table-wrap">
-              <table id="rawTable">
-                <thead><tr><th>Решение</th><th>Score</th><th>MTF</th><th>Символ</th><th>TF</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th><th>LLM</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-          </details>
+          <article class="panel support-card protocol-card">
+            <p class="eyebrow">Protocol</p>
+            <h2>Состояние оператора</h2>
+            <div class="support-kv"><span>Статус бота</span><b>Не создан</b><span>Режим</span><b>—</b><span>Последний запуск</span><b>—</b><span>Ошибки</span><b>0</b></div>
+            <a href="#technicalDetails" class="support-link">Открыть журнал ›</a>
+          </article>
         </section>
+
+        <details class="panel technical-details" id="technicalDetails">
+          <summary>Технические детали и журнал / сырые данные</summary>
+          <div class="details-grid">
+            <section><h3>Последний бэктест</h3><span id="equityMeta" class="muted">—</span><canvas id="equityCanvas" width="900" height="240"></canvas></section>
+            <section><h3>Журнал операций</h3><pre id="log" class="log"></pre></section>
+          </div>
+          <div class="raw-table-wrap">
+            <table id="rawTable"><thead><tr><th>Решение</th><th>Score</th><th>MTF</th><th>Символ</th><th>TF</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th><th>LLM</th></tr></thead><tbody></tbody></table>
+          </div>
+        </details>
       </main>
     </div>
   </div>
+
   <dialog id="helpDialog" class="help-dialog" aria-labelledby="helpDialogTitle">
     <form method="dialog" class="help-card">
-      <div class="panel-head compact-head">
-        <div>
-          <p class="eyebrow">Operator help</p>
-          <h2 id="helpDialogTitle">Как пользоваться экраном</h2>
-        </div>
-        <button type="submit" class="icon-button" aria-label="Закрыть помощь">×</button>
-      </div>
+      <div class="panel-head compact-head"><div><p class="eyebrow">Operator help</p><h2 id="helpDialogTitle">Как пользоваться экраном</h2></div><button type="submit" class="icon-button" aria-label="Закрыть помощь">×</button></div>
       <ol>
         <li>Сначала обновите universe и рынок, затем постройте рекомендации.</li>
         <li>Выберите кандидата в очереди: центральная карточка покажет запрет, наблюдение или ручную проверку.</li>
