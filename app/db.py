@@ -162,8 +162,15 @@ def execute_many_values(sql: str, rows: Iterable[tuple], page_size: int = 1000) 
 def query_df(sql: str, params: tuple | dict | None = None) -> "pd.DataFrame":
     import pandas as pd
 
-    with get_conn() as conn:
-        return pd.read_sql_query(sql, conn, params=params)
+    # Не используем pandas.read_sql_query с raw psycopg2 connection: начиная с pandas 2.x
+    # это стабильно печатает UserWarning и может засорять production-логи при каждом запросе.
+    # Для текущего проекта достаточно DB-API cursor: он сохраняет параметризацию SQL,
+    # не добавляет тяжелую зависимость SQLAlchemy и возвращает DataFrame с корректными именами колонок.
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        columns = [desc[0] for desc in cur.description] if cur.description else []
+        rows = cur.fetchall() if columns else []
+    return pd.DataFrame(rows, columns=columns)
 
 
 def json_safe(obj: Any) -> Any:

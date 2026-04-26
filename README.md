@@ -420,3 +420,27 @@ python -m pytest -q
 - Нет WebSocket reconciliation, account-state reconciliation и exchange-side order idempotency, потому что live orders отсутствуют.
 - Для реального исполнения нужен отдельный модуль с read-only/account sync, kill-switch, order lifecycle FSM, durable outbox, idempotency keys, circuit breakers и пост-трейд аудитом.
 - Profitability не доказана. Перед любым capital-at-risk обязательны walk-forward, out-of-sample, sensitivity analysis по комиссиям/slippage/funding и проверка по нескольким рыночным режимам.
+
+## Runtime-предупреждения pandas на Windows
+
+Если в старой сборке при `Build signals` или `Research rank` появлялись повторяющиеся сообщения вида:
+
+```text
+UserWarning: pandas only supports SQLAlchemy connectable ...
+FutureWarning: Downcasting object dtype arrays on .fillna ...
+```
+
+обновленная версия устраняет их на уровне кода:
+
+- `query_df` больше не вызывает `pandas.read_sql_query` с raw `psycopg2` connection;
+- `is_eligible` в feature frame приводится через nullable boolean и затем к обычному `bool`;
+- отсутствие liquidity snapshot остается безопасным состоянием `False`, то есть сигнал не должен считаться ликвидным без доказательства.
+
+Ожидаемый результат текущей ревизии:
+
+```bash
+python run.py check
+python run.py test
+```
+
+Тестовый прогон: `15 passed`.

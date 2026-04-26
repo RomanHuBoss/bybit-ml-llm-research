@@ -144,3 +144,26 @@ curl http://127.0.0.1:11434/api/generate -d '{"model":"llama3.1:8b","prompt":"te
 ## 11. Live trading
 
 Проект не отправляет реальные ордера. Это сделано намеренно. Добавление live-trading требует отдельного аудита API-ключей, лимитов, ошибок исполнения, ликвидаций и kill-switch.
+
+## Если в консоли были pandas warning
+
+В старых ревизиях при построении сигналов могли повторяться предупреждения pandas про `read_sql_query` и `fillna`:
+
+```text
+UserWarning: pandas only supports SQLAlchemy connectable ...
+FutureWarning: Downcasting object dtype arrays on .fillna ...
+```
+
+Это не означало падение сервера, но засоряло логи и могло скрывать настоящие ошибки. В текущей ревизии предупреждения устранены:
+
+- чтение DataFrame из PostgreSQL выполняется через DB-API cursor;
+- признак `is_eligible` приводится к безопасному boolean-типу без deprecated downcasting.
+
+Проверка после обновления:
+
+```powershell
+python run.py check
+python run.py test
+```
+
+Ожидаемо: `15 passed`.

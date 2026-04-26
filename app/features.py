@@ -149,7 +149,9 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
         df = pd.merge_asof(df.sort_values("start_time"), liquidity, on="start_time", direction="backward")
         df["liquidity_score"] = df["liquidity_score"].ffill().fillna(0.0)
         df["spread_pct"] = df["spread_pct"].ffill().fillna(999.0)
-        df["is_eligible"] = df["is_eligible"].ffill().fillna(False)
+        # Nullable BooleanDtype убирает FutureWarning pandas о silent downcasting
+        # и сохраняет безопасное правило: неизвестная ликвидность не дает eligibility.
+        df["is_eligible"] = df["is_eligible"].astype("boolean").ffill().fillna(False).astype(bool)
     else:
         df["liquidity_score"] = 0.0
         df["spread_pct"] = 999.0
