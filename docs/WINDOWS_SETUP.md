@@ -211,3 +211,20 @@ setx LOKY_MAX_CPU_COUNT 4
 ```
 
 Затем откройте новый терминал и перезапустите сервер.
+
+### Если warning joblib/loky про wmic всё ещё появляется
+
+Используйте запуск через проектный launcher:
+
+```powershell
+python run.py
+```
+
+Launcher передает `LOKY_MAX_CPU_COUNT` в дочерний процесс Uvicorn, включая `--reload`. Автоматический дефолт меньше числа логических ядер, потому что значение, равное `os.cpu_count()`, в некоторых версиях joblib/loky не отключает проверку физических ядер через отсутствующий `wmic`.
+
+Для прямого запуска можно задать переменную вручную до старта сервера:
+
+```powershell
+$env:LOKY_MAX_CPU_COUNT="4"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```

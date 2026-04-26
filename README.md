@@ -494,3 +494,12 @@ setx LOKY_MAX_CPU_COUNT 4
 ```
 
 После `setx` нужно открыть новый терминал и перезапустить сервер.
+
+### Примечание по Windows и joblib/loky
+
+На Windows без `wmic` joblib/loky может печатать warning при определении физических ядер. Проект автоматически задает безопасный `LOKY_MAX_CPU_COUNT`; при запуске через `python run.py` это значение дополнительно передается в дочерний процесс Uvicorn/reloader. Если сервер запускается напрямую, можно явно указать:
+
+```powershell
+$env:LOKY_MAX_CPU_COUNT="4"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```

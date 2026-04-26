@@ -36,6 +36,20 @@ def _dotenv_value(key: str) -> str | None:
     return None
 
 
+def _safe_default_loky_cpu_count() -> int:
+    """
+    Возвращает дефолт, который не провоцирует loky на вызов отсутствующего wmic.
+
+    Если значение равно числу логических ядер, часть версий joblib/loky все равно
+    пытается определить физические ядра через wmic. Поэтому автоматический дефолт
+    намеренно меньше числа логических ядер и ограничен 4 потоками.
+    """
+    logical = max(1, os.cpu_count() or 1)
+    if logical <= 1:
+        return 1
+    return max(1, min(4, logical - 1))
+
+
 def _suppress_known_loky_warning() -> None:
     """Подавляет только известный warning loky об отсутствующем wmic на Windows."""
     warnings.filterwarnings(
@@ -43,6 +57,11 @@ def _suppress_known_loky_warning() -> None:
         message=r"Could not find the number of physical cores.*",
         category=UserWarning,
         module=r"joblib\.externals\.loky\.backend\.context",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Could not find the number of physical cores.*",
+        category=UserWarning,
     )
 
 
@@ -66,5 +85,5 @@ def configure_runtime_environment() -> None:
         or _parse_positive_int(_dotenv_value("LOKY_MAX_CPU_COUNT"))
         or _parse_positive_int(_dotenv_value("ML_MAX_CPU_COUNT"))
     )
-    cpu_count = explicit or max(1, os.cpu_count() or 1)
+    cpu_count = explicit or _safe_default_loky_cpu_count()
     os.environ["LOKY_MAX_CPU_COUNT"] = str(cpu_count)

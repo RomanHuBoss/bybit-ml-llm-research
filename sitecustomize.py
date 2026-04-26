@@ -37,6 +37,21 @@ def _dotenv_value(key: str) -> str | None:
     return None
 
 
+def _safe_default_loky_cpu_count() -> int:
+    """
+    Возвращает безопасный дефолт для joblib/loky на Windows.
+
+    Важно: если LOKY_MAX_CPU_COUNT равен числу логических ядер, loky все равно
+    может попытаться определить физические ядра через отсутствующий wmic. Поэтому
+    автоматический дефолт намеренно меньше os.cpu_count(), но не больше 4, чтобы
+    не создавать лишнюю нагрузку на локальный research-стенд.
+    """
+    logical = max(1, os.cpu_count() or 1)
+    if logical <= 1:
+        return 1
+    return max(1, min(4, logical - 1))
+
+
 def _configure_loky_cpu_count() -> None:
     """
     Защищает Windows-запуск от предупреждения joblib/loky об отсутствующем wmic.
@@ -52,7 +67,7 @@ def _configure_loky_cpu_count() -> None:
         or _parse_positive_int(_dotenv_value("LOKY_MAX_CPU_COUNT"))
         or _parse_positive_int(_dotenv_value("ML_MAX_CPU_COUNT"))
     )
-    os.environ["LOKY_MAX_CPU_COUNT"] = str(explicit or max(1, os.cpu_count() or 1))
+    os.environ["LOKY_MAX_CPU_COUNT"] = str(explicit or _safe_default_loky_cpu_count())
 
 
 def _suppress_known_loky_warning() -> None:
@@ -68,6 +83,11 @@ def _suppress_known_loky_warning() -> None:
         message=r"Could not find the number of physical cores.*",
         category=UserWarning,
         module=r"joblib\.externals\.loky\.backend\.context",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Could not find the number of physical cores.*",
+        category=UserWarning,
     )
 
 

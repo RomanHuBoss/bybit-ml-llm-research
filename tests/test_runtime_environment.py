@@ -11,7 +11,7 @@ def test_runtime_sets_loky_cpu_count_when_missing(monkeypatch):
 
     runtime.configure_runtime_environment()
 
-    assert runtime.os.environ["LOKY_MAX_CPU_COUNT"] == "8"
+    assert runtime.os.environ["LOKY_MAX_CPU_COUNT"] == "4"
 
 
 def test_runtime_preserves_explicit_loky_cpu_count(monkeypatch):

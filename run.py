@@ -53,10 +53,42 @@ def env_value(key: str, default: str) -> str:
     return os.getenv(key) or file_values.get(key) or default
 
 
+
+def _parse_positive_int(raw: str | None) -> int | None:
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def safe_default_loky_cpu_count() -> str:
+    """Возвращает дефолт, который не запускает wmic-проверку joblib/loky."""
+    logical = max(1, os.cpu_count() or 1)
+    if logical <= 1:
+        return "1"
+    return str(max(1, min(4, logical - 1)))
+
+
+def subprocess_env() -> dict[str, str]:
+    """Готовит окружение для дочерних процессов, включая uvicorn --reload."""
+    env = os.environ.copy()
+    file_values = parse_env_file(PROJECT_ROOT / ".env")
+    configured = (
+        _parse_positive_int(env.get("LOKY_MAX_CPU_COUNT"))
+        or _parse_positive_int(file_values.get("LOKY_MAX_CPU_COUNT"))
+        or _parse_positive_int(env.get("ML_MAX_CPU_COUNT"))
+        or _parse_positive_int(file_values.get("ML_MAX_CPU_COUNT"))
+    )
+    env["LOKY_MAX_CPU_COUNT"] = str(configured) if configured else safe_default_loky_cpu_count()
+    return env
+
 def run_command(command: list[str]) -> int:
     printable = " ".join(command)
     print(f"\n$ {printable}")
-    return subprocess.run(command, cwd=str(PROJECT_ROOT), check=False).returncode
+    return subprocess.run(command, cwd=str(PROJECT_ROOT), check=False, env=subprocess_env()).returncode
 
 
 def command_server(args: argparse.Namespace) -> int:

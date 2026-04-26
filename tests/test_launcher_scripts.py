@@ -67,3 +67,28 @@ def test_run_db_check_command_uses_app_module(monkeypatch):
 
     assert rc == 0
     assert captured == [["python", "-m", "app.db_check"]]
+
+
+def test_run_subprocess_env_sets_safe_loky_default(monkeypatch):
+    import run
+
+    monkeypatch.delenv("LOKY_MAX_CPU_COUNT", raising=False)
+    monkeypatch.delenv("ML_MAX_CPU_COUNT", raising=False)
+    monkeypatch.setattr(run, "parse_env_file", lambda _path: {})
+    monkeypatch.setattr(run.os, "cpu_count", lambda: 8)
+
+    env = run.subprocess_env()
+
+    assert env["LOKY_MAX_CPU_COUNT"] == "4"
+
+
+def test_run_subprocess_env_uses_ml_max_cpu_count(monkeypatch):
+    import run
+
+    monkeypatch.delenv("LOKY_MAX_CPU_COUNT", raising=False)
+    monkeypatch.setenv("ML_MAX_CPU_COUNT", "2")
+    monkeypatch.setattr(run, "parse_env_file", lambda _path: {})
+
+    env = run.subprocess_env()
+
+    assert env["LOKY_MAX_CPU_COUNT"] == "2"
