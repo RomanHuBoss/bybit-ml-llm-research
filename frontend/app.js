@@ -589,18 +589,52 @@ function isEntryRecommendation(item) {
     && item?.mtf_is_entry_candidate !== false;
 }
 
+function candidateSortValue(item) {
+  const priority = { review: 3, watch: 2, reject: 1 };
+  return [
+    priority[item?.decision?.level] || 0,
+    num(item?.decision?.score, 0),
+    num(item?.confidence, 0),
+    num(item?.profit_factor, 0),
+    -num(item?.max_drawdown, 999),
+    num(item?.win_rate, 0),
+  ];
+}
+
+function compareCandidates(a, b) {
+  const left = candidateSortValue(a);
+  const right = candidateSortValue(b);
+  for (let i = 0; i < left.length; i += 1) {
+    const diff = right[i] - left[i];
+    if (diff) return diff;
+  }
+  return String(a?.symbol || '').localeCompare(String(b?.symbol || ''));
+}
+
+function dedupeCandidatesByMarket(items) {
+  const bestByMarket = new Map();
+  items.forEach((item) => {
+    const symbol = String(item?.symbol || '').toUpperCase().trim();
+    if (!symbol) return;
+    const key = `${symbol}|${String(item?.interval || item?.mtf_entry_interval || '').toUpperCase()}`;
+    const current = bestByMarket.get(key);
+    if (!current || compareCandidates(item, current) < 0) {
+      bestByMarket.set(key, { ...item, variant_count: 1 });
+      return;
+    }
+    current.variant_count = num(current.variant_count, 1) + 1;
+  });
+  return Array.from(bestByMarket.values());
+}
+
 function candidates() {
   const source = state.signals.length ? state.signals.map(enrichedSignal) : state.rank.map(withLlmFields);
   const mapped = source
     .filter(isEntryRecommendation)
     .map((item) => ({ ...withLlmFields(item), decision: decisionFor(item) }));
-  mapped.sort((a, b) => {
-    const priority = { review: 3, watch: 2, reject: 1 };
-    const levelDiff = (priority[b.decision.level] || 0) - (priority[a.decision.level] || 0);
-    if (levelDiff) return levelDiff;
-    return (b.decision.score || 0) - (a.decision.score || 0);
-  });
-  return mapped;
+  const unique = dedupeCandidatesByMarket(mapped);
+  unique.sort(compareCandidates);
+  return unique;
 }
 
 function selectedCandidate() {
@@ -745,25 +779,29 @@ function renderQueue() {
   }
   queue.className = 'candidate-queue';
   const selectedId = selectedCandidate()?.id;
+  const rawTotal = state.signals.length ? state.signals.filter(isEntryRecommendation).length : state.rank.filter(isEntryRecommendation).length;
   queue.innerHTML = filtered.map((s) => {
     const selected = Number(s.id) === Number(selectedId);
     const decisionLevel = cssToken(s.decision.level, 'reject');
-    const directionToken = cssToken(s.direction, 'flat');
     const label = escapeHtml(s.decision.label);
+    const variants = num(s.variant_count, 1) > 1 ? ` · ${num(s.variant_count, 1)} вариантов` : '';
     return `
       <article class="candidate ${decisionLevel} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
         <span class="candidate-star" aria-hidden="true">☆</span>
         <div class="candidate-copy">
-          <div class="candidate-title">
-            <span class="symbol">${escapeHtml(s.symbol)} <span>${escapeHtml(s.interval || '—')}m</span></span>
-            <span class="badge ${decisionLevel}">${label}</span>
-          </div>
-          <div class="candidate-meta"><span class="direction-${directionToken}">${escapeHtml(String(s.direction || 'flat').toUpperCase())}</span> · ${escapeHtml(STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия')}</div>
+          <span class="symbol">${escapeHtml(s.symbol)}</span>
+          <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)}</span>
         </div>
+        <span class="badge ${decisionLevel}">${label}</span>
         <span class="candidate-score">${s.decision.score}</span>
         <span class="candidate-chevron" aria-hidden="true">›</span>
       </article>`;
   }).join('');
+  const moreButton = document.querySelector('.queue-more');
+  if (moreButton) {
+    const hiddenDuplicates = Math.max(0, rawTotal - list.length);
+    moreButton.innerHTML = `${hiddenDuplicates ? `Уникальные рынки: ${list.length}; скрыто дублей: ${hiddenDuplicates}` : 'Открыть полный список'} <span>›</span>`;
+  }
   queue.querySelectorAll('.candidate').forEach((card) => {
     const select = () => {
       const parsedId = Number(card.dataset.id);

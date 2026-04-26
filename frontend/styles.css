@@ -293,3 +293,63 @@ th { color: #526176; background: var(--surface-soft); font-weight: 800; }
 .badge.watch { background: var(--amber-soft); color: var(--amber); }
 .badge.review { background: var(--green-soft); color: var(--green); }
 .badge.neutral { background: #eef2f6; color: #475467; }
+
+/* v6: три основные рабочие панели должны восприниматься как одна строка одинаковой высоты.
+   Лишний контент уходит во внутренний скролл, а не растягивает сетку и не ломает низ страницы. */
+.queue-panel, .ticket, .mtf-panel {
+  height: clamp(430px, 45vh, 560px);
+  min-height: 430px;
+  max-height: 560px;
+  display: flex;
+  flex-direction: column;
+}
+.ticket-body, .mtf-matrix {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.candidate-queue {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.candidate {
+  grid-template-columns: 24px minmax(116px,1fr) minmax(88px,112px) 48px 20px;
+}
+.candidate-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.candidate-copy .symbol {
+  color: var(--ink);
+  font-weight: 840;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.candidate-timeframe {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.candidate .badge {
+  justify-self: start;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ticket .execution-plan {
+  margin-bottom: 2px;
+}
+@media (max-width: 1320px) {
+  .queue-panel, .ticket, .mtf-panel {
+    height: auto;
+    max-height: none;
+  }
+}

@@ -754,3 +754,18 @@ POST /api/llm/background/run-now
 - полноширинная раскрываемая панель `Операции с данными` с корректным `aria-expanded` и явной кнопкой сворачивания;
 - отдельные рабочие карточки `Trade Sheet`, `MTF Consensus`, `Risk & Evidence`, `News & Sentiment`, `Protocol`;
 - отдельное обновление очереди и сохранение busy-lock только для API-операций.
+
+### UI v6: выравнивание рабочих панелей и чистая очередь
+
+В последней версии frontend дополнительно исправлены два пользовательских дефекта:
+
+- `Candidate Queue`, `Trade Sheet` и `MTF Consensus` имеют одинаковую высоту в основной рабочей строке; переполнение данных прокручивается внутри соответствующей панели.
+- `Candidate Queue` дедуплицирует рекомендации по `symbol + interval`, оставляя лучший вариант рынка по приоритету решения, score, confidence, profit factor, drawdown и win rate. Если backend вернул несколько вариантов одного рынка, footer очереди показывает число скрытых дублей.
+
+Проверка:
+
+```text
+node --check frontend/app.js — OK
+direct frontend regression runner — OK, 10/10
+python -S -m compileall -q app tests run.py install.py sitecustomize.py — OK
+```

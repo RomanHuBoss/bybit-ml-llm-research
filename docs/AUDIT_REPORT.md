@@ -581,3 +581,28 @@ node --check frontend/app.js — OK
 python -S -m compileall -q app tests run.py install.py sitecustomize.py — OK
 static_frontend_checks — OK
 ```
+
+## Дополнение: UI v6
+
+После проверки скриншота реального состояния интерфейса исправлены два эксплуатационных UX-дефекта.
+
+### High
+
+1. **Основные панели имели разную высоту.** `Candidate Queue`, `Trade Sheet`, `MTF Consensus` визуально не образовывали единую рабочую строку. Исправлено CSS-ограничением одинаковой высоты и внутренним скроллингом содержимого.
+2. **Очередь кандидатов могла быть забита дублями одной валютной пары.** Причина — несколько стратегических вариантов одного `symbol + interval` попадали в операторскую очередь как отдельные строки. Исправлено frontend-дедупликацией с выбором лучшего варианта.
+
+### Что изменено
+
+- `frontend/styles.css`: добавлена единая высота трех основных панелей, внутренний скроллинг, новая колонная структура строки кандидата.
+- `frontend/app.js`: добавлены `candidateSortValue()`, `compareCandidates()`, `dedupeCandidatesByMarket()`; очередь теперь отображает уникальные рынки и показывает число скрытых дублей.
+- `tests/test_frontend_decision_ui.py`: добавлены regression-проверки равной высоты панелей и дедупликации очереди.
+
+### Проверка
+
+```text
+node --check frontend/app.js — OK
+direct frontend regression runner — OK, 10/10
+python -S -m compileall -q app tests run.py install.py sitecustomize.py — OK
+```
+
+Ограничение: полноценный browser e2e/visual-regression suite через Playwright/Cypress по-прежнему не добавлен; текущая проверка фиксирует структуру, JS-синтаксис и frontend-инварианты.

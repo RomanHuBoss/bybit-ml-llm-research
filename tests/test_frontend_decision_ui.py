@@ -121,7 +121,7 @@ def test_frontend_has_light_fintech_redesign_and_sidebar():
         ".decision-board",
         ".support-grid",
         ".candidate",
-        "grid-template-columns: 24px minmax(0,1fr) 112px 48px 20px",
+        "grid-template-columns: 24px minmax(116px,1fr) minmax(88px,112px) 48px 20px",
         ".ops-panel:not(.open) .ops-body",
         ".ops-body",
         "grid-template-columns: minmax(220px,1.7fr)",
@@ -209,3 +209,29 @@ def test_frontend_does_not_disable_navigation_during_long_operations():
     assert "document.querySelectorAll('button').forEach" not in js
     assert "document.querySelectorAll('button[data-busy-lock=\"true\"]')" in js
     assert "if (document.body.classList.contains('is-busy')) return;" in js
+
+
+def test_frontend_equalizes_main_operator_panels_and_deduplicates_queue():
+    css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    required_css = [
+        ".queue-panel, .ticket, .mtf-panel",
+        "height: clamp(430px, 45vh, 560px)",
+        ".ticket-body, .mtf-matrix",
+        "overflow-y: auto",
+        "grid-template-columns: 24px minmax(116px,1fr) minmax(88px,112px) 48px 20px",
+    ]
+    for fragment in required_css:
+        assert fragment in css
+
+    required_js = [
+        "function dedupeCandidatesByMarket",
+        "function compareCandidates",
+        "variant_count",
+        "Уникальные рынки",
+        "скрыто дублей",
+        "const unique = dedupeCandidatesByMarket(mapped)",
+    ]
+    for fragment in required_js:
+        assert fragment in js
