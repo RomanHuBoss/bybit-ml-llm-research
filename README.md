@@ -175,9 +175,10 @@ bybit_ml_llm_research_lab/
 Создайте БД и пользователя. Команды одинаковы по смыслу для Windows/Linux, выполняются в `psql` от пользователя с правами администратора PostgreSQL:
 
 ```sql
-CREATE DATABASE bybit_lab;
 CREATE USER bybit_lab_user WITH PASSWORD 'change_me';
+CREATE DATABASE bybit_lab OWNER bybit_lab_user;
 GRANT ALL PRIVILEGES ON DATABASE bybit_lab TO bybit_lab_user;
+\connect bybit_lab
 GRANT ALL ON SCHEMA public TO bybit_lab_user;
 ALTER SCHEMA public OWNER TO bybit_lab_user;
 ```
@@ -213,6 +214,7 @@ POSTGRES_PASSWORD=change_me
 ### 4. Инициализация БД
 
 ```bash
+python run.py db-check
 python run.py init-db
 ```
 
@@ -221,6 +223,15 @@ python run.py init-db
 ```bash
 python install.py --init-db
 ```
+
+
+Если на Windows при `init-db` появляется `UnicodeDecodeError: 'utf-8' codec can't decode byte ...`, это обычно не ошибка `schema.sql`, а маскировка исходной ошибки подключения PostgreSQL в локальной кодировке Windows. Сначала выполните:
+
+```bash
+python run.py db-check
+```
+
+Затем проверьте через `psql` тот же хост, порт, базу и пользователя. Для локальной разработки лучше использовать ASCII-пароль без кириллицы и сохранить `.env` в UTF-8.
 
 ### 5. Запуск
 
@@ -254,6 +265,7 @@ python run.py init-db         # применить sql/schema.sql
 python run.py test            # pytest -q
 python run.py check           # compileall + pytest -q
 python run.py doctor          # диагностика путей, .env и параметров запуска
+python run.py db-check        # проверка подключения к PostgreSQL
 ```
 
 PowerShell helper'ы в `scripts/` сохранены для совместимости, но основной путь запуска теперь кроссплатформенный.

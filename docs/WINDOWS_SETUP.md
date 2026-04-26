@@ -21,8 +21,8 @@ py -3.11 --version
 Установите PostgreSQL 15/16/17 для Windows. Создайте базу:
 
 ```sql
-CREATE DATABASE bybit_lab;
 CREATE USER bybit_lab_user WITH PASSWORD 'change_me';
+CREATE DATABASE bybit_lab OWNER bybit_lab_user;
 GRANT ALL PRIVILEGES ON DATABASE bybit_lab TO bybit_lab_user;
 ```
 
@@ -73,8 +73,18 @@ CRYPTOPANIC_TOKEN=
 ## 5. Инициализация БД
 
 ```powershell
+python run.py db-check
 python run.py init-db
 ```
+
+
+Если при `init-db` появляется `UnicodeDecodeError: 'utf-8' codec can't decode byte ...`, сначала выполните:
+
+```powershell
+python run.py db-check
+```
+
+Чаще всего это неверный пароль/пользователь, отсутствующая база или незапущенный PostgreSQL, а `psycopg2` на Windows показывает ошибку кодировки вместо исходного текста PostgreSQL. Для локальной разработки используйте ASCII-пароль, например `change_me`, и сохраняйте `.env` в UTF-8.
 
 ## 6. Запуск
 

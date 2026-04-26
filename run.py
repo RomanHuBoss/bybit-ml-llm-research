@@ -106,8 +106,16 @@ def command_doctor(args: argparse.Namespace) -> int:
     print(f"APP_HOST: {env_value('APP_HOST', '127.0.0.1')}")
     print(f"APP_PORT: {env_value('APP_PORT', '8000')}")
     print(f"POSTGRES_HOST: {env_value('POSTGRES_HOST', 'localhost')}")
+    print(f"POSTGRES_PORT: {env_value('POSTGRES_PORT', '5432')}")
     print(f"POSTGRES_DB: {env_value('POSTGRES_DB', 'bybit_lab')}")
+    print(f"POSTGRES_USER: {env_value('POSTGRES_USER', 'bybit_lab_user')}")
+    if getattr(args, "db_check", False):
+        return run_command([py, "-m", "app.db_check"])
     return 0
+
+
+def command_db_check(args: argparse.Namespace) -> int:
+    return run_command([runtime_python(args.no_venv), "-m", "app.db_check"])
 
 
 def parse_args() -> argparse.Namespace:
@@ -137,7 +145,12 @@ def parse_args() -> argparse.Namespace:
 
     doctor = subparsers.add_parser("doctor", help="Показать диагностическую информацию запуска.")
     doctor.add_argument("--no-venv", action="store_true", help="Использовать текущий Python вместо .venv.")
+    doctor.add_argument("--db-check", action="store_true", help="Дополнительно проверить подключение к PostgreSQL.")
     doctor.set_defaults(func=command_doctor)
+
+    db_check = subparsers.add_parser("db-check", help="Проверить подключение к PostgreSQL из .env.")
+    db_check.add_argument("--no-venv", action="store_true", help="Использовать текущий Python вместо .venv.")
+    db_check.set_defaults(func=command_db_check)
 
     args = parser.parse_args()
     if args.command is None:

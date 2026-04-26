@@ -48,3 +48,22 @@ def test_run_venv_python_path_detects_linux_layout(tmp_path):
     python_file.write_text("", encoding="utf-8")
 
     assert run.venv_python_path(tmp_path / ".venv") == python_file
+
+
+def test_run_db_check_command_uses_app_module(monkeypatch):
+    import argparse
+    import run
+
+    captured: list[list[str]] = []
+
+    def fake_run_command(command: list[str]) -> int:
+        captured.append(command)
+        return 0
+
+    monkeypatch.setattr(run, "run_command", fake_run_command)
+    monkeypatch.setattr(run, "runtime_python", lambda no_venv=False: "python")
+
+    rc = run.command_db_check(argparse.Namespace(no_venv=False))
+
+    assert rc == 0
+    assert captured == [["python", "-m", "app.db_check"]]
