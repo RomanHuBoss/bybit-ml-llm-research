@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bybit Research Lab — operator workstation</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=compact-v8" />
 </head>
-<body>
+<body class="compact-ui layout-v8">
   <div class="app-frame">
     <nav class="side-nav" aria-label="Основная навигация">
       <div class="side-logo" aria-label="Bybit Research">BYB</div>
@@ -24,7 +24,7 @@
           <button type="button" id="navToggleBtn" class="menu-button" aria-label="Свернуть меню" aria-pressed="false">☰</button>
           <div class="brand-copy">
             <h1>Рабочее место оператора</h1>
-            <p>15m entry · 60m bias · 240m regime</p>
+            <p>15m · 60m · 240m</p>
           </div>
         </div>
         <div class="top-status" aria-label="Состояние сервисов">
@@ -93,7 +93,7 @@
           <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
         </article>
 
-        <section class="panel ops-panel open" id="opsPanel">
+        <section class="panel ops-panel" id="opsPanel">
           <button id="opsToggleBtn" class="ops-toggle" type="button" aria-expanded="true" aria-controls="opsBody">
             <span class="ops-title"><span class="ops-icon">◉</span>Операции с данными</span>
             <span class="ops-helper" id="opsHelper">Панель развернута. Нажмите, чтобы свернуть.</span>
@@ -203,6 +203,6 @@
       </ol>
     </form>
   </dialog>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=compact-v8"></script>
 </body>
 </html>
