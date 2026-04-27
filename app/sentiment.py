@@ -69,13 +69,13 @@ def _news_url(source: str, title: str, url: str | None, published_at: datetime |
     return value or _stable_synthetic_url(source, title, published_at)
 
 
-def _safe_get_json(url: str, params: dict[str, Any] | None = None, timeout: int = 30) -> dict[str, Any]:
+def _safe_get_json(url: str, params: dict[str, Any] | None = None, timeout: int = 5) -> dict[str, Any]:
     response = requests.get(url, params=params, timeout=timeout, headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"})
     response.raise_for_status()
     return response.json()
 
 
-def _safe_get_text(url: str, timeout: int = 30) -> str:
+def _safe_get_text(url: str, timeout: int = 5) -> str:
     response = requests.get(url, timeout=timeout, headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"})
     response.raise_for_status()
     return response.text
@@ -163,7 +163,7 @@ def fetch_gdelt_news(symbol: str, days: int = 2, maxrecords: int = 75) -> list[d
     timespan = f"{max(1, days)}d"
     url = f"https://api.gdeltproject.org/api/v2/doc/doc?query={query}&mode=artlist&format=json&maxrecords={maxrecords}&timespan={timespan}"
     try:
-        payload = _safe_get_json(url, timeout=40)
+        payload = _safe_get_json(url, timeout=5)
         return payload.get("articles", [])
     except Exception as exc:
         logger.warning("GDELT sync failed for %s: %s", symbol, exc)
@@ -244,7 +244,7 @@ def sync_rss_news(symbols: list[str], use_llm: bool = False) -> dict[str, int]:
         if not url:
             continue
         try:
-            xml = _safe_get_text(url, timeout=35)
+            xml = _safe_get_text(url, timeout=5)
             root = ET.fromstring(xml)
         except Exception as exc:
             logger.warning("RSS source %s failed: %s", name, exc)
@@ -290,7 +290,7 @@ def sync_cryptopanic(symbol: str, use_llm: bool = False) -> int:
     base = _base_symbol(symbol)
     params = {"auth_token": settings.cryptopanic_token, "currencies": base, "filter": "hot", "public": "true"}
     try:
-        payload = _safe_get_json("https://cryptopanic.com/api/developer/v2/posts/", params=params, timeout=40)
+        payload = _safe_get_json("https://cryptopanic.com/api/developer/v2/posts/", params=params, timeout=5)
     except Exception as exc:
         logger.warning("CryptoPanic sync failed for %s: %s", symbol, exc)
         return 0

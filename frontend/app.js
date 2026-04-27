@@ -138,6 +138,20 @@ function dt(value) {
   return Number.isNaN(d.getTime()) ? escapeHtml(value) : d.toLocaleString();
 }
 
+function compactDateTime(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function ageMinutes(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.max(0, Math.round((Date.now() - d.getTime()) / 60_000));
+}
+
 function ageText(value) {
   if (!value) return 'нет времени';
   const d = new Date(value);
@@ -149,6 +163,7 @@ function ageText(value) {
 }
 
 const DEFAULT_API_TIMEOUT_MS = 45_000;
+const SENTIMENT_OPERATION_TIMEOUT_MS = 120_000;
 const LONG_OPERATION_TIMEOUT_MS = 360_000;
 
 function marketSyncTimeoutMs() {
@@ -425,26 +440,37 @@ function llmToneFromText(text) {
   return 'warn';
 }
 
-function compactLlmLabel(tone) {
-  if (tone === 'ok') return 'Да, вход подтверждаю';
-  if (tone === 'warn') return 'Наблюдать, вход не подтверждаю';
-  if (tone === 'fail') return 'Нет, вход не подтверждаю';
-  if (tone === 'error') return 'LLM недоступен';
-  return 'LLM ожидается';
+function llmEntryIntent(tone) {
+  return tone === 'ok';
 }
 
-function compactLlmSummary(brief, tone) {
-  const lines = String(brief || '')
-    .split('\n')
-    .map((line) => cleanLlmText(line))
-    .filter(Boolean)
-    .filter((line) => !/^((ВЕРДИКТ|VERDICT|LLM[-\s]*VERDICT|РЕШЕНИЕ)\s*[:：—-])/i.test(line));
-  const firstReason = lines[0] ? truncateText(lines[0].replace(/^(причина|почему)\s*[:：—-]\s*/i, ''), 96) : '';
-  if (firstReason) return `Причина: ${firstReason}`;
-  if (tone === 'ok') return 'LLM допускает ручной вход после проверки стакана и риска.';
-  if (tone === 'warn') return 'LLM рекомендует только наблюдение; вход в бота не подтвержден.';
-  if (tone === 'fail') return 'LLM не подтверждает вход; передачу в бота заблокировать.';
-  return 'Краткий LLM-вердикт пока не получен.';
+function algorithmEntryIntent(s) {
+  if (!s) return false;
+  return decisionFor(s).level === 'review';
+}
+
+function llmAgreementText(tone, s) {
+  if (!s || ['pending', 'error'].includes(tone)) return 'Согласованность: нет данных';
+  const llmEntry = llmEntryIntent(tone);
+  const algorithmEntry = algorithmEntryIntent(s);
+  return llmEntry === algorithmEntry ? 'С алгоритмом: согласован' : 'С алгоритмом: не согласован';
+}
+
+function llmLifeText(updatedAt) {
+  const minutes = ageMinutes(updatedAt);
+  const ttl = num(state.llmStatus?.ttl_minutes, 60) || 60;
+  if (minutes === null) return `TTL: ${ttl} мин`;
+  const left = Math.max(0, ttl - minutes);
+  const freshness = minutes < 60 ? `${minutes} мин назад` : `${(minutes / 60).toFixed(1)} ч назад`;
+  return `обновлено ${freshness} · жизнь ${left} мин`;
+}
+
+function compactLlmLabel(tone) {
+  if (tone === 'ok') return 'Вход подтверждаю';
+  if (tone === 'warn') return 'Наблюдать';
+  if (tone === 'fail') return 'Вход не подтверждаю';
+  if (tone === 'error') return 'LLM недоступен';
+  return 'LLM ожидается';
 }
 
 function llmVerdictFor(s) {
@@ -453,8 +479,8 @@ function llmVerdictFor(s) {
       tone: 'pending',
       label: 'LLM ожидается',
       symbol: '—',
-      summary: 'Выберите кандидата для краткого вердикта.',
-      meta: 'Фоновый LLM — независимый риск-фильтр.',
+      summary: 'Согласованность: нет данных',
+      meta: 'TTL: —',
     };
   }
   const symbol = String(s.symbol || '—').toUpperCase();
@@ -463,7 +489,7 @@ function llmVerdictFor(s) {
       tone: 'pending',
       label: 'LLM анализирует',
       symbol,
-      summary: 'Оценка выполняется в фоне.',
+      summary: 'Согласованность: расчет выполняется',
       meta: `${symbol} · ${s.interval || '—'} · ${s.llm_model || 'модель не указана'}`,
     };
   }
@@ -472,8 +498,8 @@ function llmVerdictFor(s) {
       tone: 'error',
       label: compactLlmLabel('error'),
       symbol,
-      summary: truncateText(s.llm_error || 'LLM endpoint недоступен.', 96),
-      meta: `${symbol} · оценка не получена`,
+      summary: 'Согласованность: нет данных',
+      meta: `${symbol} · ошибка оценки`,
     };
   }
   if (s.llm_status === 'ok' && s.llm_brief) {
@@ -484,16 +510,16 @@ function llmVerdictFor(s) {
       tone,
       label: compactLlmLabel(tone),
       symbol,
-      summary: compactLlmSummary(s.llm_brief, tone),
-      meta: `${symbol} · ${llmStateText(s).replace('LLM: ', '')} · ${s.llm_model || 'model'}`,
+      summary: llmAgreementText(tone, s),
+      meta: `${symbol} · ${llmLifeText(s.llm_updated_at)}`,
     };
   }
   return {
     tone: 'pending',
     label: 'LLM ожидается',
     symbol,
-    summary: 'Для этого символа ещё нет сохраненного LLM-вердикта.',
-    meta: `${symbol} · ${s.interval || '—'} · ${String(s.strategy || 'strategy')}`,
+    summary: 'Согласованность: нет данных',
+    meta: `${symbol} · LLM ещё не оценивал сетап`,
   };
 }
 
@@ -581,7 +607,7 @@ function checklistFor(s) {
       key: 'llm',
       status: s.llm_status === 'ok' ? (llmVerdictFor(s).tone === 'fail' ? 'warn' : 'pass') : 'warn',
       title: s.llm_status === 'ok' ? `LLM‑вердикт: ${llmVerdictFor(s).label}` : s.llm_status === 'running' ? 'LLM‑оценка выполняется' : 'LLM‑оценка ожидается',
-      text: `${llmStateText(s)}. ${llmVerdictFor(s).summary} Фоновый LLM — независимый риск‑разбор, не торговый приказ.`,
+      text: `${llmVerdictFor(s).summary}. ${llmVerdictFor(s).meta}. Фоновый LLM — независимый риск‑фильтр, не торговый приказ.`,
     },
   ];
 }
@@ -887,30 +913,11 @@ function renderBrief(s) {
     return;
   }
   const verdict = llmVerdictFor(s);
-  if (s.llm_status === 'ok' && s.llm_brief) {
-    box.textContent = `${verdict.symbol} · ${verdict.label}
+  box.textContent = `${verdict.symbol} · ${verdict.label}
+${verdict.summary}
 ${verdict.meta}
 
-${s.llm_brief}`;
-    return;
-  }
-  if (s.llm_status === 'running') {
-    box.textContent = `${verdict.symbol} · ${verdict.label}
-
-${verdict.summary}`;
-    return;
-  }
-  if (s.llm_status === 'error') {
-    box.textContent = `${verdict.symbol} · ${verdict.label}
-
-${verdict.summary}
-Это не блокирует приложение, но сетап нельзя считать полностью разобранным.`;
-    return;
-  }
-  box.textContent = `${verdict.symbol} · ${verdict.label}
-
-${verdict.summary}
-LLM‑оценка ещё не готова. Фоновый сервис периодически берет top‑кандидатов из очереди и сохраняет вердикт без ручного запроса.`;
+Фоновый LLM — независимый риск‑фильтр. Он не создает торговый приказ и не заменяет ручную проверку.`;
 }
 
 function renderQueue() {
@@ -994,7 +1001,7 @@ function renderRawTable(list = candidates()) {
 async function refreshStatus() {
   const data = await api('/api/status');
   state.status = data;
-  $('statusBox').textContent = `OK · DB ${data.db_time || '—'}`;
+  $('statusBox').textContent = `DB · ${compactDateTime(data.db_time)}`;
   $('statusBox').className = 'status ok';
   $('kpiCandles').textContent = data.candles ?? '—';
 }
@@ -1007,12 +1014,12 @@ async function refreshSignalStatus() {
     const status = state.signalStatus || {};
     const cycle = status.last_cycle || {};
     const text = status.enabled
-      ? `Signals: ${status.running ? 'обновляются' : 'фон'} · TF ${(status.intervals || []).join('/') || '—'} · cycle ${status.cycle_no || 0} · upsert ${cycle.signals_upserted ?? 0}`
-      : 'Signals: авто выкл';
+      ? `Signals · ${(status.intervals || []).join('/') || '—'} · +${cycle.signals_upserted ?? 0}`
+      : 'Signals · OFF';
     $('signalStatusBox').textContent = status.last_error ? `Signals: ошибка · ${status.last_error}` : text;
     $('signalStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
   } catch (e) {
-    $('signalStatusBox').textContent = 'Signals: статус недоступен';
+    $('signalStatusBox').textContent = 'Signals · error';
     $('signalStatusBox').className = 'status error';
   }
 }
@@ -1025,12 +1032,12 @@ async function refreshBacktestStatus() {
     const status = state.backtestStatus || {};
     const summary = state.backtestSummary || {};
     const text = status.enabled
-      ? `Backtest: авто · свежих ${summary.fresh_runs || 0}/${summary.total || 0} · след. ${dt(status.next_run_at)}`
-      : 'Backtest: авто выключен';
+      ? `BT · ${summary.fresh_runs || 0}/${summary.total || 0} · ${compactDateTime(status.next_run_at)}`
+      : 'BT · OFF';
     $('backtestStatusBox').textContent = text;
     $('backtestStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
   } catch (e) {
-    $('backtestStatusBox').textContent = 'Backtest: статус недоступен';
+    $('backtestStatusBox').textContent = 'BT · error';
     $('backtestStatusBox').className = 'status error';
   }
 }
@@ -1045,12 +1052,12 @@ async function refreshLlmStatus() {
     const status = state.llmStatus || {};
     const summary = state.llmSummary || {};
     const text = status.enabled
-      ? `LLM: авто · ok ${summary.ok || 0}/${summary.total || 0} · след. ${dt(status.next_run_at)}`
-      : 'LLM: авто выключен';
+      ? `LLM · ${summary.ok || 0}/${summary.total || 0} · ${compactDateTime(status.next_run_at)}`
+      : 'LLM · OFF';
     $('llmStatusBox').textContent = text;
     $('llmStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
   } catch (e) {
-    $('llmStatusBox').textContent = `LLM: статус недоступен`;
+    $('llmStatusBox').textContent = `LLM · error`;
     $('llmStatusBox').className = 'status error';
   }
 }
@@ -1239,10 +1246,11 @@ function bindControls() {
   $('syncSentimentBtn').onclick = async () => {
     await runOperation('Sentiment synced', async () => {
       validateInputs({ requireSymbols: true });
+      showOperationStatus('Выполняется: обновление sentiment. Источники ограничены короткими таймаутами.', 'busy');
       const data = await api('/api/sync/sentiment', {
         method: 'POST',
         body: JSON.stringify({ symbols: symbols(), days: 7, use_llm: false, category: $('category').value, interval: primaryInterval(), intervals: intervals() }),
-      });
+      }, SENTIMENT_OPERATION_TIMEOUT_MS);
       await refreshNews();
       return data.result;
     });
@@ -1410,6 +1418,7 @@ function bindControls() {
     frame?.classList.toggle('nav-collapsed', collapsed);
     document.body.classList.toggle('nav-collapsed', collapsed);
     $('navToggleBtn').setAttribute('aria-pressed', collapsed ? 'true' : 'false');
+    $('navToggleBtn').setAttribute('aria-label', collapsed ? 'Показать меню' : 'Свернуть меню');
   });
 }
 
