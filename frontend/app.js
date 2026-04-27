@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+document.body.classList.add('compact-ui');
 
 const state = {
   status: null,
@@ -996,9 +997,18 @@ async function refreshNews() {
   try {
     const s = await api(`/api/sentiment/summary?symbol=${encodeURIComponent(sym)}&limit=6`);
     const score = s.result?.score ?? s.result?.summary_score ?? null;
-    $('sentimentSummary').textContent = score === null || score === undefined ? sym : `${sym}: ${fmt(score, 3)}`;
+    const scoreText = score === null || score === undefined ? '—' : fmt(score, 3);
+    $('sentimentSummary').textContent = score === null || score === undefined ? sym : `${sym}: ${scoreText}`;
+    setText('marketSymbolBox', sym);
+    setText('marketSentimentBox', scoreText);
+    setText('marketNewsCountBox', String(state.news.length));
+    setText('marketMoodBox', score === null || score === undefined ? 'ожидание' : score > 0.12 ? 'позитивный' : score < -0.12 ? 'негативный' : 'нейтральный');
   } catch (e) {
     $('sentimentSummary').textContent = 'sentiment недоступен';
+    setText('marketSymbolBox', sym);
+    setText('marketSentimentBox', 'н/д');
+    setText('marketNewsCountBox', String(state.news.length));
+    setText('marketMoodBox', 'недоступен');
   }
 }
 
@@ -1177,6 +1187,27 @@ function bindControls() {
     });
   };
 
+  document.querySelector('.queue-more')?.addEventListener('click', () => {
+    openTechnicalDetails();
+    scrollToElement('technicalDetails');
+  });
+
+  $('editSelectedBtn')?.addEventListener('click', () => {
+    setOpsPanelOpen(true);
+    scrollToElement('opsPanel');
+    $('strategy')?.focus();
+  });
+
+  $('refreshTicketBtn')?.addEventListener('click', async () => {
+    await runOperation('Обновление выбранного сетапа', async () => {
+      await refreshRank();
+      await refreshSignals();
+      await refreshLlmStatus();
+      await refreshNews();
+      return { ok: true, selected: selectedCandidate()?.symbol || null };
+    });
+  });
+
   $('opsToggleBtn').addEventListener('click', toggleOpsPanel);
 
   document.addEventListener('keydown', (event) => {
@@ -1225,7 +1256,9 @@ function bindControls() {
   });
 
   $('navToggleBtn')?.addEventListener('click', () => {
-    const collapsed = !document.body.classList.contains('nav-collapsed');
+    const frame = document.querySelector('.app-frame');
+    const collapsed = !frame?.classList.contains('nav-collapsed');
+    frame?.classList.toggle('nav-collapsed', collapsed);
     document.body.classList.toggle('nav-collapsed', collapsed);
     $('navToggleBtn').setAttribute('aria-pressed', collapsed ? 'true' : 'false');
   });
@@ -1233,6 +1266,7 @@ function bindControls() {
 
 bindControls();
 setContextTab(state.contextTab);
+setOpsPanelOpen(false);
 refreshAll();
 setInterval(async () => {
   if (document.body.classList.contains('is-busy')) return;

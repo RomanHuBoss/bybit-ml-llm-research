@@ -80,7 +80,7 @@
         <article class="panel ticket">
           <div class="panel-head compact-head">
             <div><p class="eyebrow">Trade sheet</p><h2 id="ticketTitle">Сетап не выбран</h2></div>
-            <div class="panel-tools"><button type="button" class="icon-button ghost-icon" title="Редактировать">✎</button><button type="button" class="icon-button ghost-icon" data-busy-lock="true" title="Обновить">↻</button></div>
+            <div class="panel-tools"><button type="button" id="editSelectedBtn" class="icon-button ghost-icon" title="Открыть параметры выбранного сетапа" aria-label="Открыть параметры выбранного сетапа">✎</button><button type="button" id="refreshTicketBtn" class="icon-button ghost-icon" data-busy-lock="true" title="Обновить выбранный сетап" aria-label="Обновить выбранный сетап">↻</button></div>
           </div>
           <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди.</div>
         </article>
@@ -166,7 +166,7 @@
           <article class="panel support-card compact-news">
             <p class="eyebrow">News & sentiment</p>
             <h2>Рыночный фон</h2>
-            <div class="support-kv"><span>Настроение рынка</span><b>Нейтральное <i class="dot amber"></i></b><span>Индекс страха и жадности</span><b>48</b><span>Ключевые события (24ч)</span><b>2</b><span>Новости по ZEC</span><b>Спокойно</b></div>
+            <div class="support-kv"><span>Выбранный рынок</span><b id="marketSymbolBox">—</b><span>Sentiment score</span><b id="marketSentimentBox">—</b><span>Новостей в ленте</span><b id="marketNewsCountBox">—</b><span>Фон</span><b id="marketMoodBox">ожидание</b></div>
             <a href="#newsList" class="support-link">Открыть ленту ›</a>
           </article>
 
