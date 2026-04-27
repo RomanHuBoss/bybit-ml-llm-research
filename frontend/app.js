@@ -236,6 +236,7 @@ function log(title, obj) {
     }
   }
   logBox.textContent = `[${new Date().toLocaleTimeString()}] ${title}${payload}\n\n${logBox.textContent}`;
+  logBox.scrollTop = 0;
 }
 
 function setEquitySource(text, tone = 'neutral') {
@@ -296,6 +297,68 @@ function mlEvidenceText(s) {
 function setText(id, value) {
   const node = $(id);
   if (node) node.textContent = value;
+}
+
+function setMeter(cardSelector, barId, value, tone = 'neutral', label = null) {
+  const bar = $(barId);
+  const card = bar?.closest(cardSelector);
+  const pctValue = Math.max(0, Math.min(100, num(value, 0) || 0));
+  if (bar) bar.style.width = `${pctValue}%`;
+  if (card) {
+    card.classList.remove('good', 'warn', 'bad', 'neutral');
+    card.classList.add(tone);
+  }
+  return label ?? `${Math.round(pctValue)}%`;
+}
+
+function priceFmt(value) {
+  const n = num(value);
+  if (n === null) return '—';
+  if (Math.abs(n) >= 1000) return n.toLocaleString([], { maximumFractionDigits: 2 });
+  if (Math.abs(n) >= 1) return n.toLocaleString([], { maximumFractionDigits: 4 });
+  return n.toLocaleString([], { maximumSignificantDigits: 6 });
+}
+
+function updateTopContext(s) {
+  setText('activePairChip', `Pair ${s?.symbol || selectedSymbols()[0] || '—'}`);
+  setText('activeTimeframeChip', `TF ${s?.interval || primaryInterval() || '—'}`);
+  setText('lastUpdateChip', `Update ${compactDateTime(s?.created_at || state.status?.db_time || new Date())}`);
+}
+
+function renderDecisionMeters(s, d) {
+  const rr = riskReward(s);
+  const confidence = num(s?.confidence, null);
+  const riskValue = s ? Math.round(Math.min(100, Math.max(0,
+    (num(s.spread_pct, 0) > 0.15 ? 25 : num(s.spread_pct, 0) > 0.08 ? 12 : 4)
+    + Math.min(35, Math.max(0, num(s.max_drawdown, 0) * 100))
+    + (mtfSeverity(s) === 'fail' ? 30 : mtfSeverity(s) === 'warn' ? 14 : 0)
+    + (decisionFor(s).level === 'reject' ? 18 : decisionFor(s).level === 'watch' ? 8 : 0)
+  ))) : 0;
+  const rrValue = rr ? Math.min(100, Math.round((rr.ratio / 3) * 100)) : 0;
+  setText('confidenceMeterValue', confidence === null ? '—' : pct(confidence, 0));
+  setText('riskMeterValue', s ? `${riskValue}/100` : '—');
+  setText('rrMeterValue', rr ? rr.ratio.toFixed(2) : '—');
+  setMeter('.confidence-meter', 'confidenceMeterBar', confidence === null ? 0 : confidence * 100, confidence >= 0.62 ? 'good' : confidence >= 0.54 ? 'warn' : 'bad');
+  setMeter('.risk-meter', 'riskMeterBar', riskValue, riskValue <= 35 ? 'good' : riskValue <= 62 ? 'warn' : 'bad');
+  setMeter('.risk-reward-card', 'rrMeterBar', rrValue, rr && rr.ratio >= 1.55 ? 'good' : rr && rr.ratio >= 1.15 ? 'warn' : 'bad');
+}
+
+function renderExecutionMap(s) {
+  const box = $('executionMap');
+  if (!box) return;
+  if (!s) {
+    box.className = 'execution-map empty-state';
+    box.textContent = 'Выберите кандидата: здесь появятся entry, stop-loss, take-profit и визуальный сценарий сделки.';
+    return;
+  }
+  const rr = riskReward(s);
+  const direction = String(s.direction || 'flat').toUpperCase();
+  box.className = `execution-map ${cssToken(s.direction, 'neutral')}`;
+  box.innerHTML = `
+    <div class="execution-level entry"><span>Entry · ${escapeHtml(direction)}</span><strong>${priceFmt(s.entry)}</strong></div>
+    <div class="execution-level stop"><span>Stop-loss</span><strong>${priceFmt(s.stop_loss)}</strong></div>
+    <div class="execution-level take"><span>Take-profit</span><strong>${priceFmt(s.take_profit)}</strong></div>
+    <div class="execution-level rr"><span>Risk / Reward</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>`;
 }
 
 function showOperationStatus(message, tone = 'neutral') {
@@ -398,7 +461,7 @@ function setOpsPanelOpen(open) {
   body.hidden = !open;
   toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   if (stateLabel) stateLabel.textContent = open ? 'Свернуть панель ↑' : 'Открыть панель ↓';
-  setText('opsHelper', open ? 'Панель развернута. Нажмите, чтобы свернуть.' : 'Панель свернута. Нажмите, чтобы открыть параметры.');
+  setText('opsHelper', open ? 'Параметры развернуты. Нажмите, чтобы свернуть.' : 'Символы, MTF, стратегия и ручные операции.');
 }
 
 function toggleOpsPanel() {
@@ -886,13 +949,16 @@ function renderDecision() {
   const s = selectedCandidate();
   const d = decisionFor(s);
   const board = $('decisionBoard');
-  board.className = `decision-board panel ${d.level}`;
-  $('decisionBadge').textContent = d.label;
-  $('decisionBadge').className = `decision-badge ${d.level}`;
-  $('decisionTitle').textContent = s?.symbol || d.title;
+  if (board) board.className = `decision-board panel signal-card ${d.level}`;
+  setText('decisionBadge', d.label);
+  if ($('decisionBadge')) $('decisionBadge').className = `decision-badge ${d.level}`;
+  setText('decisionTitle', s?.symbol || d.title);
   setText('decisionVerdict', d.label === 'НЕТ ВХОДА' ? 'Вход запрещён' : d.label === 'ВХОД' ? 'Вход возможен' : d.label);
-  $('decisionSubtitle').textContent = d.subtitle;
-  $('decisionScore').textContent = d.score;
+  setText('decisionSubtitle', d.subtitle);
+  setText('decisionScore', d.score);
+  updateTopContext(s);
+  renderDecisionMeters(s, d);
+  renderExecutionMap(s);
 
   renderTicket(s);
   renderChecklist(s);
@@ -919,9 +985,9 @@ function renderTicket(s) {
   $('ticketBody').innerHTML = `
     <div class="ticket-main">
       <div class="metric direction ${directionClass}"><span>Direction</span><strong>${escapeHtml(String(s.direction || 'flat').toUpperCase())}</strong></div>
-      <div class="metric"><span>Entry</span><strong>${fmt(s.entry, 4)}</strong></div>
-      <div class="metric"><span>Stop-loss</span><strong>${fmt(s.stop_loss, 4)}</strong></div>
-      <div class="metric"><span>Take-profit</span><strong>${fmt(s.take_profit, 4)}</strong></div>
+      <div class="metric"><span>Entry</span><strong>${priceFmt(s.entry)}</strong></div>
+      <div class="metric"><span>Stop-loss</span><strong>${priceFmt(s.stop_loss)}</strong></div>
+      <div class="metric"><span>Take-profit</span><strong>${priceFmt(s.take_profit)}</strong></div>
       <div class="metric"><span>Risk до SL</span><strong>${rr ? pct(rr.riskPct, 2) : '—'}</strong></div>
       <div class="metric"><span>Потенциал до TP</span><strong>${rr ? pct(rr.rewardPct, 2) : '—'}</strong></div>
       <div class="metric"><span>R/R</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>
@@ -1064,7 +1130,7 @@ function renderRawTable(list = candidates()) {
   const body = $('rawTable').querySelector('tbody');
   body.innerHTML = list.map((s) => {
     const rr = riskReward(s);
-    return `<tr>
+    return `<tr class="dir-${cssToken(s.direction, 'flat')}">
       <td>${escapeHtml(s.decision.label)}</td>
       <td>${escapeHtml(s.decision.score)}</td>
       <td>${escapeHtml(mtfLabel(s))}</td>
@@ -1088,6 +1154,7 @@ async function refreshStatus() {
   $('statusBox').textContent = `DB · ${compactDateTime(data.db_time)}`;
   $('statusBox').className = 'status ok';
   $('kpiCandles').textContent = data.candles ?? '—';
+  setText('lastUpdateChip', `Update ${compactDateTime(data.db_time || new Date())}`);
 }
 
 
@@ -1519,7 +1586,7 @@ function bindControls() {
 
 bindControls();
 setContextTab(state.contextTab);
-setOpsPanelOpen(true);
+setOpsPanelOpen(false);
 
 let autoRefreshInFlight = false;
 async function refreshBackgroundTick() {
