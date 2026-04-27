@@ -4,12 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bybit Research Lab — operator workstation</title>
-  <link rel="stylesheet" href="/static/styles.css?v=compact-v9" />
+  <link rel="stylesheet" href="/static/styles.css?v=modern-v10" />
 </head>
-<body class="compact-ui layout-v8">
+<body class="compact-ui layout-v8 modern-ui layout-v10">
   <div class="app-frame">
     <nav class="side-nav" aria-label="Основная навигация">
-      <div class="side-logo" aria-label="Bybit Research">BYB</div>
+      <div class="side-logo" aria-label="Bybit Research">BR</div>
       <button type="button" class="nav-item active" data-nav-target="workspace" title="Рабочее место" aria-label="Рабочее место" aria-current="page">▦</button>
       <button type="button" class="nav-item" data-nav-target="equityCanvas" title="Графики" aria-label="Графики">⌁</button>
       <button type="button" class="nav-item" data-nav-target="operatorProtocol" title="Протоколы" aria-label="Протоколы">▤</button>
@@ -22,9 +22,10 @@
       <header class="topbar">
         <div class="brand">
           <button type="button" id="navToggleBtn" class="menu-button" aria-label="Свернуть меню" aria-pressed="false">☰</button>
+          <div class="brand-mark" aria-hidden="true">BR</div>
           <div class="brand-copy">
             <h1>Рабочее место оператора</h1>
-            <p>15m · 60m · 240m</p>
+            <p>15m entry · 60m bias · 240m regime</p>
           </div>
         </div>
         <div class="top-status" aria-label="Состояние сервисов">
@@ -59,6 +60,14 @@
             <div class="decision-badge" id="decisionBadge">НЕТ ВХОДА</div>
             <div class="decision-score"><span>Оценка</span><strong id="decisionScore">0</strong><small>/100</small></div>
           </div>
+          <aside class="llm-symbol-verdict pending" id="llmVerdictCard" aria-label="LLM-вердикт по выбранному символу">
+            <div class="llm-verdict-top">
+              <span id="llmSymbolBox">LLM · —</span>
+              <b id="llmVerdictLabel">Ожидает оценки</b>
+            </div>
+            <p id="llmVerdictText">Выберите кандидата: здесь появится отдельный LLM‑вердикт по конкретному символу.</p>
+            <small id="llmVerdictMeta">Фоновый анализ не является торговым приказом.</small>
+          </aside>
         </article>
 
         <section class="panel queue-panel">
@@ -80,7 +89,10 @@
         <article class="panel ticket">
           <div class="panel-head compact-head">
             <div><p class="eyebrow">Trade sheet</p><h2 id="ticketTitle">Сетап не выбран</h2></div>
-            <div class="panel-tools"><button type="button" id="editSelectedBtn" class="icon-button ghost-icon" title="Открыть параметры выбранного сетапа" aria-label="Открыть параметры выбранного сетапа">✎</button><button type="button" id="refreshTicketBtn" class="icon-button ghost-icon" data-busy-lock="true" title="Обновить выбранный сетап" aria-label="Обновить выбранный сетап">↻</button></div>
+            <div class="panel-tools">
+              <button type="button" id="editSelectedBtn" class="icon-button ghost-icon" title="Открыть параметры выбранного сетапа" aria-label="Открыть параметры выбранного сетапа">✎</button>
+              <button type="button" id="refreshTicketBtn" class="icon-button ghost-icon" data-busy-lock="true" title="Обновить выбранный сетап" aria-label="Обновить выбранный сетап">↻</button>
+            </div>
           </div>
           <div id="ticketBody" class="ticket-body empty-state">Выберите кандидата из очереди.</div>
         </article>
@@ -93,6 +105,7 @@
           <div id="mtfMatrix" class="mtf-matrix empty-state">Нет выбранного кандидата.</div>
         </article>
 
+        <span id="settings" class="anchor-target" aria-hidden="true"></span>
         <section class="panel ops-panel" id="opsPanel">
           <button id="opsToggleBtn" class="ops-toggle" type="button" aria-expanded="true" aria-controls="opsBody">
             <span class="ops-title"><span class="ops-icon">◉</span>Операции с данными</span>
@@ -158,7 +171,10 @@
             </div>
             <section class="context-tab-panel active" data-panel="risk"><div id="checklist" class="checklist-list empty-state">Нет данных для проверки.</div></section>
             <section class="context-tab-panel" data-panel="evidence"><div id="reasonList" class="reason-list empty-state">Нет выбранного кандидата.</div></section>
-            <section class="context-tab-panel" data-panel="llm"><div class="support-headline"><h3>LLM risk review</h3><button type="button" id="briefBtn" class="ghost" data-busy-lock="true">Обновить LLM сейчас</button></div><pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre></section>
+            <section class="context-tab-panel" data-panel="llm">
+              <div class="support-headline"><h3>LLM risk review</h3><button type="button" id="briefBtn" class="ghost" data-busy-lock="true">Обновить LLM сейчас</button></div>
+              <pre id="briefBox" class="brief">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</pre>
+            </section>
             <section class="context-tab-panel" data-panel="news"><div class="support-headline"><h3>Новости / sentiment</h3><span id="sentimentSummary" class="muted">—</span></div><div id="newsList" class="news-list empty-state">Новостей пока нет.</div></section>
             <section class="context-tab-panel" data-panel="protocol"><div id="operatorProtocol" class="protocol-list empty-state">Нет выбранного кандидата.</div></section>
           </article>
@@ -181,8 +197,8 @@
         <details class="panel technical-details" id="technicalDetails">
           <summary>Технические детали и журнал / сырые данные</summary>
           <div class="details-grid">
-            <section><h3>Последний бэктест</h3><span id="equityMeta" class="muted">—</span><canvas id="equityCanvas" width="900" height="240"></canvas></section>
-            <section><h3>Журнал операций</h3><pre id="log" class="log"></pre></section>
+            <section class="chart-card"><h3>Последний бэктест</h3><span id="equityMeta" class="muted">—</span><canvas id="equityCanvas" width="900" height="240"></canvas></section>
+            <section class="log-card"><h3>Журнал операций</h3><pre id="log" class="log"></pre></section>
           </div>
           <div class="raw-table-wrap">
             <table id="rawTable"><thead><tr><th>Решение</th><th>Score</th><th>MTF</th><th>Символ</th><th>TF</th><th>Dir</th><th>Стратегия</th><th>Conf</th><th>R/R</th><th>PF</th><th>DD</th><th>Spread</th><th>LLM</th></tr></thead><tbody></tbody></table>
@@ -198,11 +214,12 @@
       <ol>
         <li>Сначала обновите universe и рынок, затем постройте рекомендации.</li>
         <li>Выберите кандидата в очереди: центральная карточка покажет запрет, наблюдение или ручную проверку.</li>
+        <li>LLM‑вердикт по конкретному символу отображается в верхней карточке и в Trade sheet.</li>
         <li>Перед созданием бота вручную проверьте Risk, Evidence, LLM, News и Protocol.</li>
         <li>График бэктеста и сырой журнал находятся в технических деталях внизу.</li>
       </ol>
     </form>
   </dialog>
-  <script src="/static/app.js?v=compact-v9"></script>
+  <script src="/static/app.js?v=modern-v10"></script>
 </body>
 </html>

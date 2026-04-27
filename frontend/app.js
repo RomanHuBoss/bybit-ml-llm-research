@@ -393,6 +393,96 @@ function llmStateText(s) {
   return 'LLM: ожидает фонового цикла';
 }
 
+function truncateText(value, limit = 180) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1)).trim()}…` : text;
+}
+
+function extractLlmVerdictLine(brief) {
+  const text = String(brief || '');
+  const explicit = text.match(/(?:^|\n)\s*(?:ВЕРДИКТ|VERDICT|LLM[-\s]*VERDICT|РЕШЕНИЕ)\s*[:：—-]\s*([^\n]+)/i);
+  if (explicit?.[1]) return explicit[1].trim();
+  return text.split('\n').map((line) => line.trim()).find(Boolean) || '';
+}
+
+function llmToneFromText(text) {
+  const normalized = String(text || '').toLowerCase();
+  if (/нет\s+входа|вход\s+запрещ|отклон|не\s+входить|no\s*trade|reject|avoid|block|запрет/.test(normalized)) return 'fail';
+  if (/наблюд|ожид|wait|watch|hold|только\s+контекст|не\s+спешить/.test(normalized)) return 'warn';
+  if (/к\s+проверке|ручн|рассмотр|допуст|можно\s+рассматривать|review|consider|candidate/.test(normalized)) return 'ok';
+  if (/long|short|лонг|шорт|buy|sell/.test(normalized)) return 'ok';
+  return 'ok';
+}
+
+function llmVerdictFor(s) {
+  if (!s) {
+    return {
+      tone: 'pending',
+      label: 'Ожидает выбора',
+      symbol: '—',
+      summary: 'Выберите кандидата: здесь появится LLM‑вердикт по конкретному символу.',
+      meta: 'Фоновый LLM — независимый риск‑разбор.',
+    };
+  }
+  const symbol = String(s.symbol || '—').toUpperCase();
+  if (s.llm_status === 'running') {
+    return {
+      tone: 'pending',
+      label: 'LLM анализирует',
+      symbol,
+      summary: 'Фоновый LLM сейчас разбирает этот сетап. Экран обновится автоматически.',
+      meta: `${symbol} · ${s.interval || '—'} · ${s.llm_model || 'модель не указана'}`,
+    };
+  }
+  if (s.llm_status === 'error') {
+    return {
+      tone: 'error',
+      label: 'LLM ошибка',
+      symbol,
+      summary: truncateText(s.llm_error || 'LLM endpoint недоступен.', 180),
+      meta: `${symbol} · оценка не получена`,
+    };
+  }
+  if (s.llm_status === 'ok' && s.llm_brief) {
+    const verdictLine = extractLlmVerdictLine(s.llm_brief);
+    const tone = llmToneFromText(verdictLine || s.llm_brief);
+    const label = verdictLine
+      ? truncateText(verdictLine.replace(/^(вход\s*[:：—-]\s*)/i, ''), 70)
+      : 'LLM: разбор готов';
+    const summaryLine = String(s.llm_brief || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .find((line) => !/^((ВЕРДИКТ|VERDICT|LLM[-\s]*VERDICT|РЕШЕНИЕ)\s*[:：—-])/i.test(line));
+    return {
+      tone,
+      label,
+      symbol,
+      summary: truncateText(summaryLine || s.llm_brief, 220),
+      meta: `${symbol} · ${llmStateText(s).replace('LLM: ', '')} · ${s.llm_model || 'model'}`,
+    };
+  }
+  return {
+    tone: 'pending',
+    label: 'LLM ожидается',
+    symbol,
+    summary: 'Для этого символа ещё нет сохранённого LLM‑вердикта. Запустите фоновое обновление или дождитесь автоцикла.',
+    meta: `${symbol} · ${s.interval || '—'} · ${String(s.strategy || 'strategy')}`,
+  };
+}
+
+function renderLlmVerdict(s) {
+  const card = $('llmVerdictCard');
+  if (!card) return;
+  const verdict = llmVerdictFor(s);
+  card.className = `llm-symbol-verdict ${cssToken(verdict.tone, 'pending')}`;
+  setText('llmSymbolBox', `LLM · ${verdict.symbol}`);
+  setText('llmVerdictLabel', verdict.label);
+  setText('llmVerdictText', verdict.summary);
+  setText('llmVerdictMeta', verdict.meta);
+}
+
 function checklistFor(s) {
   if (!s) return [];
   const rr = riskReward(s);
@@ -464,9 +554,9 @@ function checklistFor(s) {
     },
     {
       key: 'llm',
-      status: s.llm_status === 'ok' ? 'pass' : 'warn',
-      title: s.llm_status === 'ok' ? 'LLM‑оценка готова' : s.llm_status === 'running' ? 'LLM‑оценка выполняется' : 'LLM‑оценка ожидается',
-      text: `${llmStateText(s)}. Фоновый LLM — независимый риск‑разбор, не торговый приказ.`,
+      status: s.llm_status === 'ok' ? (llmVerdictFor(s).tone === 'fail' ? 'warn' : 'pass') : 'warn',
+      title: s.llm_status === 'ok' ? `LLM‑вердикт: ${llmVerdictFor(s).label}` : s.llm_status === 'running' ? 'LLM‑оценка выполняется' : 'LLM‑оценка ожидается',
+      text: `${llmStateText(s)}. ${llmVerdictFor(s).summary} Фоновый LLM — независимый риск‑разбор, не торговый приказ.`,
     },
   ];
 }
@@ -677,6 +767,7 @@ function renderDecision() {
   renderReasons(s);
   renderProtocol(s);
   renderBrief(s);
+  renderLlmVerdict(s);
   renderMtfMatrix(s);
 }
 
@@ -688,6 +779,7 @@ function renderTicket(s) {
     return;
   }
   const rr = riskReward(s);
+  const llmVerdict = llmVerdictFor(s);
   const directionClass = s.direction === 'long' ? 'long' : s.direction === 'short' ? 'short' : '';
   $('ticketTitle').textContent = `${s.symbol} · ${s.interval || '—'} · ${String(s.direction || 'flat').toUpperCase()} · ${STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия'}`;
   $('ticketBody').className = 'ticket-body';
@@ -706,7 +798,12 @@ function renderTicket(s) {
     </div>
     <div class="execution-plan">
       <b>Правило исполнения:</b> интрадей-вход рассматривается только по ${escapeHtml(s.mtf_entry_interval || '15')}m. ${escapeHtml(s.mtf_bias_interval || '60')}m задает направление, ${escapeHtml(s.mtf_regime_interval || '240')}m может наложить veto. Не входить по рынку автоматически; если цена ушла, spread расширился или есть красный пункт — сетап отменяется.
-    </div>`;
+    </div>
+    <section class="llm-detail-card ${escapeHtml(cssToken(llmVerdict.tone, 'pending'))}">
+      <header><span>LLM verdict · ${escapeHtml(llmVerdict.symbol)}</span><strong>${escapeHtml(llmVerdict.label)}</strong></header>
+      <p>${escapeHtml(llmVerdict.summary)}</p>
+      <small>${escapeHtml(llmVerdict.meta)}</small>
+    </section>`;
 }
 
 function renderChecklist(s) {
@@ -764,19 +861,31 @@ function renderBrief(s) {
     box.textContent = 'Нет выбранного сетапа. LLM‑оценка запустится после появления кандидатов.';
     return;
   }
+  const verdict = llmVerdictFor(s);
   if (s.llm_status === 'ok' && s.llm_brief) {
-    box.textContent = `${llmStateText(s)}\n\n${s.llm_brief}`;
+    box.textContent = `${verdict.symbol} · ${verdict.label}
+${verdict.meta}
+
+${s.llm_brief}`;
     return;
   }
   if (s.llm_status === 'running') {
-    box.textContent = 'Фоновый LLM сейчас анализирует этот сетап. Экран обновляется автоматически.';
+    box.textContent = `${verdict.symbol} · ${verdict.label}
+
+${verdict.summary}`;
     return;
   }
   if (s.llm_status === 'error') {
-    box.textContent = `Фоновая LLM‑оценка не получена: ${s.llm_error || 'ошибка LLM endpoint'}. Это не блокирует приложение, но сетап нельзя считать полностью разобранным.`;
+    box.textContent = `${verdict.symbol} · ${verdict.label}
+
+${verdict.summary}
+Это не блокирует приложение, но сетап нельзя считать полностью разобранным.`;
     return;
   }
-  box.textContent = 'LLM‑оценка ещё не готова. Фоновый сервис периодически берет top‑кандидатов из очереди и сохраняет вердикт без ручного запроса.';
+  box.textContent = `${verdict.symbol} · ${verdict.label}
+
+${verdict.summary}
+LLM‑оценка ещё не готова. Фоновый сервис периодически берет top‑кандидатов из очереди и сохраняет вердикт без ручного запроса.`;
 }
 
 function renderQueue() {
@@ -852,7 +961,7 @@ function renderRawTable(list = candidates()) {
       <td>${fmt(s.profit_factor, 2)}</td>
       <td>${pct(s.max_drawdown, 1)}</td>
       <td>${pctRaw(s.spread_pct, 3)}</td>
-      <td>${escapeHtml(s.llm_status || 'pending')}</td>
+      <td>${escapeHtml(llmVerdictFor(s).label)}</td>
     </tr>`;
   }).join('');
 }
