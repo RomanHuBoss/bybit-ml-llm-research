@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .backtest_background import background_backtester, backtest_background_summary
-from .bybit_client import sync_market_bundle
+from .bybit_client import sync_candles, sync_funding, sync_market_bundle, sync_open_interest
 from .config import settings
 from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
@@ -130,6 +130,19 @@ def _bad_request(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
+def _sync_market_bundle_multi(category: str, symbol: str, intervals: list[str], days: int) -> dict[str, dict[str, int]]:
+    """Sync multi-timeframe market data without repeating interval-independent funding calls."""
+    funding_rows = sync_funding(category, symbol, days)
+    return {
+        interval: {
+            "candles": sync_candles(category, symbol, interval, days),
+            "funding_rates": funding_rows,
+            "open_interest": sync_open_interest(category, symbol, interval, days),
+        }
+        for interval in intervals
+    }
+
+
 @router.get("/status")
 def status() -> dict[str, Any]:
     db = fetch_one("SELECT NOW() AS now")
@@ -237,7 +250,7 @@ def sync_market(req: MarketSyncRequest) -> dict[str, Any]:
             if len(intervals) == 1:
                 result[symbol] = sync_market_bundle(category, symbol, intervals[0], days)
             else:
-                result[symbol] = {interval: sync_market_bundle(category, symbol, interval, days) for interval in intervals}
+                result[symbol] = _sync_market_bundle_multi(category, symbol, intervals, days)
         return {"ok": True, "intervals": intervals, "result": result}
     except ValueError as exc:
         raise _bad_request(exc) from exc

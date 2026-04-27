@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bybit Research Lab — operator workstation</title>
-  <link rel="stylesheet" href="/static/styles.css?v=compact-v8" />
+  <link rel="stylesheet" href="/static/styles.css?v=compact-v9" />
 </head>
 <body class="compact-ui layout-v8">
   <div class="app-frame">
@@ -110,7 +110,7 @@
               <select id="interval"><option>15,60,240</option><option>5,15,60</option><option>60,240,D</option></select>
             </label>
             <label>Дней истории
-              <input id="days" type="number" value="120" min="1" max="1000" />
+              <input id="days" type="number" value="30" min="1" max="730" />
             </label>
             <label>Universe
               <select id="universeMode"><option>hybrid</option><option>core</option><option>dynamic</option></select>
@@ -135,7 +135,7 @@
             <div class="secondary-actions" aria-label="Дополнительные операции">
               <button type="button" id="rankBtn" data-busy-lock="true">Пересчитать очередь</button>
               <button type="button" id="syncUniverseBtn" data-busy-lock="true">Обновить universe</button>
-              <button type="button" id="syncMarketBtn" data-busy-lock="true">Загрузить рынок</button>
+              <button type="button" id="syncMarketBtn" data-busy-lock="true" title="Долгая операция: загружает candles, funding и open interest">Загрузить рынок</button>
               <button type="button" id="syncSentimentBtn" data-busy-lock="true">Обновить sentiment</button>
               <button type="button" id="backtestBtn" data-busy-lock="true">Бэктест сетапа</button>
               <button type="button" id="backtestAutoBtn" data-busy-lock="true">Авто-бэктест сейчас</button>
@@ -203,6 +203,6 @@
       </ol>
     </form>
   </dialog>
-  <script src="/static/app.js?v=compact-v8"></script>
+  <script src="/static/app.js?v=compact-v9"></script>
 </body>
 </html>

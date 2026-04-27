@@ -138,7 +138,20 @@ function ageText(value) {
   return `${(minutes / 1440).toFixed(1)} дн назад`;
 }
 
-async function api(path, options = {}, timeoutMs = 45_000) {
+const DEFAULT_API_TIMEOUT_MS = 45_000;
+const LONG_OPERATION_TIMEOUT_MS = 360_000;
+
+function marketSyncTimeoutMs() {
+  const symbolCount = Math.max(1, symbols().length);
+  const intervalCount = Math.max(1, intervals().length);
+  const requestedDays = Math.max(1, num($('days')?.value, 30) || 30);
+  // Market sync делает несколько внешних Bybit-запросов на каждый symbol/interval.
+  // 45 секунд достаточно для коротких API-вызовов, но слишком мало для первичной загрузки истории.
+  const estimated = 90_000 + symbolCount * intervalCount * Math.min(requestedDays, 365) * 700;
+  return Math.min(900_000, Math.max(LONG_OPERATION_TIMEOUT_MS, estimated));
+}
+
+async function api(path, options = {}, timeoutMs = DEFAULT_API_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
@@ -1076,12 +1089,14 @@ function bindControls() {
   };
 
   $('syncMarketBtn').onclick = async () => {
-    await runOperation('Market synced', async () => {
+    await runOperation('Загрузка рынка', async () => {
       validateInputs({ requireSymbols: true });
+      const timeoutMs = marketSyncTimeoutMs();
+      showOperationStatus(`Выполняется: загрузка рынка. Таймаут ${Math.round(timeoutMs / 60_000)} мин; для ускорения уменьшите символы, интервалы или дни истории.`, 'busy');
       const data = await api('/api/sync/market', {
         method: 'POST',
         body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: primaryInterval(), intervals: intervals(), days: Number($('days').value) }),
-      });
+      }, timeoutMs);
       await refreshStatus();
       return data.result;
     });

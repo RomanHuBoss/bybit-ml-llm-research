@@ -235,3 +235,23 @@ def test_frontend_equalizes_main_operator_panels_and_deduplicates_queue():
     ]
     for fragment in required_js:
         assert fragment in js
+
+
+def test_frontend_uses_extended_timeout_for_market_sync():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert "function marketSyncTimeoutMs" in js
+    assert "LONG_OPERATION_TIMEOUT_MS" in js
+    assert "}, timeoutMs);" in js
+    assert "Загрузка рынка" in js
+    assert "уменьшите символы, интервалы или дни истории" in js
+    assert 'value="30" min="1" max="730"' in html
+
+
+def test_market_sync_multi_interval_does_not_repeat_funding_per_interval():
+    api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+
+    assert "def _sync_market_bundle_multi" in api
+    assert "funding_rows = sync_funding(category, symbol, days)" in api
+    assert "result[symbol] = _sync_market_bundle_multi(category, symbol, intervals, days)" in api
