@@ -95,7 +95,7 @@ function setBusy(isBusy) {
   });
 }
 
-function symbols() {
+function selectedSymbols() {
   return $('symbols').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 }
 
@@ -163,11 +163,11 @@ function ageText(value) {
 }
 
 const DEFAULT_API_TIMEOUT_MS = 45_000;
-const SENTIMENT_OPERATION_TIMEOUT_MS = 120_000;
+const SENTIMENT_OPERATION_TIMEOUT_MS = 180_000;
 const LONG_OPERATION_TIMEOUT_MS = 360_000;
 
 function marketSyncTimeoutMs() {
-  const symbolCount = Math.max(1, symbols().length);
+  const symbolCount = Math.max(1, selectedSymbols().length);
   const intervalCount = Math.max(1, intervals().length);
   const requestedDays = Math.max(1, num($('days')?.value, 30) || 30);
   // Market sync делает несколько внешних Bybit-запросов на каждый symbol/interval.
@@ -205,14 +205,29 @@ async function api(path, options = {}, timeoutMs = DEFAULT_API_TIMEOUT_MS) {
   }
 }
 
+function safeStringify(value) {
+  const seen = new WeakSet();
+  return JSON.stringify(value, (key, val) => {
+    if (typeof val === 'object' && val !== null) {
+      if (seen.has(val)) return '[Circular]';
+      seen.add(val);
+    }
+    return val;
+  }, 2);
+}
+
 function log(title, obj) {
   const logBox = $('log');
   if (!logBox) return;
-  const payload = obj ? `
-${JSON.stringify(obj, null, 2)}` : '';
-  logBox.textContent = `[${new Date().toLocaleTimeString()}] ${title}${payload}
-
-${logBox.textContent}`;
+  let payload = '';
+  if (obj) {
+    try {
+      payload = `\n${safeStringify(obj)}`;
+    } catch {
+      payload = `\n${String(obj)}`;
+    }
+  }
+  logBox.textContent = `[${new Date().toLocaleTimeString()}] ${title}${payload}\n\n${logBox.textContent}`;
 }
 
 function setText(id, value) {
@@ -237,7 +252,7 @@ function validateInputs({ requireSymbols = false } = {}) {
   }
   if (!$('category')?.value.trim()) throw new Error('Категория не задана.');
   if (!intervals().length) throw new Error('MTF контур не задан.');
-  if (requireSymbols && !symbols().length) throw new Error('Укажите хотя бы один символ.');
+  if (requireSymbols && !selectedSymbols().length) throw new Error('Укажите хотя бы один символ.');
 }
 
 function openTechnicalDetails() {
@@ -433,9 +448,9 @@ function extractLlmVerdictLine(brief) {
 
 function llmToneFromText(text) {
   const normalized = String(text || '').toLowerCase();
+  if (/нет[,\s]+.*не\s+подтверж|не\s+подтверждаю|нет\s+входа|вход\s+запрещ|отклон|не\s+входить|no\s*trade|reject|avoid|block|запрет/.test(normalized)) return 'fail';
   if (/да[,\s]+.*подтверж|подтверждаю\s+вход|entry\s+confirmed|approve|approved|можно\s+вход|к\s+ручной\s+проверке|review/.test(normalized)) return 'ok';
   if (/наблюд|ожид|wait|watch|hold|отлож|только\s+наблюд/.test(normalized)) return 'warn';
-  if (/нет[,\s]+.*не\s+подтверж|не\s+подтверждаю|нет\s+входа|вход\s+запрещ|отклон|не\s+входить|no\s*trade|reject|avoid|block|запрет/.test(normalized)) return 'fail';
   if (/long|short|лонг|шорт|buy|sell/.test(normalized)) return 'ok';
   return 'warn';
 }
@@ -444,83 +459,80 @@ function llmEntryIntent(tone) {
   return tone === 'ok';
 }
 
+function llmActionText(tone) {
+  if (tone === 'ok') return 'LLM: вход подтверждает';
+  if (tone === 'fail') return 'LLM: вход не подтверждает';
+  if (tone === 'warn') return 'LLM: наблюдать';
+  if (tone === 'error') return 'LLM: ошибка';
+  return 'LLM: нет оценки';
+}
+
+function algorithmActionText(s) {
+  const d = algorithmDecisionFor(s);
+  if (d.level === 'review') return 'Алгоритм: вход допускает';
+  if (d.level === 'watch') return 'Алгоритм: наблюдать';
+  return 'Алгоритм: нет входа';
+}
+
 function algorithmEntryIntent(s) {
-  if (!s) return false;
-  return decisionFor(s).level === 'review';
+  return algorithmDecisionFor(s).level === 'review';
+}
+
+function llmAgreement(tone, s) {
+  if (!s || ['pending', 'error'].includes(tone)) return null;
+  const level = algorithmDecisionFor(s).level;
+  if (tone === 'warn') return level === 'watch';
+  return llmEntryIntent(tone) === (level === 'review');
 }
 
 function llmAgreementText(tone, s) {
-  if (!s || ['pending', 'error'].includes(tone)) return 'Согласованность: нет данных';
-  const llmEntry = llmEntryIntent(tone);
-  const algorithmEntry = algorithmEntryIntent(s);
-  return llmEntry === algorithmEntry ? 'С алгоритмом: согласован' : 'С алгоритмом: не согласован';
+  const agreed = llmAgreement(tone, s);
+  if (agreed === null) return 'С алгоритмом: нет данных';
+  return agreed ? 'С алгоритмом: согласован' : 'С алгоритмом: не согласован';
 }
 
 function llmLifeText(updatedAt) {
   const minutes = ageMinutes(updatedAt);
   const ttl = num(state.llmStatus?.ttl_minutes, 60) || 60;
-  if (minutes === null) return `TTL: ${ttl} мин`;
+  if (minutes === null) return `Возраст: — · TTL ${ttl} мин`;
   const left = Math.max(0, ttl - minutes);
-  const freshness = minutes < 60 ? `${minutes} мин назад` : `${(minutes / 60).toFixed(1)} ч назад`;
-  return `обновлено ${freshness} · жизнь ${left} мин`;
+  return `Возраст ${minutes} мин · TTL ${ttl} мин · осталось ${left} мин`;
 }
 
-function compactLlmLabel(tone) {
-  if (tone === 'ok') return 'Вход подтверждаю';
-  if (tone === 'warn') return 'Наблюдать';
-  if (tone === 'fail') return 'Вход не подтверждаю';
+function compactLlmLabel(tone, s = null) {
   if (tone === 'error') return 'LLM недоступен';
-  return 'LLM ожидается';
+  if (tone === 'pending') return 'LLM ожидается';
+  const agreed = llmAgreement(tone, s);
+  if (agreed === null) return 'LLM ожидается';
+  return agreed ? 'Согласован' : 'Не согласован';
 }
 
 function llmVerdictFor(s) {
   if (!s) {
-    return {
-      tone: 'pending',
-      label: 'LLM ожидается',
-      symbol: '—',
-      summary: 'Согласованность: нет данных',
-      meta: 'TTL: —',
-    };
+    return { tone: 'pending', agreed: null, label: 'LLM ожидается', symbol: '—', summary: 'С алгоритмом: нет данных', meta: 'Возраст: — · TTL: —' };
   }
   const symbol = String(s.symbol || '—').toUpperCase();
   if (s.llm_status === 'running') {
-    return {
-      tone: 'pending',
-      label: 'LLM анализирует',
-      symbol,
-      summary: 'Согласованность: расчет выполняется',
-      meta: `${symbol} · ${s.interval || '—'} · ${s.llm_model || 'модель не указана'}`,
-    };
+    return { tone: 'pending', agreed: null, label: 'LLM анализирует', symbol, summary: 'С алгоритмом: расчет выполняется', meta: `${symbol} · ${s.interval || '—'} · ${s.llm_model || 'модель не указана'}` };
   }
   if (s.llm_status === 'error') {
-    return {
-      tone: 'error',
-      label: compactLlmLabel('error'),
-      symbol,
-      summary: 'Согласованность: нет данных',
-      meta: `${symbol} · ошибка оценки`,
-    };
+    return { tone: 'error', agreed: null, label: compactLlmLabel('error'), symbol, summary: 'С алгоритмом: нет данных', meta: `${symbol} · ошибка оценки` };
   }
   if (s.llm_status === 'ok' && s.llm_brief) {
     const rawVerdictLine = extractLlmVerdictLine(s.llm_brief);
     const verdictLine = cleanLlmText(rawVerdictLine);
-    const tone = llmToneFromText(verdictLine || s.llm_brief);
+    const llmTone = llmToneFromText(verdictLine || s.llm_brief);
+    const agreed = llmAgreement(llmTone, s);
     return {
-      tone,
-      label: compactLlmLabel(tone),
+      tone: agreed ? 'ok' : 'warn',
+      agreed,
+      label: compactLlmLabel(llmTone, s),
       symbol,
-      summary: llmAgreementText(tone, s),
-      meta: `${symbol} · ${llmLifeText(s.llm_updated_at)}`,
+      summary: `${llmAgreementText(llmTone, s)} · ${algorithmActionText(s)} · ${llmActionText(llmTone)}`,
+      meta: llmLifeText(s.llm_updated_at),
     };
   }
-  return {
-    tone: 'pending',
-    label: 'LLM ожидается',
-    symbol,
-    summary: 'Согласованность: нет данных',
-    meta: `${symbol} · LLM ещё не оценивал сетап`,
-  };
+  return { tone: 'pending', agreed: null, label: 'LLM ожидается', symbol, summary: 'С алгоритмом: нет данных', meta: `${symbol} · LLM ещё не оценивал сетап` };
 }
 
 function renderLlmVerdict(s) {
@@ -534,7 +546,7 @@ function renderLlmVerdict(s) {
   setText('llmVerdictMeta', verdict.meta);
 }
 
-function checklistFor(s) {
+function baseChecklistFor(s) {
   if (!s) return [];
   const rr = riskReward(s);
   const spread = num(s.spread_pct, 999);
@@ -549,80 +561,23 @@ function checklistFor(s) {
   const stale = !created || Number.isNaN(created.getTime()) || Date.now() - created.getTime() > maxAgeHours * 3600_000;
 
   return [
-    {
-      key: 'freshness',
-      status: stale ? 'fail' : 'pass',
-      title: stale ? 'Сигнал устарел' : 'Сигнал свежий',
-      text: `Создан ${ageText(s.created_at)}. Максимальный возраст: ${maxAgeHours} ч.`,
-    },
-    {
-      key: 'direction',
-      status: s.direction === 'long' || s.direction === 'short' ? 'pass' : 'fail',
-      title: s.direction === 'long' || s.direction === 'short' ? 'Направление задано' : 'Нет направления сделки',
-      text: `Направление: ${String(s.direction || 'flat').toUpperCase()}. Flat не является сделкой.`,
-    },
-    {
-      key: 'mtf',
-      status: mtfSeverity(s),
-      title: mtfSeverity(s) === 'pass' ? 'MTF согласован' : mtfSeverity(s) === 'warn' ? 'MTF неполный' : 'MTF запрещает вход',
-      text: `${mtfLabel(s)}. ${s.mtf_reason || '15m — вход; 60m и 240m — фильтры, а не отдельные триггеры.'}`,
-    },
-    {
-      key: 'liquidity',
-      status: eligible ? 'pass' : 'fail',
-      title: eligible ? 'Ликвидность допущена' : 'Ликвидность не допущена',
-      text: `Liquidity score ${fmt(s.liquidity_score, 2)}, spread ${pctRaw(spread, 4)}, turnover 24h ${fmt(s.turnover_24h, 1)} USDT.`,
-    },
-    {
-      key: 'spread',
-      status: spread <= 0.08 ? 'pass' : spread <= 0.15 ? 'warn' : 'fail',
-      title: spread <= 0.08 ? 'Spread нормальный' : spread <= 0.15 ? 'Spread пограничный' : 'Spread слишком широкий',
-      text: `Текущий spread ${pctRaw(spread, 4)}. Чем шире spread, тем хуже исполнимость grid/бота.`,
-    },
-    {
-      key: 'rr',
-      status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail',
-      title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны',
-      text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.',
-    },
-    {
-      key: 'confidence',
-      status: confidence >= 0.62 ? 'pass' : confidence >= 0.54 ? 'warn' : 'fail',
-      title: `Confidence ${pct(confidence, 0)}`,
-      text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.',
-    },
-    {
-      key: 'backtest',
-      status: trades >= 30 && num(s.profit_factor, 0) >= 1.25 && dd <= 0.22 ? 'pass' : trades >= 10 ? 'warn' : 'fail',
-      title: `Бэктест: ${fmt(trades, 0)} сделок, PF ${fmt(s.profit_factor, 2)}, DD ${pct(dd, 1)}`,
-      text: 'Малое число сделок или высокий DD снижает доказательность сетапа.',
-    },
-    {
-      key: 'ml',
-      status: rocAuc >= 0.58 ? 'pass' : rocAuc >= 0.52 ? 'warn' : 'fail',
-      title: `ML ROC AUC ${fmt(rocAuc, 3)}`,
-      text: `Research score ${fmt(research, 3)}. AUC около 0.5 означает отсутствие ML-подтверждения.`,
-    },
-    {
-      key: 'llm',
-      status: s.llm_status === 'ok' ? (llmVerdictFor(s).tone === 'fail' ? 'warn' : 'pass') : 'warn',
-      title: s.llm_status === 'ok' ? `LLM‑вердикт: ${llmVerdictFor(s).label}` : s.llm_status === 'running' ? 'LLM‑оценка выполняется' : 'LLM‑оценка ожидается',
-      text: `${llmVerdictFor(s).summary}. ${llmVerdictFor(s).meta}. Фоновый LLM — независимый риск‑фильтр, не торговый приказ.`,
-    },
+    { key: 'freshness', status: stale ? 'fail' : 'pass', title: stale ? 'Сигнал устарел' : 'Сигнал свежий', text: `Создан ${ageText(s.created_at)}. Максимальный возраст: ${maxAgeHours} ч.` },
+    { key: 'direction', status: s.direction === 'long' || s.direction === 'short' ? 'pass' : 'fail', title: s.direction === 'long' || s.direction === 'short' ? 'Направление задано' : 'Нет направления сделки', text: `Направление: ${String(s.direction || 'flat').toUpperCase()}. Flat не является сделкой.` },
+    { key: 'mtf', status: mtfSeverity(s), title: mtfSeverity(s) === 'pass' ? 'MTF согласован' : mtfSeverity(s) === 'warn' ? 'MTF неполный' : 'MTF запрещает вход', text: `${mtfLabel(s)}. ${s.mtf_reason || '15m — вход; 60m и 240m — фильтры, а не отдельные триггеры.'}` },
+    { key: 'liquidity', status: eligible ? 'pass' : 'fail', title: eligible ? 'Ликвидность допущена' : 'Ликвидность не допущена', text: `Liquidity score ${fmt(s.liquidity_score, 2)}, spread ${pctRaw(spread, 4)}, turnover 24h ${fmt(s.turnover_24h, 1)} USDT.` },
+    { key: 'spread', status: spread <= 0.08 ? 'pass' : spread <= 0.15 ? 'warn' : 'fail', title: spread <= 0.08 ? 'Spread нормальный' : spread <= 0.15 ? 'Spread пограничный' : 'Spread слишком широкий', text: `Текущий spread ${pctRaw(spread, 4)}. Чем шире spread, тем хуже исполнимость grid/бота.` },
+    { key: 'rr', status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail', title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны', text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.' },
+    { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.54 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
+    { key: 'backtest', status: trades >= 30 && num(s.profit_factor, 0) >= 1.25 && dd <= 0.22 ? 'pass' : trades >= 10 ? 'warn' : 'fail', title: `Бэктест: ${fmt(trades, 0)} сделок, PF ${fmt(s.profit_factor, 2)}, DD ${pct(dd, 1)}`, text: 'Малое число сделок или высокий DD снижает доказательность сетапа.' },
+    { key: 'ml', status: rocAuc >= 0.58 ? 'pass' : rocAuc >= 0.52 ? 'warn' : 'fail', title: `ML ROC AUC ${fmt(rocAuc, 3)}`, text: `Research score ${fmt(research, 3)}. AUC около 0.5 означает отсутствие ML-подтверждения.` },
   ];
 }
 
-function decisionFor(s) {
+function algorithmDecisionFor(s) {
   if (!s) {
-    return {
-      level: 'reject',
-      label: 'НЕТ ВХОДА',
-      score: 0,
-      title: 'Нет выбранного сетапа',
-      subtitle: 'Обновите данные и постройте рекомендации. По умолчанию вход запрещён.',
-    };
+    return { level: 'reject', label: 'НЕТ ВХОДА', score: 0, title: 'Нет выбранного сетапа', subtitle: 'Обновите данные и постройте рекомендации. По умолчанию вход запрещён.' };
   }
-  const checks = checklistFor(s);
+  const checks = baseChecklistFor(s);
   const hardFails = checks.filter((item) => item.status === 'fail');
   const warnings = checks.filter((item) => item.status === 'warn');
   const rr = riskReward(s);
@@ -641,30 +596,29 @@ function decisionFor(s) {
   score = Math.round(Math.max(0, Math.min(100, score)));
 
   if (hardFails.length) {
-    return {
-      level: 'reject',
-      label: 'НЕТ ВХОДА',
-      score,
-      title: `${s.symbol}: вход запрещён`,
-      subtitle: `Причина: ${hardFails[0].title}. Сетап можно только разобрать, но не передавать на создание бота.`,
-    };
+    return { level: 'reject', label: 'НЕТ ВХОДА', score, title: `${s.symbol}: вход запрещён`, subtitle: `Причина: ${hardFails[0].title}. Сетап можно только разобрать, но не передавать на создание бота.` };
   }
   if (warnings.length || score < 70) {
-    return {
-      level: 'watch',
-      label: 'НАБЛЮДАТЬ',
-      score,
-      title: `${s.symbol}: только наблюдение`,
-      subtitle: `Нет критического запрета, но есть слабые места: ${warnings.map((x) => x.title).slice(0, 2).join('; ') || 'оценка допуска ниже порога'}.`,
-    };
+    return { level: 'watch', label: 'НАБЛЮДАТЬ', score, title: `${s.symbol}: только наблюдение`, subtitle: `Нет критического запрета, но есть слабые места: ${warnings.map((x) => x.title).slice(0, 2).join('; ') || 'оценка допуска ниже порога'}.` };
   }
-  return {
-    level: 'review',
-    label: 'К ПРОВЕРКЕ',
-    score,
-    title: `${s.symbol}: можно передать на ручную проверку`,
-    subtitle: 'Это не приказ на вход. Оператор обязан сверить стакан, новости, общий риск портфеля и параметры создаваемого бота.',
-  };
+  return { level: 'review', label: 'К ПРОВЕРКЕ', score, title: `${s.symbol}: можно передать на ручную проверку`, subtitle: 'Это не приказ на вход. Оператор обязан сверить стакан, новости, общий риск портфеля и параметры создаваемого бота.' };
+}
+
+function checklistFor(s, options = {}) {
+  const checks = baseChecklistFor(s);
+  if (!s || options.includeLlm === false) return checks;
+  const verdict = llmVerdictFor(s);
+  checks.push({
+    key: 'llm',
+    status: s.llm_status === 'ok' ? (verdict.agreed ? 'pass' : 'warn') : 'warn',
+    title: s.llm_status === 'ok' ? `LLM: ${verdict.label}` : s.llm_status === 'running' ? 'LLM‑оценка выполняется' : 'LLM‑оценка ожидается',
+    text: `${verdict.summary}. ${verdict.meta}.`,
+  });
+  return checks;
+}
+
+function decisionFor(s) {
+  return algorithmDecisionFor(s);
 }
 
 function reasonItems(s) {
@@ -848,7 +802,7 @@ function renderTicket(s) {
       <div class="metric"><span>LLM</span><strong>${escapeHtml(llmStateText(s).replace('LLM: ', ''))}</strong></div>
     </div>
     <div class="execution-plan">
-      <b>Правило исполнения:</b> интрадей-вход рассматривается только по ${escapeHtml(s.mtf_entry_interval || '15')}m. ${escapeHtml(s.mtf_bias_interval || '60')}m задает направление, ${escapeHtml(s.mtf_regime_interval || '240')}m может наложить veto. Не входить по рынку автоматически; если цена ушла, spread расширился или есть красный пункт — сетап отменяется.
+      <b>Исполнение:</b> только ручная проверка. Entry/SL/TP не являются торговым приказом; красный пункт отменяет сетап.
     </div>
     <section class="llm-detail-card ${escapeHtml(cssToken(llmVerdict.tone, 'pending'))}">
       <header><span>LLM verdict · ${escapeHtml(llmVerdict.symbol)}</span><strong>${escapeHtml(llmVerdict.label)}</strong></header>
@@ -915,9 +869,7 @@ function renderBrief(s) {
   const verdict = llmVerdictFor(s);
   box.textContent = `${verdict.symbol} · ${verdict.label}
 ${verdict.summary}
-${verdict.meta}
-
-Фоновый LLM — независимый риск‑фильтр. Он не создает торговый приказ и не заменяет ручную проверку.`;
+${verdict.meta}`;
 }
 
 function renderQueue() {
@@ -1129,7 +1081,7 @@ async function refreshEquity() {
 }
 
 async function refreshNews() {
-  const sym = selectedCandidate()?.symbol || symbols()[0] || 'BTCUSDT';
+  const sym = selectedCandidate()?.symbol || selectedSymbols()[0] || 'BTCUSDT';
   const data = await api(`/api/news/latest?symbol=${encodeURIComponent(sym)}&limit=6`);
   state.news = data.news || [];
   const box = $('newsList');
@@ -1236,7 +1188,7 @@ function bindControls() {
       showOperationStatus(`Выполняется: загрузка рынка. Таймаут ${Math.round(timeoutMs / 60_000)} мин; для ускорения уменьшите символы, интервалы или дни истории.`, 'busy');
       const data = await api('/api/sync/market', {
         method: 'POST',
-        body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: primaryInterval(), intervals: intervals(), days: Number($('days').value) }),
+        body: JSON.stringify({ category: $('category').value, symbols: selectedSymbols(), interval: primaryInterval(), intervals: intervals(), days: Number($('days').value) }),
       }, timeoutMs);
       await refreshStatus();
       return data.result;
@@ -1249,7 +1201,7 @@ function bindControls() {
       showOperationStatus('Выполняется: обновление sentiment. Источники ограничены короткими таймаутами.', 'busy');
       const data = await api('/api/sync/sentiment', {
         method: 'POST',
-        body: JSON.stringify({ symbols: symbols(), days: 7, use_llm: false, category: $('category').value, interval: primaryInterval(), intervals: intervals() }),
+        body: JSON.stringify({ symbols: selectedSymbols(), days: 7, use_llm: false, category: $('category').value, interval: primaryInterval(), intervals: intervals() }),
       }, SENTIMENT_OPERATION_TIMEOUT_MS);
       await refreshNews();
       return data.result;
@@ -1261,7 +1213,7 @@ function bindControls() {
       validateInputs({ requireSymbols: true });
       const data = await api('/api/signals/build', {
         method: 'POST',
-        body: JSON.stringify({ category: $('category').value, symbols: symbols(), interval: primaryInterval(), intervals: intervals() }),
+        body: JSON.stringify({ category: $('category').value, symbols: selectedSymbols(), interval: primaryInterval(), intervals: intervals() }),
       });
       await refreshRank();
       await refreshSignals();
@@ -1278,7 +1230,7 @@ function bindControls() {
   $('backtestBtn').onclick = async () => {
     await runOperation('Backtest', async () => {
       const s = selectedCandidate();
-      const sym = s?.symbol || symbols()[0] || 'BTCUSDT';
+      const sym = s?.symbol || selectedSymbols()[0] || 'BTCUSDT';
       const strategy = s?.strategy || $('strategy').value;
       validateInputs();
       const data = await api('/api/backtest/run', {
@@ -1313,7 +1265,7 @@ function bindControls() {
   $('trainBtn').onclick = async () => {
     await runOperation('ML trained', async () => {
       const s = selectedCandidate();
-      const sym = s?.symbol || symbols()[0] || 'BTCUSDT';
+      const sym = s?.symbol || selectedSymbols()[0] || 'BTCUSDT';
       validateInputs();
       const data = await api('/api/ml/train', {
         method: 'POST',
@@ -1327,7 +1279,7 @@ function bindControls() {
   $('predictBtn').onclick = async () => {
     await runOperation('ML prediction', async () => {
       const s = selectedCandidate();
-      const sym = s?.symbol || symbols()[0] || 'BTCUSDT';
+      const sym = s?.symbol || selectedSymbols()[0] || 'BTCUSDT';
       validateInputs();
       const data = await api(`/api/ml/predict/latest?symbol=${encodeURIComponent(sym)}&category=${encodeURIComponent($('category').value)}&interval=${encodeURIComponent(s?.interval || primaryInterval())}&horizon_bars=12`);
       return data.result;
@@ -1425,9 +1377,11 @@ function bindControls() {
 bindControls();
 setContextTab(state.contextTab);
 setOpsPanelOpen(false);
-refreshAll();
-setInterval(async () => {
-  if (document.body.classList.contains('is-busy')) return;
+
+let autoRefreshInFlight = false;
+async function refreshBackgroundTick() {
+  if (autoRefreshInFlight || document.body.classList.contains('is-busy')) return;
+  autoRefreshInFlight = true;
   try {
     await refreshSignalStatus();
     await refreshBacktestStatus();
@@ -1436,5 +1390,10 @@ setInterval(async () => {
     await refreshSignals();
   } catch (e) {
     log(`ERROR auto refresh: ${e.message}`);
+  } finally {
+    autoRefreshInFlight = false;
   }
-}, 30_000);
+}
+
+refreshAll();
+setInterval(refreshBackgroundTick, 30_000);

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -69,16 +70,24 @@ def _news_url(source: str, title: str, url: str | None, published_at: datetime |
     return value or _stable_synthetic_url(source, title, published_at)
 
 
-def _safe_get_json(url: str, params: dict[str, Any] | None = None, timeout: int = 5) -> dict[str, Any]:
-    response = requests.get(url, params=params, timeout=timeout, headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"})
+def _safe_get_json(url: str, params: dict[str, Any] | None = None, timeout: float | None = None) -> dict[str, Any]:
+    request_timeout = timeout if timeout is not None else settings.sentiment_http_timeout_sec
+    response = requests.get(url, params=params, timeout=request_timeout, headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"})
     response.raise_for_status()
     return response.json()
 
 
-def _safe_get_text(url: str, timeout: int = 5) -> str:
-    response = requests.get(url, timeout=timeout, headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"})
+def _safe_get_text(url: str, timeout: float | None = None) -> str:
+    request_timeout = timeout if timeout is not None else settings.sentiment_http_timeout_sec
+    response = requests.get(url, timeout=request_timeout, headers={"User-Agent": "bybit-ml-llm-research-lab/2.0"})
     response.raise_for_status()
     return response.text
+
+
+def _has_sentiment_budget(deadline: float | None, reserve_sec: float = 2.0) -> bool:
+    if deadline is None:
+        return True
+    return time.monotonic() + reserve_sec < deadline
 
 
 def _base_symbol(symbol: str) -> str:
@@ -163,7 +172,7 @@ def fetch_gdelt_news(symbol: str, days: int = 2, maxrecords: int = 75) -> list[d
     timespan = f"{max(1, days)}d"
     url = f"https://api.gdeltproject.org/api/v2/doc/doc?query={query}&mode=artlist&format=json&maxrecords={maxrecords}&timespan={timespan}"
     try:
-        payload = _safe_get_json(url, timeout=5)
+        payload = _safe_get_json(url)
         return payload.get("articles", [])
     except Exception as exc:
         logger.warning("GDELT sync failed for %s: %s", symbol, exc)
@@ -244,7 +253,7 @@ def sync_rss_news(symbols: list[str], use_llm: bool = False) -> dict[str, int]:
         if not url:
             continue
         try:
-            xml = _safe_get_text(url, timeout=5)
+            xml = _safe_get_text(url)
             root = ET.fromstring(xml)
         except Exception as exc:
             logger.warning("RSS source %s failed: %s", name, exc)
@@ -290,7 +299,7 @@ def sync_cryptopanic(symbol: str, use_llm: bool = False) -> int:
     base = _base_symbol(symbol)
     params = {"auth_token": settings.cryptopanic_token, "currencies": base, "filter": "hot", "public": "true"}
     try:
-        payload = _safe_get_json("https://cryptopanic.com/api/developer/v2/posts/", params=params, timeout=5)
+        payload = _safe_get_json("https://cryptopanic.com/api/developer/v2/posts/", params=params)
     except Exception as exc:
         logger.warning("CryptoPanic sync failed for %s: %s", symbol, exc)
         return 0
@@ -376,18 +385,48 @@ def sync_sentiment_bundle_multi(
         value = str(interval).strip().upper()
         if value and value not in normalized_intervals:
             normalized_intervals.append(value)
+
+    deadline = time.monotonic() + max(15, int(settings.sentiment_sync_budget_sec))
+    skipped: list[str] = []
+
+    fear_greed = 0
+    if _has_sentiment_budget(deadline):
+        fear_greed = sync_fear_greed(limit=max(30, days + 5))
+    else:
+        skipped.append("fear_greed")
+
+    rss_news: dict[str, int] = {"MARKET": 0, **{s: 0 for s in symbols}}
+    if _has_sentiment_budget(deadline):
+        rss_news = sync_rss_news(symbols, use_llm=use_llm)
+    else:
+        skipped.append("rss_news")
+
     result: dict[str, Any] = {
-        "fear_greed": sync_fear_greed(limit=max(30, days + 5)),
-        "rss_news": sync_rss_news(symbols, use_llm=use_llm),
+        "fear_greed": fear_greed,
+        "rss_news": rss_news,
         "symbols": {},
         "intervals": normalized_intervals,
         "cryptopanic_enabled": bool(settings.use_cryptopanic and settings.cryptopanic_token),
+        "budget_sec": int(settings.sentiment_sync_budget_sec),
+        "skipped": skipped,
     }
     for symbol in symbols:
-        gdelt = sync_gdelt_news(symbol, days=min(max(days, 1), 7), use_llm=use_llm)
-        cp = sync_cryptopanic(symbol, use_llm=use_llm)
+        gdelt = 0
+        cp = 0
+        if _has_sentiment_budget(deadline):
+            gdelt = sync_gdelt_news(symbol, days=min(max(days, 1), 7), use_llm=use_llm)
+        else:
+            skipped.append(f"{symbol}:gdelt")
+        if _has_sentiment_budget(deadline):
+            cp = sync_cryptopanic(symbol, use_llm=use_llm)
+        else:
+            skipped.append(f"{symbol}:cryptopanic")
         market_by_interval: dict[str, int] = {}
         for interval in normalized_intervals:
+            if not _has_sentiment_budget(deadline):
+                skipped.append(f"{symbol}:{interval}:market_microstructure")
+                market_by_interval[interval] = 0
+                continue
             # Рыночный micro-sentiment зависит от свечного таймфрейма. Его нельзя
             # считать один раз для 1h и молча переиспользовать для 15m/4h.
             market_by_interval[interval] = sync_market_sentiment(symbol, category=category, interval=interval)
@@ -396,8 +435,8 @@ def sync_sentiment_bundle_multi(
             "cryptopanic_news": cp,
             "market_microstructure_by_interval": market_by_interval,
         }
+    result["skipped"] = skipped
     return result
-
 
 def sentiment_summary(symbol: str = "BTCUSDT", limit: int = 20) -> dict[str, Any]:
     symbol = symbol.upper()

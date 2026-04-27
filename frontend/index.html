@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bybit Research Lab — operator workstation</title>
-  <link rel="stylesheet" href="/static/styles.css?v=modern-v13" />
+  <link rel="stylesheet" href="/static/styles.css?v=modern-v14" />
 </head>
-<body class="compact-ui modern-ui layout-v12">
+<body class="compact-ui modern-ui layout-v14">
   <div class="app-frame">
     <nav class="side-nav" aria-label="Основная навигация">
       <div class="side-logo" aria-label="Bybit Research">BR</div>
@@ -65,8 +65,8 @@
               <span id="llmSymbolBox">LLM · —</span>
               <b id="llmVerdictLabel">Ожидает оценки</b>
             </div>
-            <p id="llmVerdictText">Выберите кандидата: здесь появится согласованность LLM с алгоритмом.</p>
-            <small id="llmVerdictMeta">TTL и возраст оценки появятся после фонового цикла.</small>
+            <p id="llmVerdictText">Выберите кандидата: здесь появится согласованность LLM с алгоритмом и срок жизни оценки.</p>
+            <small id="llmVerdictMeta">Возраст и TTL появятся после фонового цикла.</small>
           </aside>
         </article>
 
@@ -113,22 +113,22 @@
             <span class="ops-toggle-state" id="opsToggleState">Свернуть панель ↑</span>
           </button>
           <div class="ops-body" id="opsBody">
-            <label class="wide-field">Символы
+            <label class="wide-field control-symbols">Символы
               <input id="symbols" value="BTCUSDT, ETHUSDT, SOLUSDT" autocomplete="off" />
             </label>
-            <label>Категория
+            <label class="control-small">Категория
               <select id="category"><option>linear</option><option>inverse</option><option>spot</option></select>
             </label>
-            <label>MTF контур
+            <label class="control-small">MTF контур
               <select id="interval"><option>15,60,240</option><option>5,15,60</option><option>60,240,D</option></select>
             </label>
-            <label>Дней истории
+            <label class="control-small">Дней истории
               <input id="days" type="number" value="30" min="1" max="730" />
             </label>
-            <label>Universe
+            <label class="control-small">Universe
               <select id="universeMode"><option>hybrid</option><option>core</option><option>dynamic</option></select>
             </label>
-            <label class="strategy-field">Стратегия
+            <label class="strategy-field control-strategy">Стратегия
               <select id="strategy">
                 <option>regime_adaptive_combo</option>
                 <option>donchian_atr_breakout</option>
@@ -220,6 +220,6 @@
       </ol>
     </form>
   </dialog>
-  <script src="/static/app.js?v=modern-v13"></script>
+  <script src="/static/app.js?v=modern-v14"></script>
 </body>
 </html>

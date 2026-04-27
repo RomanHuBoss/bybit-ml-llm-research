@@ -110,6 +110,8 @@ class Settings:
     use_cryptopanic: bool = _bool("USE_CRYPTOPANIC", False)
     cryptopanic_token: str = os.getenv("CRYPTOPANIC_TOKEN", os.getenv("CRYPTOPANIC_API_KEY", ""))
     sentiment_lookback_days: int = _int("SENTIMENT_LOOKBACK_DAYS", 7)
+    sentiment_http_timeout_sec: float = _float("SENTIMENT_HTTP_TIMEOUT_SEC", 3.0)
+    sentiment_sync_budget_sec: int = _int("SENTIMENT_SYNC_BUDGET_SEC", 150)
     rss_urls: tuple[str, ...] = _csv("RSS_URLS", RSS_URLS_DEFAULT)
 
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
