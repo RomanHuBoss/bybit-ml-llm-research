@@ -60,6 +60,16 @@ function escapeHtml(value) {
 }
 
 
+function cleanLlmText(value) {
+  return String(value ?? '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^[\s>*#\-–—]+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function cssToken(value, fallback = 'neutral') {
   const token = String(value ?? '').toLowerCase().replace(/[^a-z0-9_-]/g, '');
   return token || fallback;
@@ -408,21 +418,43 @@ function extractLlmVerdictLine(brief) {
 
 function llmToneFromText(text) {
   const normalized = String(text || '').toLowerCase();
-  if (/нет\s+входа|вход\s+запрещ|отклон|не\s+входить|no\s*trade|reject|avoid|block|запрет/.test(normalized)) return 'fail';
-  if (/наблюд|ожид|wait|watch|hold|только\s+контекст|не\s+спешить/.test(normalized)) return 'warn';
-  if (/к\s+проверке|ручн|рассмотр|допуст|можно\s+рассматривать|review|consider|candidate/.test(normalized)) return 'ok';
+  if (/да[,\s]+.*подтверж|подтверждаю\s+вход|entry\s+confirmed|approve|approved|можно\s+вход|к\s+ручной\s+проверке|review/.test(normalized)) return 'ok';
+  if (/наблюд|ожид|wait|watch|hold|отлож|только\s+наблюд/.test(normalized)) return 'warn';
+  if (/нет[,\s]+.*не\s+подтверж|не\s+подтверждаю|нет\s+входа|вход\s+запрещ|отклон|не\s+входить|no\s*trade|reject|avoid|block|запрет/.test(normalized)) return 'fail';
   if (/long|short|лонг|шорт|buy|sell/.test(normalized)) return 'ok';
-  return 'ok';
+  return 'warn';
+}
+
+function compactLlmLabel(tone) {
+  if (tone === 'ok') return 'Да, вход подтверждаю';
+  if (tone === 'warn') return 'Наблюдать, вход не подтверждаю';
+  if (tone === 'fail') return 'Нет, вход не подтверждаю';
+  if (tone === 'error') return 'LLM недоступен';
+  return 'LLM ожидается';
+}
+
+function compactLlmSummary(brief, tone) {
+  const lines = String(brief || '')
+    .split('\n')
+    .map((line) => cleanLlmText(line))
+    .filter(Boolean)
+    .filter((line) => !/^((ВЕРДИКТ|VERDICT|LLM[-\s]*VERDICT|РЕШЕНИЕ)\s*[:：—-])/i.test(line));
+  const firstReason = lines[0] ? truncateText(lines[0].replace(/^(причина|почему)\s*[:：—-]\s*/i, ''), 96) : '';
+  if (firstReason) return `Причина: ${firstReason}`;
+  if (tone === 'ok') return 'LLM допускает ручной вход после проверки стакана и риска.';
+  if (tone === 'warn') return 'LLM рекомендует только наблюдение; вход в бота не подтвержден.';
+  if (tone === 'fail') return 'LLM не подтверждает вход; передачу в бота заблокировать.';
+  return 'Краткий LLM-вердикт пока не получен.';
 }
 
 function llmVerdictFor(s) {
   if (!s) {
     return {
       tone: 'pending',
-      label: 'Ожидает выбора',
+      label: 'LLM ожидается',
       symbol: '—',
-      summary: 'Выберите кандидата: здесь появится LLM‑вердикт по конкретному символу.',
-      meta: 'Фоновый LLM — независимый риск‑разбор.',
+      summary: 'Выберите кандидата для краткого вердикта.',
+      meta: 'Фоновый LLM — независимый риск-фильтр.',
     };
   }
   const symbol = String(s.symbol || '—').toUpperCase();
@@ -431,35 +463,28 @@ function llmVerdictFor(s) {
       tone: 'pending',
       label: 'LLM анализирует',
       symbol,
-      summary: 'Фоновый LLM сейчас разбирает этот сетап. Экран обновится автоматически.',
+      summary: 'Оценка выполняется в фоне.',
       meta: `${symbol} · ${s.interval || '—'} · ${s.llm_model || 'модель не указана'}`,
     };
   }
   if (s.llm_status === 'error') {
     return {
       tone: 'error',
-      label: 'LLM ошибка',
+      label: compactLlmLabel('error'),
       symbol,
-      summary: truncateText(s.llm_error || 'LLM endpoint недоступен.', 180),
+      summary: truncateText(s.llm_error || 'LLM endpoint недоступен.', 96),
       meta: `${symbol} · оценка не получена`,
     };
   }
   if (s.llm_status === 'ok' && s.llm_brief) {
-    const verdictLine = extractLlmVerdictLine(s.llm_brief);
+    const rawVerdictLine = extractLlmVerdictLine(s.llm_brief);
+    const verdictLine = cleanLlmText(rawVerdictLine);
     const tone = llmToneFromText(verdictLine || s.llm_brief);
-    const label = verdictLine
-      ? truncateText(verdictLine.replace(/^(вход\s*[:：—-]\s*)/i, ''), 70)
-      : 'LLM: разбор готов';
-    const summaryLine = String(s.llm_brief || '')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .find((line) => !/^((ВЕРДИКТ|VERDICT|LLM[-\s]*VERDICT|РЕШЕНИЕ)\s*[:：—-])/i.test(line));
     return {
       tone,
-      label,
+      label: compactLlmLabel(tone),
       symbol,
-      summary: truncateText(summaryLine || s.llm_brief, 220),
+      summary: compactLlmSummary(s.llm_brief, tone),
       meta: `${symbol} · ${llmStateText(s).replace('LLM: ', '')} · ${s.llm_model || 'model'}`,
     };
   }
@@ -467,7 +492,7 @@ function llmVerdictFor(s) {
     tone: 'pending',
     label: 'LLM ожидается',
     symbol,
-    summary: 'Для этого символа ещё нет сохранённого LLM‑вердикта. Запустите фоновое обновление или дождитесь автоцикла.',
+    summary: 'Для этого символа ещё нет сохраненного LLM-вердикта.',
     meta: `${symbol} · ${s.interval || '—'} · ${String(s.strategy || 'strategy')}`,
   };
 }
