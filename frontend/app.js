@@ -162,6 +162,14 @@ function ageText(value) {
   return `${(minutes / 1440).toFixed(1)} дн назад`;
 }
 
+function llmLifeText(updatedAt) {
+  const minutes = ageMinutes(updatedAt);
+  const ttl = num(state.llmStatus?.ttl_minutes, 60) || 60;
+  if (minutes === null) return `Возраст: — · TTL ${ttl} мин`;
+  const left = Math.max(0, ttl - minutes);
+  return `Возраст ${minutes} мин · TTL ${ttl} мин · осталось ${left} мин`;
+}
+
 const DEFAULT_API_TIMEOUT_MS = 45_000;
 const SENTIMENT_OPERATION_TIMEOUT_MS = 180_000;
 const LONG_OPERATION_TIMEOUT_MS = 360_000;
@@ -228,6 +236,61 @@ function log(title, obj) {
     }
   }
   logBox.textContent = `[${new Date().toLocaleTimeString()}] ${title}${payload}\n\n${logBox.textContent}`;
+}
+
+function setEquitySource(text, tone = 'neutral') {
+  const box = $('equitySourceBox');
+  if (!box) return;
+  box.textContent = text;
+  box.className = `chart-explainer ${cssToken(tone, 'neutral')}`;
+}
+
+function compactStrategy(value) {
+  return STRATEGY_LABELS[value] || value || 'стратегия не указана';
+}
+
+function equityRunMatchesSelected(run, s) {
+  if (!run || !s) return false;
+  const runSymbol = String(run.symbol || '').toUpperCase();
+  const selectedSymbol = String(s.symbol || '').toUpperCase();
+  const runStrategy = String(run.strategy || '');
+  const selectedStrategy = String(s.strategy || '');
+  return runSymbol && selectedSymbol && runSymbol === selectedSymbol && (!runStrategy || !selectedStrategy || runStrategy === selectedStrategy);
+}
+
+function syncEquitySelectionNote(s) {
+  if (!state.equityRun) {
+    setEquitySource('Equity-кривая пока не загружена. Выбор кандидата слева не строит график; нажмите «Бэктест сетапа», чтобы построить кривую именно для выбранного рынка.', 'neutral');
+    return;
+  }
+  const runSymbol = String(state.equityRun.symbol || '—').toUpperCase();
+  const runStrategy = compactStrategy(state.equityRun.strategy);
+  if (equityRunMatchesSelected(state.equityRun, s)) {
+    setEquitySource(`График соответствует выбранному рынку ${runSymbol}. Источник: последняя сохранённая equity-кривая /api/equity/latest; перерисовка — «Бэктест сетапа» или «Обновить все».`, 'ok');
+    return;
+  }
+  const selected = s?.symbol ? `${String(s.symbol).toUpperCase()} · ${compactStrategy(s.strategy)}` : 'кандидат не выбран';
+  setEquitySource(`График НЕ меняется от простого выбора строки. Сейчас показан последний сохранённый бэктест: ${runSymbol} · ${runStrategy}. Выбрано: ${selected}. Для выбранного рынка нажмите «Бэктест сетапа».`, 'warn');
+}
+
+function mlEvidenceStatus(s) {
+  const rocAuc = num(s?.roc_auc, 0.5);
+  if (rocAuc >= 0.58) return 'pass';
+  if (rocAuc >= 0.52) return 'warn';
+  return 'fail';
+}
+
+function mlEvidenceTitle(s) {
+  const rocAuc = num(s?.roc_auc, 0.5);
+  const zone = rocAuc >= 0.58 ? 'зелёный ≥0.58' : rocAuc >= 0.52 ? 'жёлтый 0.52–0.58' : 'красный <0.52';
+  return `ML ROC-AUC ${fmt(rocAuc, 3)} · ${zone}`;
+}
+
+function mlEvidenceText(s) {
+  const rocAuc = num(s?.roc_auc, 0.5);
+  const research = num(s?.research_score, 0);
+  const direction = rocAuc < 0.5 ? 'Значение ниже 0.50 хуже случайного ориентира.' : 'Значение около 0.50 не даёт доказательного ML-подтверждения.';
+  return `Зелёный статус появляется только при ROC-AUC ≥0.58; жёлтый — 0.52–0.58; красный — ниже 0.52. ${direction} Research score ${fmt(research, 3)}.`;
 }
 
 function setText(id, value) {
@@ -543,9 +606,9 @@ function llmMatchesAlgorithm(recommendation, s) {
 function llmVerdictFor(s) {
   if (!s) {
     return {
-      state: 'pending', tone: 'pending', recommendation: '—', label: 'NEUTRAL', symbol: '—',
+      state: 'pending', tone: 'pending', recommendation: '—', label: 'WAITING', symbol: '—',
       confidence: null, confidenceText: '—', timeText: '—', updatedAt: null,
-      summary: 'Выберите кандидата: здесь появится рекомендация LLM — LONG / SHORT / NEUTRAL.',
+      summary: 'Выберите кандидата: здесь появится отдельная рекомендация LLM — LONG / SHORT / NEUTRAL.',
       meta: 'Фоновый LLM ещё не оценивал сетап.', rationale: '', agreement: null,
     };
   }
@@ -588,7 +651,7 @@ function llmVerdictFor(s) {
     };
   }
   return {
-    state: 'pending', tone: 'pending', recommendation: '—', label: 'PENDING', symbol,
+    state: 'pending', tone: 'pending', recommendation: '—', label: 'NO VERDICT', symbol,
     confidence: null, confidenceText: '—', timeText: '—', updatedAt: null,
     summary: 'LLM ещё не оценивал выбранный сетап.',
     meta: `${symbol} · LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.`,
@@ -601,8 +664,8 @@ function renderLlmVerdict(s) {
   if (!card) return;
   const verdict = llmVerdictFor(s);
   card.className = `llm-symbol-verdict ${cssToken(verdict.tone, 'pending')}`;
-  setText('llmSymbolBox', `LLM · ${verdict.symbol}`);
-  setText('llmVerdictLabel', verdict.label);
+  setText('llmSymbolBox', `${verdict.symbol}`);
+  setText('llmVerdictLabel', verdict.state === 'ok' ? 'LLM VERDICT' : verdict.label);
   setText('llmRecommendationLabel', verdict.recommendation);
   setText('llmConfidenceLabel', verdict.confidenceText);
   setText('llmTimeLabel', verdict.timeText);
@@ -633,7 +696,7 @@ function baseChecklistFor(s) {
     { key: 'rr', status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail', title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны', text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.' },
     { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.54 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
     { key: 'backtest', status: trades >= 30 && num(s.profit_factor, 0) >= 1.25 && dd <= 0.22 ? 'pass' : trades >= 10 ? 'warn' : 'fail', title: `Бэктест: ${fmt(trades, 0)} сделок, PF ${fmt(s.profit_factor, 2)}, DD ${pct(dd, 1)}`, text: 'Малое число сделок или высокий DD снижает доказательность сетапа.' },
-    { key: 'ml', status: rocAuc >= 0.58 ? 'pass' : rocAuc >= 0.52 ? 'warn' : 'fail', title: `ML ROC AUC ${fmt(rocAuc, 3)}`, text: `Research score ${fmt(research, 3)}. AUC около 0.5 означает отсутствие ML-подтверждения.` },
+    { key: 'ml', status: mlEvidenceStatus(s), title: mlEvidenceTitle(s), text: mlEvidenceText(s) },
   ];
 }
 
@@ -712,9 +775,9 @@ function reasonItems(s) {
       text: `Сделок ${fmt(s.trades_count, 0)}, win rate ${pct(s.win_rate, 0)}, max DD ${pct(s.max_drawdown, 1)}.`,
     },
     {
-      level: num(s.roc_auc, 0.5) >= 0.58 ? 'good' : num(s.roc_auc, 0.5) >= 0.52 ? 'warn' : 'bad',
-      title: `ML: ROC AUC ${fmt(s.roc_auc, 3)}`,
-      text: `Вероятность модели по последнему состоянию: ${pct(s.ml_probability, 0)}. ML — фильтр, а не самостоятельная причина входа.`,
+      level: mlEvidenceStatus(s) === 'pass' ? 'good' : mlEvidenceStatus(s) === 'warn' ? 'warn' : 'bad',
+      title: `ML: ${mlEvidenceTitle(s)}`,
+      text: `${mlEvidenceText(s)} Вероятность модели по последнему состоянию: ${pct(s.ml_probability, 0)}. ML — фильтр, а не самостоятельная причина входа.`,
     },
     {
       level: 'warn',
@@ -838,6 +901,7 @@ function renderDecision() {
   renderBrief(s);
   renderLlmVerdict(s);
   renderMtfMatrix(s);
+  syncEquitySelectionNote(s);
 }
 
 function renderTicket(s) {
@@ -1146,9 +1210,14 @@ function drawEquity(curve) {
 async function refreshEquity() {
   const data = await api('/api/equity/latest?limit=1');
   state.equityRun = data.runs?.[0] || null;
-  if (!state.equityRun) return;
-  $('equityMeta').textContent = `${state.equityRun.symbol} · ${state.equityRun.strategy} · return ${pct(state.equityRun.total_return, 1)} · DD ${pct(state.equityRun.max_drawdown, 1)}`;
+  if (!state.equityRun) {
+    setText('equityMeta', 'нет equity curve');
+    setEquitySource('Equity-кривая не найдена. График появится после ручного или фонового бэктеста.', 'neutral');
+    return;
+  }
+  $('equityMeta').textContent = `${state.equityRun.symbol} · ${compactStrategy(state.equityRun.strategy)} · return ${pct(state.equityRun.total_return, 1)} · DD ${pct(state.equityRun.max_drawdown, 1)}`;
   drawEquity(state.equityRun.equity_curve);
+  syncEquitySelectionNote(selectedCandidate());
 }
 
 async function refreshNews() {
@@ -1308,7 +1377,10 @@ function bindControls() {
         method: 'POST',
         body: JSON.stringify({ category: $('category').value, symbol: sym, interval: s?.interval || primaryInterval(), strategy, limit: 5000 }),
       });
+      state.equityRun = { ...data.result, symbol: sym, strategy };
+      $('equityMeta').textContent = `${sym} · ${compactStrategy(strategy)} · return ${pct(data.result.total_return, 1)} · DD ${pct(data.result.max_drawdown, 1)}`;
       drawEquity(data.result.equity_curve);
+      setEquitySource(`Источник графика: ручной бэктест выбранного сетапа ${sym} · ${compactStrategy(strategy)}. Именно эта кнопка перерисовывает карту сделки.`, 'ok');
       await refreshRank();
       return data.result;
     });

@@ -3,13 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bybit Research Lab — Professional Trading Terminal</title>
-  <link rel="stylesheet" href="/static/styles.css?v=pro-terminal-v2" />
+  <title>Bybit Research Lab — Professional Trading Terminal v4</title>
+  <link rel="stylesheet" href="/static/styles.css?v=pro-terminal-v4" />
 </head>
 <body class="trading-terminal dark-mode terminal-pro compact-ui">
   <div class="app-frame">
     <nav class="side-nav" aria-label="Основная навигация">
-      <div class="side-logo" aria-label="Bybit Research Lab"><span>BR</span></div>
       <button type="button" class="nav-item active" data-nav-target="workspace" title="Рабочее место" aria-label="Рабочее место" aria-current="page">D</button>
       <button type="button" class="nav-item" data-nav-target="candidateQueue" title="15m рекомендации" aria-label="15m рекомендации">S</button>
       <button type="button" class="nav-item" data-nav-target="llmVerdictCard" title="LLM verdict" aria-label="LLM verdict">AI</button>
@@ -20,17 +19,16 @@
     </nav>
 
     <div class="app-main">
-      <header class="topbar">
-        <div class="brand">
+      <header class="topbar topbar-v4">
+        <div class="brand terminal-brand">
           <button type="button" id="navToggleBtn" class="menu-button" aria-label="Свернуть меню" aria-pressed="false">☰</button>
-          <div class="brand-mark" aria-hidden="true">BR</div>
           <div class="brand-copy">
             <p class="eyebrow">Bybit Research Lab</p>
-            <h1>Рабочее место оператора</h1>
+            <h1>Operator cockpit</h1>
           </div>
         </div>
 
-        <div class="market-strip" aria-label="Контекст рынка">
+        <div class="market-strip" aria-label="Торговый контекст">
           <span class="market-chip exchange">Bybit</span>
           <span class="market-chip">Entry 15m</span>
           <span class="market-chip">Bias 60m</span>
@@ -39,11 +37,11 @@
         </div>
 
         <div class="top-status" aria-label="Состояние сервисов">
-          <span id="statusBox" class="status">API...</span>
-          <span id="signalStatusBox" class="status wide">Signals...</span>
-          <span id="backtestStatusBox" class="status wide">Backtest...</span>
-          <span id="llmStatusBox" class="status wide">LLM...</span>
-          <button type="button" id="refreshAllBtn" class="refresh-all" data-busy-lock="true" title="Обновить все данные">↻ <span>Обновить все</span></button>
+          <span id="statusBox" class="status">DB —</span>
+          <span id="signalStatusBox" class="status wide">Signals —</span>
+          <span id="backtestStatusBox" class="status wide">BT —</span>
+          <span id="llmStatusBox" class="status wide">LLM —</span>
+          <button type="button" id="refreshAllBtn" class="refresh-all" data-busy-lock="true" title="Обновить все данные">↻ <span>Обновить</span></button>
         </div>
       </header>
 
@@ -144,16 +142,22 @@
             </article>
 
             <article class="panel chart-panel">
-              <div class="panel-head compact-head">
-                <div><p class="eyebrow">Execution map</p><h2>Карта сделки / equity</h2></div>
+              <div class="panel-head compact-head chart-head">
+                <div>
+                  <p class="eyebrow">Execution map</p>
+                  <h2>Карта сделки / equity</h2>
+                </div>
                 <span id="equityMeta" class="chart-meta">нет equity curve</span>
+              </div>
+              <div class="chart-explainer" id="equitySourceBox">
+                График обновляется только после загрузки последней equity-кривой или ручного бэктеста выбранного сетапа; простой выбор строки слева график не меняет.
               </div>
               <div class="chart-stage" aria-label="График equity curve">
                 <canvas id="equityCanvas" width="980" height="320"></canvas>
-                <div class="chart-watermark">TradingView / Lightweight Charts placeholder</div>
+                <div class="chart-watermark">Equity curve / backtest result</div>
               </div>
               <div class="chart-hints">
-                <span>Entry</span><span>SL</span><span>TP</span><span>Support/Resistance</span><span>Красный пункт = отмена</span>
+                <span>Источник: /api/equity/latest</span><span>Меняется: «Бэктест сетапа»</span><span>Выбор кандидата ≠ перерисовка</span><span>Красный пункт = отмена</span>
               </div>
             </article>
 
@@ -172,16 +176,22 @@
           <aside class="right-stack">
             <aside class="llm-symbol-verdict pending" id="llmVerdictCard" aria-label="LLM-вердикт по выбранному символу">
               <div class="llm-verdict-top">
-                <span id="llmSymbolBox">LLM · —</span>
-                <b id="llmVerdictLabel">NEUTRAL</b>
+                <div>
+                  <p class="eyebrow">LLM verdict</p>
+                  <h2 id="llmSymbolBox">—</h2>
+                </div>
+                <b id="llmVerdictLabel">WAITING</b>
+              </div>
+              <div class="llm-direction-box">
+                <span>Recommendation</span>
+                <strong id="llmRecommendationLabel">—</strong>
               </div>
               <div class="llm-recommendation-row">
-                <div><span>Recommendation</span><strong id="llmRecommendationLabel">—</strong></div>
                 <div><span>Confidence</span><strong id="llmConfidenceLabel">—</strong></div>
                 <div><span>Verdict time</span><strong id="llmTimeLabel">—</strong></div>
               </div>
-              <p id="llmVerdictText">Выберите кандидата: здесь появится рекомендация LLM — LONG / SHORT / NEUTRAL.</p>
-              <small id="llmVerdictMeta">LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.</small>
+              <p id="llmVerdictText">Выберите кандидата: здесь появится отдельная рекомендация LLM — LONG / SHORT / NEUTRAL.</p>
+              <small id="llmVerdictMeta">LLM работает в фоне. Новая оценка появится после фонового цикла или ручного запуска.</small>
             </aside>
 
             <article class="panel mtf-card">
@@ -270,6 +280,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=pro-terminal-v2"></script>
+  <script src="/static/app.js?v=pro-terminal-v4"></script>
 </body>
 </html>
