@@ -247,8 +247,8 @@ function showOperationStatus(message, tone = 'neutral') {
 
 function validateInputs({ requireSymbols = false } = {}) {
   const days = Number($('days')?.value);
-  if (!Number.isFinite(days) || days < 1 || days > 1000) {
-    throw new Error('Дней истории должно быть числом от 1 до 1000.');
+  if (!Number.isFinite(days) || days < 1 || days > 730) {
+    throw new Error('Дней истории должно быть числом от 1 до 730.');
   }
   if (!$('category')?.value.trim()) throw new Error('Категория не задана.');
   if (!intervals().length) throw new Error('MTF контур не задан.');
@@ -427,9 +427,10 @@ function setContextTab(tabName) {
 
 function llmStateText(s) {
   if (!s) return 'LLM: нет сетапа';
-  if (s.llm_status === 'ok') return `LLM: готово · ${ageText(s.llm_updated_at)}`;
-  if (s.llm_status === 'running') return 'LLM: анализируется';
-  if (s.llm_status === 'error') return `LLM: ошибка · ${escapeHtml(s.llm_error || 'см. журнал')}`;
+  const verdict = llmVerdictFor(s);
+  if (verdict.state === 'running') return 'LLM: анализируется';
+  if (verdict.state === 'error') return 'LLM: ошибка';
+  if (verdict.state === 'ok') return `LLM: ${verdict.recommendation} · ${verdict.confidenceText} · ${verdict.timeText}`;
   return 'LLM: ожидает фонового цикла';
 }
 
@@ -439,100 +440,160 @@ function truncateText(value, limit = 180) {
   return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1)).trim()}…` : text;
 }
 
-function extractLlmVerdictLine(brief) {
+function parseMaybeJsonObject(text) {
+  const raw = String(text || '').trim();
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLlmRecommendation(value) {
+  const text = String(value || '').toLowerCase();
+  if (/\b(long|buy)\b|лонг|покуп/.test(text)) return 'LONG';
+  if (/\b(short|sell)\b|шорт|продаж/.test(text)) return 'SHORT';
+  if (/\b(neutral|flat|wait|hold|no[_\s-]?trade|avoid)\b|нейтрал|наблюд|ожид|нет\s+вход|вход\s+не\s+подтверж|не\s+подтверж|запрещ/.test(text)) return 'NEUTRAL';
+  return null;
+}
+
+function extractStructuredLine(text, keys) {
+  const pattern = new RegExp(`(?:^|\\n)\\s*(?:${keys.join('|')})\\s*[:：=—-]\\s*([^\\n]+)`, 'i');
+  const match = String(text || '').match(pattern);
+  return match?.[1]?.trim() || '';
+}
+
+function extractLlmConfidence(text, parsed = null) {
+  const direct = parsed?.confidence ?? parsed?.llm_confidence ?? parsed?.confidence_score ?? parsed?.score;
+  if (direct !== undefined && direct !== null && direct !== '') {
+    const n = Number(String(direct).replace(',', '.').replace('%', ''));
+    if (Number.isFinite(n)) return Math.max(0, Math.min(100, n <= 1 ? n * 100 : n));
+  }
+  const line = extractStructuredLine(text, ['LLM_CONFIDENCE', 'CONFIDENCE', 'CONFIDENCE_SCORE', 'УВЕРЕННОСТЬ', 'УВЕРЕННОСТЬ LLM']);
+  const match = line.match(/(\d{1,3}(?:[\.,]\d+)?)/) || String(text || '').match(/(?:confidence|уверенность)[^0-9]{0,24}(\d{1,3}(?:[\.,]\d+)?)/i);
+  if (!match) return null;
+  const n = Number(match[1].replace(',', '.'));
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(100, n <= 1 ? n * 100 : n));
+}
+
+function extractLlmRationale(text, parsed = null) {
+  const direct = parsed?.rationale ?? parsed?.reason ?? parsed?.comment ?? parsed?.explanation;
+  if (direct) return truncateText(cleanLlmText(direct), 260);
+  const explicit = extractStructuredLine(text, ['RATIONALE', 'REASON', 'EXPLANATION', 'ОБОСНОВАНИЕ', 'ПРИЧИНА']);
+  if (explicit) return truncateText(cleanLlmText(explicit), 260);
+  const lines = String(text || '')
+    .split('\n')
+    .map((line) => cleanLlmText(line))
+    .filter(Boolean)
+    .filter((line) => !/^(LLM_)?(RECOMMENDATION|VERDICT|DIRECTION|CONFIDENCE|TIME)|^(ВЕРДИКТ|НАПРАВЛЕНИЕ|УВЕРЕННОСТЬ)/i.test(line));
+  return truncateText(lines.join(' · '), 260);
+}
+
+function parseLlmBrief(brief, s = null) {
   const text = String(brief || '');
-  const explicit = text.match(/(?:^|\n)\s*(?:ВЕРДИКТ|VERDICT|LLM[-\s]*VERDICT|РЕШЕНИЕ)\s*[:：—-]\s*([^\n]+)/i);
-  if (explicit?.[1]) return explicit[1].trim();
-  return text.split('\n').map((line) => line.trim()).find(Boolean) || '';
+  const parsed = parseMaybeJsonObject(text);
+  let recommendation = normalizeLlmRecommendation(parsed?.recommendation || parsed?.llm_recommendation || parsed?.direction || parsed?.verdict || parsed?.action);
+  if (!recommendation) {
+    const structured = extractStructuredLine(text, [
+      'LLM_RECOMMENDATION',
+      'RECOMMENDATION',
+      'DIRECTION',
+      'LLM_DIRECTION',
+      'VERDICT',
+      'ВЕРДИКТ',
+      'НАПРАВЛЕНИЕ',
+      'РЕКОМЕНДАЦИЯ',
+    ]);
+    recommendation = normalizeLlmRecommendation(structured);
+  }
+  if (!recommendation) {
+    const legacyLine = extractStructuredLine(text, ['ВЕРДИКТ', 'VERDICT', 'РЕШЕНИЕ']);
+    if (/да[^\n]+подтверж/i.test(legacyLine) && ['long', 'short'].includes(String(s?.direction || '').toLowerCase())) {
+      recommendation = String(s.direction).toUpperCase();
+    } else {
+      recommendation = normalizeLlmRecommendation(text);
+    }
+  }
+  if (!recommendation) recommendation = 'NEUTRAL';
+  return {
+    recommendation,
+    confidence: extractLlmConfidence(text, parsed),
+    rationale: extractLlmRationale(text, parsed),
+  };
 }
 
-function llmToneFromText(text) {
-  const normalized = String(text || '').toLowerCase();
-  if (/нет[,\s]+.*не\s+подтверж|не\s+подтверждаю|нет\s+входа|вход\s+запрещ|отклон|не\s+входить|no\s*trade|reject|avoid|block|запрет/.test(normalized)) return 'fail';
-  if (/да[,\s]+.*подтверж|подтверждаю\s+вход|entry\s+confirmed|approve|approved|можно\s+вход|к\s+ручной\s+проверке|review/.test(normalized)) return 'ok';
-  if (/наблюд|ожид|wait|watch|hold|отлож|только\s+наблюд/.test(normalized)) return 'warn';
-  if (/long|short|лонг|шорт|buy|sell/.test(normalized)) return 'ok';
-  return 'warn';
+function llmRecommendationTone(recommendation) {
+  if (recommendation === 'LONG') return 'long';
+  if (recommendation === 'SHORT') return 'short';
+  if (recommendation === 'NEUTRAL') return 'neutral';
+  return 'pending';
 }
 
-function llmEntryIntent(tone) {
-  return tone === 'ok';
-}
-
-function llmActionText(tone) {
-  if (tone === 'ok') return 'LLM: вход подтверждает';
-  if (tone === 'fail') return 'LLM: вход не подтверждает';
-  if (tone === 'warn') return 'LLM: наблюдать';
-  if (tone === 'error') return 'LLM: ошибка';
-  return 'LLM: нет оценки';
-}
-
-function algorithmActionText(s) {
-  const d = algorithmDecisionFor(s);
-  if (d.level === 'review') return 'Алгоритм: вход допускает';
-  if (d.level === 'watch') return 'Алгоритм: наблюдать';
-  return 'Алгоритм: нет входа';
-}
-
-function algorithmEntryIntent(s) {
-  return algorithmDecisionFor(s).level === 'review';
-}
-
-function llmAgreement(tone, s) {
-  if (!s || ['pending', 'error'].includes(tone)) return null;
-  const level = algorithmDecisionFor(s).level;
-  if (tone === 'warn') return level === 'watch';
-  return llmEntryIntent(tone) === (level === 'review');
-}
-
-function llmAgreementText(tone, s) {
-  const agreed = llmAgreement(tone, s);
-  if (agreed === null) return 'С алгоритмом: нет данных';
-  return agreed ? 'С алгоритмом: согласован' : 'С алгоритмом: не согласован';
-}
-
-function llmLifeText(updatedAt) {
-  const minutes = ageMinutes(updatedAt);
-  const ttl = num(state.llmStatus?.ttl_minutes, 60) || 60;
-  if (minutes === null) return `Возраст: — · TTL ${ttl} мин`;
-  const left = Math.max(0, ttl - minutes);
-  return `Возраст ${minutes} мин · TTL ${ttl} мин · осталось ${left} мин`;
-}
-
-function compactLlmLabel(tone, s = null) {
-  if (tone === 'error') return 'LLM недоступен';
-  if (tone === 'pending') return 'LLM ожидается';
-  const agreed = llmAgreement(tone, s);
-  if (agreed === null) return 'LLM ожидается';
-  return agreed ? 'Согласован' : 'Не согласован';
+function llmMatchesAlgorithm(recommendation, s) {
+  if (!s || !recommendation || recommendation === 'NEUTRAL') return null;
+  const direction = String(s.direction || '').toUpperCase();
+  return direction === recommendation;
 }
 
 function llmVerdictFor(s) {
   if (!s) {
-    return { tone: 'pending', agreed: null, label: 'LLM ожидается', symbol: '—', summary: 'С алгоритмом: нет данных', meta: 'Возраст: — · TTL: —' };
+    return {
+      state: 'pending', tone: 'pending', recommendation: '—', label: 'NEUTRAL', symbol: '—',
+      confidence: null, confidenceText: '—', timeText: '—', updatedAt: null,
+      summary: 'Выберите кандидата: здесь появится рекомендация LLM — LONG / SHORT / NEUTRAL.',
+      meta: 'Фоновый LLM ещё не оценивал сетап.', rationale: '', agreement: null,
+    };
   }
   const symbol = String(s.symbol || '—').toUpperCase();
   if (s.llm_status === 'running') {
-    return { tone: 'pending', agreed: null, label: 'LLM анализирует', symbol, summary: 'С алгоритмом: расчет выполняется', meta: `${symbol} · ${s.interval || '—'} · ${s.llm_model || 'модель не указана'}` };
-  }
-  if (s.llm_status === 'error') {
-    return { tone: 'error', agreed: null, label: compactLlmLabel('error'), symbol, summary: 'С алгоритмом: нет данных', meta: `${symbol} · ошибка оценки` };
-  }
-  if (s.llm_status === 'ok' && s.llm_brief) {
-    const rawVerdictLine = extractLlmVerdictLine(s.llm_brief);
-    const verdictLine = cleanLlmText(rawVerdictLine);
-    const llmTone = llmToneFromText(verdictLine || s.llm_brief);
-    const agreed = llmAgreement(llmTone, s);
     return {
-      tone: agreed ? 'ok' : 'warn',
-      agreed,
-      label: compactLlmLabel(llmTone, s),
-      symbol,
-      summary: `${llmAgreementText(llmTone, s)} · ${algorithmActionText(s)} · ${llmActionText(llmTone)}`,
-      meta: llmLifeText(s.llm_updated_at),
+      state: 'running', tone: 'pending', recommendation: '—', label: 'ANALYZING', symbol,
+      confidence: null, confidenceText: '—', timeText: 'в процессе', updatedAt: s.llm_updated_at || null,
+      summary: 'LLM-оценка выполняется в фоне.',
+      meta: `${symbol} · ${s.interval || '—'} · ${s.llm_model || 'модель не указана'}`,
+      rationale: '', agreement: null,
     };
   }
-  return { tone: 'pending', agreed: null, label: 'LLM ожидается', symbol, summary: 'С алгоритмом: нет данных', meta: `${symbol} · LLM ещё не оценивал сетап` };
+  if (s.llm_status === 'error') {
+    return {
+      state: 'error', tone: 'error', recommendation: '—', label: 'ERROR', symbol,
+      confidence: null, confidenceText: '—', timeText: compactDateTime(s.llm_updated_at), updatedAt: s.llm_updated_at || null,
+      summary: s.llm_error || 'LLM endpoint недоступен.',
+      meta: `${symbol} · ошибка LLM · ${llmLifeText(s.llm_updated_at)}`,
+      rationale: s.llm_error || '', agreement: null,
+    };
+  }
+  if (s.llm_status === 'ok' && s.llm_brief) {
+    const parsed = parseLlmBrief(s.llm_brief, s);
+    const tone = llmRecommendationTone(parsed.recommendation);
+    const confidenceText = parsed.confidence === null ? '—' : `${Math.round(parsed.confidence)}%`;
+    const timeText = compactDateTime(s.llm_updated_at);
+    const agreement = llmMatchesAlgorithm(parsed.recommendation, s);
+    const directionText = parsed.recommendation === 'NEUTRAL'
+      ? 'LLM рекомендует не открывать сделку без дополнительных подтверждений.'
+      : `LLM рекомендует ${parsed.recommendation}.`;
+    const agreementText = agreement === null ? '' : agreement ? ' Совпадает с направлением алгоритма.' : ' Не совпадает с направлением алгоритма.';
+    return {
+      state: 'ok', tone, recommendation: parsed.recommendation, label: parsed.recommendation, symbol,
+      confidence: parsed.confidence, confidenceText, timeText, updatedAt: s.llm_updated_at || null,
+      summary: `${directionText}${agreementText}`,
+      meta: `Время verdict: ${timeText} · confidence ${confidenceText} · ${s.llm_model || 'LLM model n/a'} · ${llmLifeText(s.llm_updated_at)}`,
+      rationale: parsed.rationale || 'LLM не передал краткое rationale.',
+      agreement,
+    };
+  }
+  return {
+    state: 'pending', tone: 'pending', recommendation: '—', label: 'PENDING', symbol,
+    confidence: null, confidenceText: '—', timeText: '—', updatedAt: null,
+    summary: 'LLM ещё не оценивал выбранный сетап.',
+    meta: `${symbol} · LLM работает в фоне. LLM‑оценка появится автоматически после фонового цикла.`,
+    rationale: '', agreement: null,
+  };
 }
 
 function renderLlmVerdict(s) {
@@ -542,7 +603,10 @@ function renderLlmVerdict(s) {
   card.className = `llm-symbol-verdict ${cssToken(verdict.tone, 'pending')}`;
   setText('llmSymbolBox', `LLM · ${verdict.symbol}`);
   setText('llmVerdictLabel', verdict.label);
-  setText('llmVerdictText', verdict.summary);
+  setText('llmRecommendationLabel', verdict.recommendation);
+  setText('llmConfidenceLabel', verdict.confidenceText);
+  setText('llmTimeLabel', verdict.timeText);
+  setText('llmVerdictText', verdict.rationale || verdict.summary);
   setText('llmVerdictMeta', verdict.meta);
 }
 
@@ -610,9 +674,9 @@ function checklistFor(s, options = {}) {
   const verdict = llmVerdictFor(s);
   checks.push({
     key: 'llm',
-    status: s.llm_status === 'ok' ? (verdict.agreed ? 'pass' : 'warn') : 'warn',
-    title: s.llm_status === 'ok' ? `LLM: ${verdict.label}` : s.llm_status === 'running' ? 'LLM‑оценка выполняется' : 'LLM‑оценка ожидается',
-    text: `${verdict.summary}. ${verdict.meta}.`,
+    status: s.llm_status === 'ok' ? (verdict.recommendation === 'NEUTRAL' ? 'warn' : verdict.agreement === false ? 'warn' : 'pass') : 'warn',
+    title: s.llm_status === 'ok' ? `LLM: ${verdict.recommendation} · ${verdict.confidenceText}` : s.llm_status === 'running' ? 'LLM‑оценка выполняется' : 'LLM‑оценка ожидается',
+    text: `${verdict.rationale || verdict.summary}. ${verdict.meta}.`,
   });
   return checks;
 }
@@ -805,8 +869,8 @@ function renderTicket(s) {
       <b>Исполнение:</b> только ручная проверка. Entry/SL/TP не являются торговым приказом; красный пункт отменяет сетап.
     </div>
     <section class="llm-detail-card ${escapeHtml(cssToken(llmVerdict.tone, 'pending'))}">
-      <header><span>LLM verdict · ${escapeHtml(llmVerdict.symbol)}</span><strong>${escapeHtml(llmVerdict.label)}</strong></header>
-      <p>${escapeHtml(llmVerdict.summary)}</p>
+      <header><span>LLM verdict · ${escapeHtml(llmVerdict.symbol)}</span><strong>${escapeHtml(llmVerdict.recommendation)} · ${escapeHtml(llmVerdict.confidenceText)}</strong></header>
+      <p>${escapeHtml(llmVerdict.rationale || llmVerdict.summary)}</p>
       <small>${escapeHtml(llmVerdict.meta)}</small>
     </section>`;
 }
@@ -867,8 +931,11 @@ function renderBrief(s) {
     return;
   }
   const verdict = llmVerdictFor(s);
-  box.textContent = `${verdict.symbol} · ${verdict.label}
-${verdict.summary}
+  box.textContent = `${verdict.symbol}
+Recommendation: ${verdict.recommendation}
+Confidence: ${verdict.confidenceText}
+Verdict time: ${verdict.timeText}
+Rationale: ${verdict.rationale || verdict.summary}
 ${verdict.meta}`;
 }
 
@@ -915,6 +982,7 @@ function renderQueue() {
       state.selectedId = Number.isFinite(parsedId) ? parsedId : null;
       renderQueue();
       renderDecision();
+      refreshNews().catch((error) => log(`WARN refresh selected news: ${error.message}`));
     };
     card.addEventListener('click', select);
     card.addEventListener('keydown', (event) => {
@@ -945,7 +1013,7 @@ function renderRawTable(list = candidates()) {
       <td>${fmt(s.profit_factor, 2)}</td>
       <td>${pct(s.max_drawdown, 1)}</td>
       <td>${pctRaw(s.spread_pct, 3)}</td>
-      <td>${escapeHtml(llmVerdictFor(s).label)}</td>
+      <td>${escapeHtml(`${llmVerdictFor(s).recommendation} ${llmVerdictFor(s).confidenceText}`)}</td>
     </tr>`;
   }).join('');
 }
@@ -1041,7 +1109,10 @@ function drawEquity(curve) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#f4f1ea';
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, '#0f172a');
+  gradient.addColorStop(1, '#020617');
+  ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!curve || curve.length < 2) return;
   const vals = curve.map((p) => Number(p.equity)).filter(Number.isFinite);
@@ -1049,7 +1120,7 @@ function drawEquity(curve) {
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   const pad = 26;
-  ctx.strokeStyle = '#d6d1c6';
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
   ctx.lineWidth = 1;
   for (let i = 0; i < 5; i += 1) {
     const y = pad + i * (canvas.height - pad * 2) / 4;
@@ -1058,7 +1129,7 @@ function drawEquity(curve) {
     ctx.lineTo(canvas.width - pad, y);
     ctx.stroke();
   }
-  ctx.strokeStyle = '#3f5f85';
+  ctx.strokeStyle = '#38bdf8';
   ctx.lineWidth = 2;
   ctx.beginPath();
   vals.forEach((v, i) => {
@@ -1067,7 +1138,7 @@ function drawEquity(curve) {
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
-  ctx.fillStyle = '#232a35';
+  ctx.fillStyle = '#cbd5e1';
   ctx.font = '12px system-ui';
   ctx.fillText(`min ${fmt(min, 2)} · max ${fmt(max, 2)}`, pad, 18);
 }
@@ -1376,7 +1447,7 @@ function bindControls() {
 
 bindControls();
 setContextTab(state.contextTab);
-setOpsPanelOpen(false);
+setOpsPanelOpen(true);
 
 let autoRefreshInFlight = false;
 async function refreshBackgroundTick() {
