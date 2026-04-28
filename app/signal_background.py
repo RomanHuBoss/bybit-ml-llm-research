@@ -40,6 +40,15 @@ def persist_signals(*args, **kwargs):
     return impl(*args, **kwargs)
 
 
+def train_due_ml_models(*args, **kwargs):
+    # sklearn/joblib подтягиваются только когда фоновый цикл реально дошел до ML-стадии.
+    # Это сохраняет быстрый старт API и одновременно убирает ручную обязанность
+    # обучать модель по каждому символу.
+    from .ml import train_due_models as impl
+
+    return impl(*args, **kwargs)
+
+
 class SignalAutoRefresher:
     """Безопасный фоновый контур обновления рекомендаций.
 
@@ -104,6 +113,13 @@ class SignalAutoRefresher:
                 "sync_sentiment": settings.signal_auto_sync_sentiment,
                 "market_sync_workers": settings.market_sync_workers,
                 "signal_build_workers": settings.signal_build_workers,
+                "ml_auto_train": {
+                    "enabled": settings.ml_auto_train_enabled,
+                    "ttl_hours": settings.ml_auto_train_ttl_hours,
+                    "horizon_bars": settings.ml_auto_train_horizon_bars,
+                    "max_models_per_cycle": settings.ml_auto_train_max_models_per_cycle,
+                    "failure_cooldown_hours": settings.ml_auto_train_failure_cooldown_hours,
+                },
                 "last_error": self._last_error,
                 "last_started_at": self._last_started_at,
                 "last_finished_at": self._last_finished_at,
@@ -266,6 +282,37 @@ class SignalAutoRefresher:
                 if interval_item.get("market_ok")
             ]
 
+            if settings.ml_auto_train_enabled and signal_jobs:
+                try:
+                    ml_summary = train_due_ml_models(
+                        category,
+                        signal_jobs,
+                        horizon_bars=settings.ml_auto_train_horizon_bars,
+                        ttl_hours=settings.ml_auto_train_ttl_hours,
+                        max_models=settings.ml_auto_train_max_models_per_cycle,
+                        failure_cooldown_hours=settings.ml_auto_train_failure_cooldown_hours,
+                    )
+                    summary["ml_auto_train"] = ml_summary
+                    for ml_item in ml_summary.get("items", []):
+                        symbol = str(ml_item.get("symbol") or "").upper()
+                        interval = str(ml_item.get("interval") or "").upper()
+                        interval_item = items_by_symbol.get(symbol, {}).get("intervals", {}).get(interval)
+                        if interval_item is not None:
+                            interval_item["ml_status"] = ml_item.get("status")
+                            interval_item["ml_reason"] = ml_item.get("reason")
+                            if ml_item.get("error"):
+                                interval_item["ml_error"] = str(ml_item.get("error"))[:300]
+                    if ml_summary.get("failed"):
+                        summary["warnings"].append({
+                            "stage": "ml_auto_train",
+                            "error": f"{ml_summary.get('failed')} model(s) failed; see ml_auto_train.items",
+                        })
+                except Exception as exc:
+                    message = str(exc)
+                    summary["ml_auto_train"] = {"enabled": True, "failed": 1, "fatal_error": message[:500]}
+                    summary["warnings"].append({"stage": "ml_auto_train", "error": message[:500]})
+                    logger.warning("background ML auto-train failed: %s", message)
+
             def run_signal_job(job: tuple[str, str]) -> tuple[str, str, int, int, str | None]:
                 symbol, interval = job
                 try:
@@ -334,6 +381,7 @@ def _empty_summary() -> dict[str, Any]:
         "failed": 0,
         "market_workers": 0,
         "signal_workers": 0,
+        "ml_auto_train": {"enabled": settings.ml_auto_train_enabled, "trained": 0, "fresh": 0, "failed": 0, "skipped_limit": 0, "skipped_failure_cooldown": 0, "items": []},
         "symbol_source": None,
         "symbols": [],
         "intervals": [],

@@ -12,6 +12,8 @@ def _reset_gdelt(sentiment):
 
 
 def test_gdelt_timeout_opens_circuit_and_suppresses_followup_requests(monkeypatch):
+    from dataclasses import replace
+
     from app import sentiment
 
     _reset_gdelt(sentiment)
@@ -22,8 +24,7 @@ def test_gdelt_timeout_opens_circuit_and_suppresses_followup_requests(monkeypatc
         raise _Boom("timeout")
 
     monkeypatch.setattr(sentiment, "_safe_get_json", broken_get_json)
-    monkeypatch.setattr(sentiment.settings, "gdelt_circuit_breaker_failures", 2)
-    monkeypatch.setattr(sentiment.settings, "gdelt_failure_cooldown_sec", 300)
+    monkeypatch.setattr(sentiment, "settings", replace(sentiment.settings, gdelt_circuit_breaker_failures=2, gdelt_failure_cooldown_sec=300))
 
     assert sentiment.fetch_gdelt_news("BTCUSDT") == []
     assert sentiment.fetch_gdelt_news("ETHUSDT") == []

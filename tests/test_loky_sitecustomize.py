@@ -23,7 +23,7 @@ def test_sitecustomize_sets_loky_before_project_import() -> None:
     env.pop("LOKY_MAX_CPU_COUNT", None)
     env.pop("ML_MAX_CPU_COUNT", None)
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-S", "-c", code],
         cwd=str(PROJECT_ROOT),
         env=env,
         text=True,
@@ -53,7 +53,7 @@ def test_sitecustomize_suppresses_known_loky_warning() -> None:
     env = _pythonpath_env()
     env.pop("LOKY_MAX_CPU_COUNT", None)
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-S", "-c", code],
         cwd=str(PROJECT_ROOT),
         env=env,
         text=True,

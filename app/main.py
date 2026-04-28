@@ -39,7 +39,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(router)
+app.include_router(router.build_fastapi_router() if hasattr(router, "build_fastapi_router") else router)
 
 frontend_dir = BASE_DIR / "frontend"
 app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")

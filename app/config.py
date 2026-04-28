@@ -158,6 +158,17 @@ class Settings:
     backtest_auto_limit: int = _int("BACKTEST_AUTO_LIMIT", 5000)
     backtest_auto_ttl_hours: int = _int("BACKTEST_AUTO_TTL_HOURS", 24)
 
+    # ML must be maintained by the background research loop, not only by a manual
+    # UI button. The model remains per category+symbol+interval+horizon; stale or
+    # missing models are retrained opportunistically after fresh market/sentiment
+    # data have been synced. Limits keep the background loop bounded on local PCs.
+    ml_auto_train_enabled: bool = _bool("ML_AUTO_TRAIN_ENABLED", True)
+    ml_auto_train_ttl_hours: int = _int("ML_AUTO_TRAIN_TTL_HOURS", 24)
+    ml_auto_train_horizon_bars: int = _int("ML_AUTO_TRAIN_HORIZON_BARS", 12)
+    ml_auto_train_max_models_per_cycle: int = _int("ML_AUTO_TRAIN_MAX_MODELS_PER_CYCLE", 2)
+    ml_auto_train_failure_cooldown_hours: int = _int("ML_AUTO_TRAIN_FAILURE_COOLDOWN_HOURS", 6)
+    ml_probability_in_signals_enabled: bool = _bool("ML_PROBABILITY_IN_SIGNALS_ENABLED", True)
+
     start_equity_usdt: float = _float("START_EQUITY_USDT", 500.0)
     risk_per_trade: float = _float("RISK_PER_TRADE", 0.005)
     max_daily_drawdown: float = _float("MAX_BACKTEST_DRAWDOWN", _float("MAX_DAILY_DRAWDOWN", 0.03))
@@ -248,6 +259,14 @@ def _validate_settings(s: Settings) -> None:
         problems.append("BACKTEST_AUTO_LIMIT должен быть в диапазоне [300; 100000]")
     if s.backtest_auto_ttl_hours < 1:
         problems.append("BACKTEST_AUTO_TTL_HOURS должен быть >= 1")
+    if s.ml_auto_train_ttl_hours < 1:
+        problems.append("ML_AUTO_TRAIN_TTL_HOURS должен быть >= 1")
+    if not (1 <= s.ml_auto_train_horizon_bars <= 240):
+        problems.append("ML_AUTO_TRAIN_HORIZON_BARS должен быть в диапазоне [1; 240]")
+    if not (1 <= s.ml_auto_train_max_models_per_cycle <= 100):
+        problems.append("ML_AUTO_TRAIN_MAX_MODELS_PER_CYCLE должен быть в диапазоне [1; 100]")
+    if s.ml_auto_train_failure_cooldown_hours < 1:
+        problems.append("ML_AUTO_TRAIN_FAILURE_COOLDOWN_HOURS должен быть >= 1")
     if s.universe_limit <= 0 or s.dynamic_symbol_limit <= 0:
         problems.append("UNIVERSE_LIMIT и DYNAMIC_SYMBOL_LIMIT должны быть > 0")
     if s.bybit_max_retries < 0:

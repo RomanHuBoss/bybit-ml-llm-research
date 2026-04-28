@@ -1519,29 +1519,9 @@ function bindControls() {
     });
   };
 
-  $('trainBtn').onclick = async () => {
-    await runOperation('ML trained', async () => {
-      const s = selectedCandidate();
-      const sym = s?.symbol || selectedSymbols()[0] || 'BTCUSDT';
-      validateInputs();
-      const data = await api('/api/ml/train', {
-        method: 'POST',
-        body: JSON.stringify({ category: $('category').value, symbol: sym, interval: s?.interval || primaryInterval(), horizon_bars: 12 }),
-      });
-      await refreshRank();
-      return data.result;
-    });
-  };
-
-  $('predictBtn').onclick = async () => {
-    await runOperation('ML prediction', async () => {
-      const s = selectedCandidate();
-      const sym = s?.symbol || selectedSymbols()[0] || 'BTCUSDT';
-      validateInputs();
-      const data = await api(`/api/ml/predict/latest?symbol=${encodeURIComponent(sym)}&category=${encodeURIComponent($('category').value)}&interval=${encodeURIComponent(s?.interval || primaryInterval())}&horizon_bars=12`);
-      return data.result;
-    });
-  };
+  // ML training/prediction controls are intentionally not exposed in the main UI.
+  // Models are maintained by signal-auto-refresher; /api/ml/* remains available
+  // for API-level diagnostics and emergency one-off maintenance.
 
   $('briefBtn').onclick = async () => {
     setContextTab('llm');

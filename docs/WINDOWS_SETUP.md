@@ -138,7 +138,7 @@ curl http://127.0.0.1:11434/api/generate -d '{"model":"qwen3:8b","prompt":"test"
 3. `Sync sentiment` — загрузить Fear&Greed, GDELT, RSS и рассчитать market_microstructure.
 4. `Build signals` — построить rule-based сигналы.
 5. `Backtest` — проверить стратегию.
-6. `Train ML` — обучить модель на выбранном символе.
+6. ML-модели дообучаются автоматически фоновым контуром; ручная кнопка обучения в основном UI не нужна.
 7. `Rank candidates` — выбрать лучшие paper-trading кандидаты.
 
 ## 11. Live trading

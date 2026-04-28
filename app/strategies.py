@@ -24,6 +24,7 @@ class StrategySignal:
     atr: float
     rationale: dict[str, Any]
     bar_time: Any | None = None
+    ml_probability: float | None = None
 
 
 def _finite(value: Any, default: float | None = None) -> float | None:
@@ -101,6 +102,32 @@ def _market_quality(row: pd.Series) -> tuple[bool, dict[str, Any]]:
 
 def _valid_price_context(close: float | None, atr: float | None) -> bool:
     return close is not None and atr is not None and close > 0 and atr > 0
+
+def _latest_directional_ml_probability(category: str, symbol: str, interval: str, direction: str) -> tuple[float | None, dict[str, Any]]:
+    """Возвращает вероятность ML для направления сигнала, если модель уже готова.
+
+    Для long используется P(up), для short — 1 - P(up). Ошибка ML не блокирует
+    сигнал стратегии: это доказательный слой, а не самостоятельный приказ на вход.
+    """
+    if not settings.ml_probability_in_signals_enabled:
+        return None, {"ml_status": "disabled"}
+    try:
+        from .ml import predict_latest
+
+        prediction = predict_latest(category, symbol, interval, settings.ml_auto_train_horizon_bars)
+        probability_up = _finite(prediction.get("probability_up"))
+        if probability_up is None:
+            return None, {"ml_status": "missing_probability"}
+        probability_direction = probability_up if direction == "long" else 1.0 - probability_up
+        return max(0.0, min(1.0, probability_direction)), {
+            "ml_status": "ok",
+            "ml_probability_up": probability_up,
+            "ml_probability_direction": probability_direction,
+            "ml_horizon_bars": settings.ml_auto_train_horizon_bars,
+        }
+    except Exception as exc:
+        return None, {"ml_status": "unavailable", "ml_error": str(exc)[:200]}
+
 
 
 def donchian_breakout(row: pd.Series) -> StrategySignal | None:
@@ -369,10 +396,18 @@ def build_latest_signals(category: str, symbol: str, interval: str, limit: int =
 
 def persist_signals(category: str, symbol: str, interval: str, signals: list[StrategySignal]) -> int:
     rows = []
+    ml_cache: dict[str, tuple[float | None, dict[str, Any]]] = {}
     for sig in signals:
         ok, reason = validate_signal(sig)
         if not ok:
             continue
+        cache_key = sig.direction
+        if sig.ml_probability is None and cache_key not in ml_cache:
+            ml_cache[cache_key] = _latest_directional_ml_probability(category, symbol, interval, sig.direction)
+        if sig.ml_probability is None:
+            ml_probability, ml_meta = ml_cache.get(cache_key, (None, {"ml_status": "unavailable"}))
+            sig.ml_probability = ml_probability
+            sig.rationale = {**sig.rationale, **ml_meta}
         rows.append(
             (
                 category,
@@ -385,7 +420,7 @@ def persist_signals(category: str, symbol: str, interval: str, signals: list[Str
                 sig.stop_loss,
                 sig.take_profit,
                 sig.atr,
-                None,
+                sig.ml_probability,
                 sig.rationale.get("sentiment") or sig.rationale.get("micro_sentiment"),
                 sig.rationale,
                 sig.bar_time,

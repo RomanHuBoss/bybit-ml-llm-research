@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 
 def _row(symbol: str, interval: str, direction: str, confidence: float, score: float = 0.5) -> dict:
     return {
         "id": abs(hash((symbol, interval, direction, confidence))) % 100000,
-        "created_at": "2026-01-01T00:00:00+00:00",
-        "bar_time": "2026-01-01T00:00:00+00:00",
+        "created_at": datetime.now(timezone.utc),
+        "bar_time": datetime.now(timezone.utc) - timedelta(minutes=30),
         "category": "linear",
         "symbol": symbol,
         "interval": interval,

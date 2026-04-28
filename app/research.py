@@ -48,7 +48,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
         WITH latest_signals AS (
             SELECT DISTINCT ON (symbol, interval, strategy, direction)
                    id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
-                   entry, stop_loss, take_profit, sentiment_score, rationale
+                   entry, stop_loss, take_profit, ml_probability, sentiment_score, rationale
             FROM signals
             WHERE category=%s AND interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
               AND bar_time IS NOT NULL
@@ -64,6 +64,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
                    symbol, interval, roc_auc, precision_score, recall_score, created_at
             FROM model_runs
             WHERE category=%s AND interval = ANY(%s)
+              AND created_at >= NOW() - (%s::text || ' hours')::interval
             ORDER BY symbol, interval, created_at DESC
         ), latest_liq_time AS (
             SELECT MAX(captured_at) AS captured_at FROM liquidity_snapshots WHERE category=%s
@@ -81,7 +82,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
             ORDER BY signal_id, updated_at DESC
         )
         SELECT s.id, s.created_at, s.bar_time, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
-               s.entry, s.stop_loss, s.take_profit, s.sentiment_score, s.rationale,
+               s.entry, s.stop_loss, s.take_profit, s.ml_probability, s.sentiment_score, s.rationale,
                b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
                m.roc_auc, m.precision_score, m.recall_score,
                l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
@@ -113,6 +114,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
             query_intervals,
             category,
             query_intervals,
+            settings.ml_auto_train_ttl_hours,
             category,
             category,
             settings.max_spread_pct,

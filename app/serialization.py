@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -9,18 +10,35 @@ from uuid import UUID
 
 
 def _is_nan_like(value: Any) -> bool:
-    """Определяет только скалярные NaN/NaT/pd.NA без зависимости от формы объекта."""
-    try:
-        import pandas as pd
+    """Определяет только scalar NaN/NaT/pd.NA без тяжелого импорта pandas по каждому значению.
 
-        result = pd.isna(value)
-        if isinstance(result, bool):
-            return result
-        # Для массивов/Series/DataFrame pd.isna возвращает контейнер, а не скаляр.
-        # Такие объекты нормализуются отдельными ветками to_jsonable().
+    Предыдущая реализация вызывала `import pandas` внутри универсальной проверки даже
+    для обычных datetime/Decimal/str. Это замедляло LLM/API-сериализацию и в некоторых
+    локальных окружениях могло зависать на импорте аналитического стека там, где он не
+    нужен. Поэтому быстрые встроенные типы проверяются без pandas/numpy, а pandas
+    подключается только для объектов, которые действительно похожи на pandas-типы.
+    """
+    if value is None:
         return False
-    except Exception:
-        pass
+    if isinstance(value, float):
+        return math.isnan(value)
+    module = type(value).__module__.split(".", 1)[0]
+    if module == "numpy":
+        try:
+            import numpy as np
+
+            if isinstance(value, np.generic):
+                return bool(np.isnan(value)) if np.issubdtype(value.dtype, np.floating) else False
+        except Exception:
+            return False
+    if module == "pandas":
+        try:
+            import pandas as pd
+
+            result = pd.isna(value)
+            return bool(result) if isinstance(result, bool) else False
+        except Exception:
+            return False
     try:
         result = value != value
         return bool(result) if isinstance(result, bool) else False
@@ -39,8 +57,6 @@ def to_jsonable(value: Any) -> Any:
         if isinstance(value, float) and _is_nan_like(value):
             return None
         return value
-    if _is_nan_like(value):
-        return None
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, Decimal):
@@ -72,14 +88,18 @@ def to_jsonable(value: Any) -> Any:
     try:
         import pandas as pd
 
+        if value is pd.NA:
+            return None
         if isinstance(value, pd.Timestamp):
-            return value.isoformat()
+            return None if pd.isna(value) else value.isoformat()
         if isinstance(value, pd.Timedelta):
-            return str(value)
+            return None if pd.isna(value) else str(value)
         if isinstance(value, pd.Series):
             return to_jsonable(value.to_dict())
         if isinstance(value, pd.DataFrame):
             return to_jsonable(value.to_dict(orient="records"))
     except ModuleNotFoundError:
         pass
+    if _is_nan_like(value):
+        return None
     return str(value)

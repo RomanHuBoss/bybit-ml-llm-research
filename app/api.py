@@ -1,10 +1,61 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Callable
 
-from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+
+class DeferredAPIRouter:
+    """Lightweight route recorder that keeps app.api import independent of FastAPI.
+
+    Unit tests and CLI diagnostics often need pure endpoint functions, not ASGI
+    registration. Importing FastAPI at this layer made those paths vulnerable to
+    third-party import-time failures. `app.main` materializes the real APIRouter
+    only when the web server is actually constructed.
+    """
+
+    def __init__(self, prefix: str = "") -> None:
+        self.prefix = prefix
+        self._routes: list[tuple[str, str, dict[str, Any], Callable[..., Any]]] = []
+
+    def _record(self, method: str, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self._routes.append((method, path, kwargs, func))
+            return func
+
+        return decorator
+
+    def get(self, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        return self._record("get", path, **kwargs)
+
+    def post(self, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        return self._record("post", path, **kwargs)
+
+    def build_fastapi_router(self) -> Any:
+        from fastapi import APIRouter
+
+        real_router = APIRouter(prefix=self.prefix)
+        for method, path, kwargs, func in self._routes:
+            getattr(real_router, method)(path, **kwargs)(func)
+        return real_router
+
+
+class HTTPException(Exception):
+    """Import-light stand-in that becomes FastAPI's HTTPException when possible."""
+
+    def __new__(cls, status_code: int, detail: Any = None, *args: Any, **kwargs: Any):
+        try:
+            from fastapi import HTTPException as FastAPIHTTPException
+
+            return FastAPIHTTPException(status_code=status_code, detail=detail, *args, **kwargs)
+        except Exception:
+            return super().__new__(cls)
+
+    def __init__(self, status_code: int, detail: Any = None, *args: Any, **kwargs: Any) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
 
 from .backtest_background import background_backtester, backtest_background_summary
 from .bybit_client import sync_candles, sync_funding, sync_market_bundle, sync_open_interest
@@ -19,7 +70,7 @@ from .signal_background import signal_refresher
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
 from .validation import bounded_int, normalize_category, normalize_interval, normalize_intervals, normalize_symbol, normalize_symbols
 
-router = APIRouter(prefix="/api")
+router = DeferredAPIRouter(prefix="/api")
 
 STRATEGY_NAMES = (
     "regime_adaptive_combo",
@@ -217,6 +268,14 @@ def status() -> dict[str, Any]:
             "sync_sentiment": settings.signal_auto_sync_sentiment,
             "market_sync_workers": settings.market_sync_workers,
             "signal_build_workers": settings.signal_build_workers,
+        },
+        "ml_auto_train": {
+            "enabled": settings.ml_auto_train_enabled,
+            "ttl_hours": settings.ml_auto_train_ttl_hours,
+            "horizon_bars": settings.ml_auto_train_horizon_bars,
+            "max_models_per_cycle": settings.ml_auto_train_max_models_per_cycle,
+            "failure_cooldown_hours": settings.ml_auto_train_failure_cooldown_hours,
+            "probability_in_signals": settings.ml_probability_in_signals_enabled,
         },
         "sentiment_sources": {
             "fear_greed": settings.use_fear_greed,

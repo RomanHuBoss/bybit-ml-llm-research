@@ -257,3 +257,17 @@ def test_market_sync_multi_interval_does_not_repeat_funding_per_interval():
     assert "def _sync_market_bundle_multi" in api
     assert "funding_rows = sync_funding(category, symbol, days)" in api
     assert "result[symbol] = _sync_market_bundle_multi(category, symbol, intervals, days)" in api
+
+
+def test_frontend_does_not_expose_manual_ml_launch_controls():
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="trainBtn"' not in html
+    assert 'id="predictBtn"' not in html
+    assert 'Обучить ML' not in html
+    assert 'ML‑прогноз' not in html
+    assert "$('trainBtn')" not in js
+    assert "$('predictBtn')" not in js
+    assert "/api/ml/train" not in js
+    assert "/api/ml/predict/latest" not in js
