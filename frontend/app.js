@@ -274,24 +274,33 @@ function syncEquitySelectionNote(s) {
   setEquitySource(`График НЕ меняется от простого выбора строки. Сейчас показан последний сохранённый бэктест: ${runSymbol} · ${runStrategy}. Выбрано: ${selected}. Для выбранного рынка нажмите «Бэктест сетапа».`, 'warn');
 }
 
+function hasNumber(value) {
+  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+}
+
 function mlEvidenceStatus(s) {
+  if (!hasNumber(s?.roc_auc)) return 'warn';
   const rocAuc = num(s?.roc_auc, 0.5);
   if (rocAuc >= 0.58) return 'pass';
-  if (rocAuc >= 0.52) return 'warn';
+  if (rocAuc >= 0.48) return 'warn';
   return 'fail';
 }
 
 function mlEvidenceTitle(s) {
+  if (!hasNumber(s?.roc_auc)) return 'ML ещё не обучен · жёлтый';
   const rocAuc = num(s?.roc_auc, 0.5);
-  const zone = rocAuc >= 0.58 ? 'зелёный ≥0.58' : rocAuc >= 0.52 ? 'жёлтый 0.52–0.58' : 'красный <0.52';
+  const zone = rocAuc >= 0.58 ? 'зелёный ≥0.58' : rocAuc >= 0.48 ? 'жёлтый 0.48–0.58' : 'красный <0.48';
   return `ML ROC-AUC ${fmt(rocAuc, 3)} · ${zone}`;
 }
 
 function mlEvidenceText(s) {
-  const rocAuc = num(s?.roc_auc, 0.5);
   const research = num(s?.research_score, 0);
+  if (!hasNumber(s?.roc_auc)) {
+    return `ML-модель для этого symbol/TF пока не найдена. Это снижает доказательность, но не является hard-veto для ручного research queue. Research score ${fmt(research, 3)}.`;
+  }
+  const rocAuc = num(s?.roc_auc, 0.5);
   const direction = rocAuc < 0.5 ? 'Значение ниже 0.50 хуже случайного ориентира.' : 'Значение около 0.50 не даёт доказательного ML-подтверждения.';
-  return `Зелёный статус появляется только при ROC-AUC ≥0.58; жёлтый — 0.52–0.58; красный — ниже 0.52. ${direction} Research score ${fmt(research, 3)}.`;
+  return `Зелёный статус появляется только при ROC-AUC ≥0.58; жёлтый — 0.48–0.58; красный — ниже 0.48. ${direction} Research score ${fmt(research, 3)}.`;
 }
 
 function setText(id, value) {
@@ -497,6 +506,7 @@ function mtfLabel(s) {
 
 function mtfSeverity(s) {
   if (!s) return 'fail';
+  if (!s.mtf_status) return 'warn';
   if (s.mtf_veto || s.higher_tf_conflict || s.mtf_status === 'no_trade_conflict' || s.mtf_status === 'context_only') return 'fail';
   if (s.mtf_status === 'tactical_only' || s.mtf_status === 'weak_alignment') return 'warn';
   return 'pass';
@@ -736,29 +746,48 @@ function renderLlmVerdict(s) {
   setText('llmVerdictMeta', verdict.meta);
 }
 
+function backtestEvidenceStatus(s) {
+  const trades = num(s?.trades_count, 0);
+  const pf = num(s?.profit_factor, null);
+  const dd = num(s?.max_drawdown, null);
+  if (!trades || trades <= 0 || pf === null || dd === null) return 'warn';
+  if (trades >= 30 && pf >= 1.25 && dd <= 0.22) return 'pass';
+  if (trades >= 10 && (pf < 0.90 || dd > 0.40)) return 'fail';
+  return 'warn';
+}
+
+function backtestEvidenceTitle(s) {
+  const trades = num(s?.trades_count, 0);
+  const pf = num(s?.profit_factor, null);
+  const dd = num(s?.max_drawdown, null);
+  if (!trades || trades <= 0 || pf === null || dd === null) return 'Бэктест ожидается';
+  return `Бэктест: ${fmt(trades, 0)} сделок, PF ${fmt(pf, 2)}, DD ${pct(dd, 1)}`;
+}
+
 function baseChecklistFor(s) {
   if (!s) return [];
   const rr = riskReward(s);
-  const spread = num(s.spread_pct, 999);
+  const hasSpread = hasNumber(s.spread_pct);
+  const spread = num(s.spread_pct, null);
   const confidence = num(s.confidence, 0);
-  const research = num(s.research_score, 0);
-  const dd = num(s.max_drawdown, 0.99);
-  const trades = num(s.trades_count, 0);
-  const rocAuc = num(s.roc_auc, 0.5);
+  const liquidityKnown = s.is_eligible !== null && s.is_eligible !== undefined;
   const eligible = bool(s.is_eligible);
   const maxAgeHours = num(state.status?.max_signal_age_hours, 24) || 24;
   const created = s.created_at ? new Date(s.created_at) : null;
   const stale = !created || Number.isNaN(created.getTime()) || Date.now() - created.getTime() > maxAgeHours * 3600_000;
+  const spreadStatus = !hasSpread ? 'warn' : spread <= 0.08 ? 'pass' : spread <= 0.15 ? 'warn' : 'fail';
+  const liquidityStatus = !liquidityKnown ? 'warn' : eligible ? 'pass' : 'fail';
+  const backtestStatus = backtestEvidenceStatus(s);
 
   return [
     { key: 'freshness', status: stale ? 'fail' : 'pass', title: stale ? 'Сигнал устарел' : 'Сигнал свежий', text: `Создан ${ageText(s.created_at)}. Максимальный возраст: ${maxAgeHours} ч.` },
     { key: 'direction', status: s.direction === 'long' || s.direction === 'short' ? 'pass' : 'fail', title: s.direction === 'long' || s.direction === 'short' ? 'Направление задано' : 'Нет направления сделки', text: `Направление: ${String(s.direction || 'flat').toUpperCase()}. Flat не является сделкой.` },
     { key: 'mtf', status: mtfSeverity(s), title: mtfSeverity(s) === 'pass' ? 'MTF согласован' : mtfSeverity(s) === 'warn' ? 'MTF неполный' : 'MTF запрещает вход', text: `${mtfLabel(s)}. ${s.mtf_reason || '15m — вход; 60m и 240m — фильтры, а не отдельные триггеры.'}` },
-    { key: 'liquidity', status: eligible ? 'pass' : 'fail', title: eligible ? 'Ликвидность допущена' : 'Ликвидность не допущена', text: `Liquidity score ${fmt(s.liquidity_score, 2)}, spread ${pctRaw(spread, 4)}, turnover 24h ${fmt(s.turnover_24h, 1)} USDT.` },
-    { key: 'spread', status: spread <= 0.08 ? 'pass' : spread <= 0.15 ? 'warn' : 'fail', title: spread <= 0.08 ? 'Spread нормальный' : spread <= 0.15 ? 'Spread пограничный' : 'Spread слишком широкий', text: `Текущий spread ${pctRaw(spread, 4)}. Чем шире spread, тем хуже исполнимость grid/бота.` },
+    { key: 'liquidity', status: liquidityStatus, title: liquidityStatus === 'pass' ? 'Ликвидность допущена' : liquidityStatus === 'warn' ? 'Ликвидность ожидает snapshot' : 'Ликвидность не допущена', text: `Liquidity score ${fmt(s.liquidity_score, 2)}, spread ${hasSpread ? pctRaw(spread, 4) : '—'}, turnover 24h ${fmt(s.turnover_24h, 1)} USDT.` },
+    { key: 'spread', status: spreadStatus, title: spreadStatus === 'pass' ? 'Spread нормальный' : spreadStatus === 'warn' ? 'Spread требует контроля' : 'Spread слишком широкий', text: `Текущий spread ${hasSpread ? pctRaw(spread, 4) : '—'}. Чем шире spread, тем хуже исполнимость grid/бота.` },
     { key: 'rr', status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail', title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны', text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.' },
-    { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.54 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
-    { key: 'backtest', status: trades >= 30 && num(s.profit_factor, 0) >= 1.25 && dd <= 0.22 ? 'pass' : trades >= 10 ? 'warn' : 'fail', title: `Бэктест: ${fmt(trades, 0)} сделок, PF ${fmt(s.profit_factor, 2)}, DD ${pct(dd, 1)}`, text: 'Малое число сделок или высокий DD снижает доказательность сетапа.' },
+    { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.52 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
+    { key: 'backtest', status: backtestStatus, title: backtestEvidenceTitle(s), text: backtestStatus === 'fail' ? 'Негативный бэктест снижает приоритет сетапа; это evidence-veto, а не MTF-veto.' : 'Малое число сделок или отсутствие свежего бэктеста снижает доказательность, но не скрывает сетап из очереди.' },
     { key: 'ml', status: mlEvidenceStatus(s), title: mlEvidenceTitle(s), text: mlEvidenceText(s) },
   ];
 }
@@ -768,8 +797,9 @@ function algorithmDecisionFor(s) {
     return { level: 'reject', label: 'НЕТ ВХОДА', score: 0, title: 'Нет выбранного сетапа', subtitle: 'Обновите данные и постройте рекомендации. По умолчанию вход запрещён.' };
   }
   const checks = baseChecklistFor(s);
-  const hardFails = checks.filter((item) => item.status === 'fail');
-  const warnings = checks.filter((item) => item.status === 'warn');
+  const hardStopKeys = new Set(['freshness', 'direction', 'mtf', 'liquidity', 'spread', 'rr', 'confidence']);
+  const hardFails = checks.filter((item) => item.status === 'fail' && hardStopKeys.has(item.key));
+  const warnings = checks.filter((item) => item.status === 'warn' || (item.status === 'fail' && !hardStopKeys.has(item.key)));
   const rr = riskReward(s);
   let score = 0;
   score += Math.max(0, Math.min(1, num(s.research_score, 0))) * 18;
@@ -927,7 +957,11 @@ function dedupeCandidatesByMarket(items) {
 }
 
 function candidates() {
-  const source = state.signals.length ? state.signals.map(enrichedSignal) : state.rank.map(withLlmFields);
+  // rank is the canonical operator queue: it already contains MTF, liquidity,
+  // backtest, ML and LLM joins. Raw /signals/latest is only a fallback while
+  // rank is unavailable; otherwise it can show "MTF: не рассчитан" for rows
+  // that simply were not enriched on the frontend side.
+  const source = state.rank.length ? state.rank.map(withLlmFields) : state.signals.map(enrichedSignal);
   const mapped = source
     .filter(isEntryRecommendation)
     .map((item) => ({ ...withLlmFields(item), decision: decisionFor(item) }));
@@ -1083,7 +1117,7 @@ function renderQueue() {
   }
   queue.className = 'candidate-queue';
   const selectedId = selectedCandidate()?.id;
-  const rawTotal = state.signals.length ? state.signals.filter(isEntryRecommendation).length : state.rank.filter(isEntryRecommendation).length;
+  const rawTotal = state.rank.length ? state.rank.filter(isEntryRecommendation).length : state.signals.filter(isEntryRecommendation).length;
   queue.innerHTML = filtered.map((s) => {
     const selected = Number(s.id) === Number(selectedId);
     const decisionLevel = cssToken(s.decision.level, 'reject');

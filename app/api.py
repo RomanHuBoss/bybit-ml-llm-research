@@ -69,6 +69,21 @@ def _sync_sentiment_bundle_multi(*args, **kwargs):
     return sync_sentiment_bundle_multi(*args, **kwargs)
 
 
+def _apply_mtf_consensus(*args, **kwargs):
+    from .mtf import apply_mtf_consensus
+
+    return apply_mtf_consensus(*args, **kwargs)
+
+
+def _unique_intervals(values: list[str] | tuple[str, ...]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        interval = str(value).strip().upper()
+        if interval and interval not in out:
+            out.append(interval)
+    return out
+
+
 def _sentiment_summary(*args, **kwargs):
     from .sentiment import sentiment_summary
 
@@ -344,20 +359,50 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
     except ValueError as exc:
         raise _bad_request(exc) from exc
 
-    where = "WHERE interval=%s" if entry_only and settings.mtf_consensus_enabled else ""
-    params: tuple[Any, ...] = (settings.mtf_entry_interval, limit) if where else (limit,)
+    if settings.mtf_consensus_enabled:
+        entry_interval = str(settings.mtf_entry_interval).strip().upper()
+        context_intervals = _unique_intervals([settings.mtf_entry_interval, settings.mtf_bias_interval, settings.mtf_regime_interval])
+        query_limit = max(limit * 6, 120)
+        rows = fetch_all(
+            """
+            WITH latest_signals AS (
+                SELECT DISTINCT ON (category, symbol, interval, strategy, direction)
+                       id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
+                       entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
+                FROM signals
+                WHERE interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
+                ORDER BY category, symbol, interval, strategy, direction, created_at DESC
+            )
+            SELECT id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
+                   entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
+            FROM latest_signals
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (context_intervals, settings.max_signal_age_hours, query_limit),
+        )
+        rows = _apply_mtf_consensus(
+            rows,
+            entry_interval=settings.mtf_entry_interval,
+            bias_interval=settings.mtf_bias_interval,
+            regime_interval=settings.mtf_regime_interval,
+        )
+        if entry_only:
+            rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
+        rows = rows[:limit]
+        return {"ok": True, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
+
     rows = fetch_all(
-        f"""
-        SELECT id, created_at, bar_time, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit,
+        """
+        SELECT id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit,
                atr, ml_probability, sentiment_score, rationale
         FROM signals
-        {where}
         ORDER BY created_at DESC
         LIMIT %s
         """,
-        params,
+        (limit,),
     )
-    return {"ok": True, "entry_only": entry_only and settings.mtf_consensus_enabled, "entry_interval": settings.mtf_entry_interval, "signals": rows}
+    return {"ok": True, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
 
 @router.get("/research/rank")
