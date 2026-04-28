@@ -4,10 +4,36 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 BASE_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(BASE_DIR / ".env")
+
+
+def _load_dotenv_light(path: Path) -> None:
+    """Минимальный .env-loader без import-time зависимости от python-dotenv.
+
+    В audit-среде импорт стороннего dotenv зависал до старта приложения. Для
+    критичного trading-сервиса конфигурация не должна зависеть от тяжелой или
+    проблемной import-time магии. Поддерживаем нужный проекту формат KEY=VALUE,
+    комментарии и простые кавычки; уже заданные переменные окружения не трогаем.
+    """
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+
+
+_load_dotenv_light(BASE_DIR / ".env")
 
 
 def _float(name: str, default: float) -> float:
@@ -163,9 +189,9 @@ class Settings:
     # missing models are retrained opportunistically after fresh market/sentiment
     # data have been synced. Limits keep the background loop bounded on local PCs.
     ml_auto_train_enabled: bool = _bool("ML_AUTO_TRAIN_ENABLED", True)
-    ml_auto_train_ttl_hours: int = _int("ML_AUTO_TRAIN_TTL_HOURS", 24)
+    ml_auto_train_ttl_hours: int = _int("ML_AUTO_TRAIN_TTL_HOURS", 168)
     ml_auto_train_horizon_bars: int = _int("ML_AUTO_TRAIN_HORIZON_BARS", 12)
-    ml_auto_train_max_models_per_cycle: int = _int("ML_AUTO_TRAIN_MAX_MODELS_PER_CYCLE", 2)
+    ml_auto_train_max_models_per_cycle: int = _int("ML_AUTO_TRAIN_MAX_MODELS_PER_CYCLE", 1)
     ml_auto_train_failure_cooldown_hours: int = _int("ML_AUTO_TRAIN_FAILURE_COOLDOWN_HOURS", 6)
     ml_probability_in_signals_enabled: bool = _bool("ML_PROBABILITY_IN_SIGNALS_ENABLED", True)
 

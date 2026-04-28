@@ -81,6 +81,25 @@ def is_market_snapshot_fresh(bar_time: Any, interval: str, *, now: datetime | No
     closed_at = parsed + _interval_to_timedelta(interval)
     return closed_at <= now and now - closed_at <= allowed_lag
 
+
+def _latest_fresh_closed_position(df: pd.DataFrame, interval: str, *, scan_tail: int = 8) -> int | None:
+    """Находит последний пригодный закрытый бар, не позволяя текущей/битой свече
+    обнулить все рекомендации по инструменту.
+
+    Bybit API обычно возвращает текущую незакрытую свечу. sync_candles ее фильтрует,
+    но при ручном импорте/миграции такая строка может попасть в БД. Без обратного
+    поиска один незакрытый бар в конце делает build_latest_signals пустым для пары,
+    хотя предыдущая закрытая свеча еще актуальна.
+    """
+    if df.empty:
+        return None
+    start = len(df) - 1
+    stop = max(-1, len(df) - max(1, scan_tail) - 1)
+    for pos in range(start, stop, -1):
+        if is_market_snapshot_fresh(df.iloc[pos].get("start_time"), interval):
+            return pos
+    return None
+
 def _risk_levels(direction: str, close: float, atr: float, sl_atr: float = 1.8, tp_atr: float = 3.0) -> tuple[float, float]:
     atr = max(float(atr), close * 0.002)
     if direction == "long":
@@ -362,13 +381,15 @@ def build_latest_signals(category: str, symbol: str, interval: str, limit: int =
     df = load_market_frame(category, symbol, interval, limit=limit)
     if df.empty or len(df) < 250:
         return []
-    latest = df.iloc[-1]
-    bar_time = latest.get("start_time")
-    if not is_market_snapshot_fresh(bar_time, interval):
-        # Нельзя выдавать новую рекомендацию оператору, если последний рыночный бар
-        # старый или не имеет времени. Такое состояние должно отображаться как no signal/stale data.
+    latest_pos = _latest_fresh_closed_position(df, interval)
+    if latest_pos is None:
+        # Нельзя выдавать новую рекомендацию оператору, если нет ни одной свежей
+        # закрытой свечи. Но один незакрытый tail-bar больше не скрывает предыдущий
+        # закрытый бар, пока он остается в допустимом freshness-окне.
         return []
-    history = df.iloc[:-1]
+    latest = df.iloc[latest_pos]
+    bar_time = latest.get("start_time")
+    history = df.iloc[:latest_pos]
     candidates = [
         donchian_breakout(latest),
         ema_pullback(latest),

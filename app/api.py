@@ -64,6 +64,7 @@ from .config import settings
 from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
+from .recommendation import annotate_recommendations
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
 from .signal_background import signal_refresher
@@ -471,7 +472,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
         )
         if entry_only:
             rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
-        rows = rows[:limit]
+        rows = annotate_recommendations(rows[:limit])
         return {"ok": True, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
     rows = fetch_all(
@@ -485,7 +486,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
         """,
         (limit,),
     )
-    rows = annotate_and_filter_fresh_signals(rows)
+    rows = annotate_recommendations(annotate_and_filter_fresh_signals(rows))
     return {"ok": True, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
 

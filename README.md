@@ -1,3 +1,33 @@
+## Production hardening 2026-04-28 v11
+
+Эта версия закрывает причину, по которой система могла долго оставлять пары в статусе `НАБЛЮДАТЬ` без понятного допуска к ручному входу: optional-evidence вроде ML/backtest/LLM больше не трактуется как вечный hard-veto. Backend теперь возвращает каноническое операторское решение `operator_action`:
+
+- `NO_TRADE` / `НЕТ ВХОДА` — вход запрещен hard-veto;
+- `WAIT` / `НАБЛЮДАТЬ` — критического запрета нет, но доказательности недостаточно;
+- `REVIEW_ENTRY` / `РУЧНАЯ ПРОВЕРКА ВХОДА` — сетап можно вынести на ручную проверку оператором.
+
+`REVIEW_ENTRY` не является приказом купить/продать, не создает ордер и не включает автоматическую торговлю. Проект остается советующей СППР.
+
+Ключевые изменения:
+
+- добавлен модуль `app.recommendation` с единым backend-контрактом operator decision;
+- `/api/signals/latest` и `/api/research/rank` возвращают `operator_score`, hard reasons, warnings, evidence notes и `risk_reward`;
+- `build_latest_signals()` ищет последнюю свежую закрытую свечу в хвосте, чтобы одна незакрытая/битая tail-свеча не обнуляла все рекомендации;
+- ML auto-train сделан менее агрессивным для VM: `ML_AUTO_TRAIN_TTL_HOURS=168`, `ML_AUTO_TRAIN_MAX_MODELS_PER_CYCLE=1`;
+- frontend использует серверное решение как каноническое и показывает отдельные состояния `НЕТ ВХОДА`, `НАБЛЮДАТЬ`, `РУЧНАЯ ПРОВЕРКА ВХОДА`;
+- пустая очередь сигналов теперь объясняет, что рынок обновлен, но стратегии не дали entry на свежей закрытой свече;
+- добавлены regression-тесты operator decision и freshness tail-bar;
+- подробный отчет: `docs/PRODUCTION_HARDENING_2026_04_28.md`.
+
+Проверено в контейнере:
+
+```bash
+/opt/pyvenv/bin/python -S -m compileall -q app tests install.py run.py sitecustomize.py
+node --check frontend/app.js
+```
+
+Дополнительно прямым запуском тестовых функций проверены `tests/test_operator_recommendation.py`, `tests/test_latest_closed_signal_bar.py`, `tests/test_frontend_decision_ui.py`. Полный `pytest`/`run.py check` в текущем контейнере зависает на уровне окружения runner/import; live PostgreSQL/Bybit/Ollama не поднимались.
+
 ## Финальная red-team ревизия 2026-04-28
 
 Дополнительная инженерная проверка советующей СППР выявила и закрыла два класса production-safety риска:

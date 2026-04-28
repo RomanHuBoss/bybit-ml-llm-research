@@ -58,7 +58,7 @@ def test_frontend_logic_contains_operator_trade_guards():
         "function setContextTab",
         "Красных пунктов",
         "НЕТ ВХОДА",
-        "К ПРОВЕРКЕ",
+        "РУЧНАЯ ПРОВЕРКА ВХОДА",
         "не создает бота автоматически",
         "refreshLlmStatus",
         "/api/llm/background/status",

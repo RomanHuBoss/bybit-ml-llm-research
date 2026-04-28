@@ -800,36 +800,79 @@ function baseChecklistFor(s) {
   ];
 }
 
+function noSignalExplanation() {
+  const cycle = state.signalStatus?.last_cycle || {};
+  const queued = num(cycle.queued, 0) || 0;
+  const built = num(cycle.signals_built, 0) || 0;
+  const failed = num(cycle.failed, 0) || 0;
+  const synced = num(cycle.market_synced, 0) || 0;
+  if (queued && synced && !built && !failed) {
+    return `Рынок обновлен (${synced}/${queued}), но ни одна стратегия не дала entry-сетап на свежей закрытой свече. Это штатное WAIT-состояние, а не ошибка обучения ML.`;
+  }
+  if (failed) {
+    return `Фоновый цикл завершился частично: ошибок ${failed}. Проверьте API/DB-журнал и last_cycle.`;
+  }
+  if (queued && !synced) {
+    return 'Фоновый цикл запущен, но свежий рынок еще не загружен. Вход по умолчанию запрещён.';
+  }
+  return 'Обновите рынок и рекомендации. По умолчанию вход запрещён.';
+}
+
 function algorithmDecisionFor(s) {
   if (!s) {
-    return { level: 'reject', label: 'НЕТ ВХОДА', score: 0, title: 'Нет выбранного сетапа', subtitle: 'Обновите данные и постройте рекомендации. По умолчанию вход запрещён.' };
+    return { level: 'reject', label: 'НЕТ ВХОДА', score: 0, title: 'Нет выбранного сетапа', subtitle: noSignalExplanation() };
   }
+
+  // Серверная классификация является канонической: она одинаково используется
+  // в API, таблице и главной карточке. Frontend fallback ниже нужен только для
+  // старых backend-сборок или аварийной деградации API-контракта.
+  if (s.operator_action) {
+    const level = cssToken(s.operator_level, s.operator_action === 'REVIEW_ENTRY' ? 'review' : s.operator_action === 'WAIT' ? 'watch' : 'reject');
+    const score = Math.round(num(s.operator_score, 0) || 0);
+    const hard = Array.isArray(s.operator_hard_reasons) ? s.operator_hard_reasons : [];
+    const warnings = Array.isArray(s.operator_warnings) ? s.operator_warnings : [];
+    const evidence = Array.isArray(s.operator_evidence_notes) ? s.operator_evidence_notes : [];
+    const first = hard[0] || warnings[0] || evidence[0];
+    const subtitle = level === 'review'
+      ? `Сетап можно вынести на ручную проверку: score ${score}. ${evidence.length ? `Evidence notes: ${evidence.map((x) => x.title).slice(0, 2).join('; ')}.` : 'Критических veto нет.'}`
+      : level === 'watch'
+        ? `Ждать/наблюдать: ${first?.title || 'недостаточно совокупной доказательности'}; score ${score}.`
+        : `Вход запрещён: ${first?.title || 'сработал защитный фильтр'}; score ${score}.`;
+    return {
+      level,
+      label: s.operator_label || (level === 'review' ? 'РУЧНАЯ ПРОВЕРКА ВХОДА' : level === 'watch' ? 'НАБЛЮДАТЬ' : 'НЕТ ВХОДА'),
+      score,
+      title: `${s.symbol}: ${s.operator_label || 'решение рассчитано'}`,
+      subtitle,
+    };
+  }
+
   const checks = baseChecklistFor(s);
   const hardStopKeys = new Set(['freshness', 'direction', 'mtf', 'liquidity', 'spread', 'rr', 'confidence']);
   const hardFails = checks.filter((item) => item.status === 'fail' && hardStopKeys.has(item.key));
   const warnings = checks.filter((item) => item.status === 'warn' || (item.status === 'fail' && !hardStopKeys.has(item.key)));
   const rr = riskReward(s);
   let score = 0;
-  score += Math.max(0, Math.min(1, num(s.research_score, 0))) * 18;
+  score += Math.max(0, Math.min(1, num(s.research_score, 0))) * 16;
   score += Math.max(0, Math.min(1, num(s.mtf_score, 0))) * 16;
-  score += Math.max(0, Math.min(1, num(s.confidence, 0))) * 18;
-  score += Math.max(0, Math.min(1, ((rr?.ratio || 0) - 1) / 1.5)) * 15;
+  score += Math.max(0, Math.min(1, num(s.confidence, 0))) * 20;
+  score += Math.max(0, Math.min(1, ((rr?.ratio || 0) - 1) / 1.5)) * 18;
   score += bool(s.is_eligible) ? 10 : 0;
   score += num(s.spread_pct, 999) <= 0.08 ? 8 : num(s.spread_pct, 999) <= 0.15 ? 3 : 0;
-  score += Math.max(0, Math.min(1, num(s.trades_count, 0) / 50)) * 8;
-  score += Math.max(0, Math.min(1, num(s.profit_factor, 0) / 2)) * 8;
-  score += Math.max(0, Math.min(1, (num(s.roc_auc, 0.5) - 0.5) / 0.2)) * 7;
-  score += Math.max(0, 1 - Math.min(1, num(s.max_drawdown, 0.4) / 0.35)) * 4;
+  score += Math.max(0, Math.min(1, num(s.trades_count, 0) / 50)) * 6;
+  score += Math.max(0, Math.min(1, num(s.profit_factor, 0) / 2)) * 6;
+  score += Math.max(0, Math.min(1, (num(s.roc_auc, 0.5) - 0.5) / 0.2)) * 5;
+  score += Math.max(0, 1 - Math.min(1, num(s.max_drawdown, 0.4) / 0.35)) * 3;
   if (s.mtf_veto || s.higher_tf_conflict || s.mtf_status === 'context_only') score -= 30;
   score = Math.round(Math.max(0, Math.min(100, score)));
 
   if (hardFails.length) {
     return { level: 'reject', label: 'НЕТ ВХОДА', score, title: `${s.symbol}: вход запрещён`, subtitle: `Причина: ${hardFails[0].title}. Сетап можно только разобрать, но не передавать на создание бота.` };
   }
-  if (warnings.length || score < 70) {
-    return { level: 'watch', label: 'НАБЛЮДАТЬ', score, title: `${s.symbol}: только наблюдение`, subtitle: `Нет критического запрета, но есть слабые места: ${warnings.map((x) => x.title).slice(0, 2).join('; ') || 'оценка допуска ниже порога'}.` };
+  if (num(s.confidence, 0) >= 0.58 && rr && rr.ratio >= 1.45 && score >= 56) {
+    return { level: 'review', label: 'РУЧНАЯ ПРОВЕРКА ВХОДА', score, title: `${s.symbol}: можно вынести на ручную проверку`, subtitle: `Критических veto нет. ${warnings.length ? `Есть замечания: ${warnings.map((x) => x.title).slice(0, 2).join('; ')}.` : 'Дополнительные проверки ниже.'}` };
   }
-  return { level: 'review', label: 'К ПРОВЕРКЕ', score, title: `${s.symbol}: можно передать на ручную проверку`, subtitle: 'Это не приказ на вход. Оператор обязан сверить стакан, новости, общий риск портфеля и параметры создаваемого бота.' };
+  return { level: 'watch', label: 'НАБЛЮДАТЬ', score, title: `${s.symbol}: только наблюдение`, subtitle: `Нет критического запрета, но сетап пока слабый: ${warnings.map((x) => x.title).slice(0, 2).join('; ') || 'score ниже входного порога'}.` };
 }
 
 function checklistFor(s, options = {}) {
@@ -995,7 +1038,7 @@ function renderDecision() {
   setText('decisionBadge', d.label);
   if ($('decisionBadge')) $('decisionBadge').className = `decision-badge ${d.level}`;
   setText('decisionTitle', s?.symbol || d.title);
-  setText('decisionVerdict', d.label === 'НЕТ ВХОДА' ? 'Вход запрещён' : d.label === 'ВХОД' ? 'Вход возможен' : d.label);
+  setText('decisionVerdict', d.level === 'review' ? 'Только ручная проверка' : d.label === 'НЕТ ВХОДА' ? 'Вход запрещён' : d.label);
   setText('decisionSubtitle', d.subtitle);
   setText('decisionScore', d.score);
   updateTopContext(s);
@@ -1118,7 +1161,7 @@ function renderQueue() {
   const filtered = state.filter === 'all' ? list : list.filter((s) => s.decision.level === state.filter);
   if (!filtered.length) {
     queue.className = 'candidate-queue empty-state';
-    queue.textContent = list.length ? 'В этом фильтре нет кандидатов.' : 'Очередь появится после построения рекомендаций.';
+    queue.textContent = list.length ? 'В этом фильтре нет кандидатов.' : noSignalExplanation();
     renderDecision();
     renderRawTable(list);
     return;

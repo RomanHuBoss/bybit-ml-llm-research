@@ -744,3 +744,79 @@ tbody tr.dir-short td, tbody tr td.short { color: var(--red); }
 }
 
 .support-grid { display: grid; gap: 12px; }
+
+/* v11 hardening: responsive trading-terminal geometry and clearer operator actions */
+.topbar {
+  grid-template-columns: minmax(220px, 0.72fr) minmax(260px, 0.95fr) minmax(280px, 1.18fr);
+  grid-auto-rows: auto;
+}
+.market-strip,
+.top-status { min-width: 0; }
+.market-chip,
+.status { max-width: 100%; }
+.cockpit-grid {
+  grid-template-columns: minmax(300px, 360px) minmax(520px, 1fr) minmax(330px, 400px);
+}
+.decision-badge.review,
+.badge.review {
+  color: var(--green);
+  border-color: rgba(0, 227, 140, 0.45);
+  background: linear-gradient(180deg, rgba(0, 227, 140, 0.18), rgba(0, 227, 140, 0.08));
+}
+.decision-badge.watch,
+.badge.watch {
+  color: var(--amber);
+  border-color: rgba(245, 185, 66, 0.45);
+  background: linear-gradient(180deg, rgba(245, 185, 66, 0.18), rgba(245, 185, 66, 0.08));
+}
+.decision-badge.reject,
+.badge.reject {
+  color: var(--red);
+  border-color: rgba(255, 77, 109, 0.45);
+  background: linear-gradient(180deg, rgba(255, 77, 109, 0.18), rgba(255, 77, 109, 0.08));
+}
+.candidate .badge {
+  max-width: 132px;
+  white-space: normal;
+  line-height: 1.05;
+  text-align: center;
+}
+.candidate.review {
+  border-color: rgba(0, 227, 140, 0.30);
+  box-shadow: inset 3px 0 0 rgba(0, 227, 140, 0.85);
+}
+.candidate.watch { box-shadow: inset 3px 0 0 rgba(245, 185, 66, 0.75); }
+.candidate.reject { box-shadow: inset 3px 0 0 rgba(255, 77, 109, 0.72); }
+.raw-table-wrap { scrollbar-gutter: stable; }
+table { min-width: 1120px; }
+.empty-state { line-height: 1.45; }
+
+@media (max-width: 1760px) {
+  .cockpit-grid { grid-template-columns: minmax(290px, 340px) minmax(480px, 1fr) minmax(310px, 360px); gap: 14px; }
+  .panel { border-radius: 18px; }
+}
+@media (max-width: 1380px) {
+  .topbar { grid-template-columns: minmax(220px, 1fr) minmax(360px, 1.35fr); }
+  .top-status { grid-column: 1 / -1; justify-content: flex-start; }
+  .cockpit-grid { grid-template-columns: minmax(280px, 350px) minmax(0, 1fr); }
+  .right-stack { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .context-card { grid-column: 1 / -1; }
+}
+@media (max-width: 980px) {
+  .topbar { grid-template-columns: 1fr; }
+  .market-strip,
+  .top-status { justify-content: flex-start; }
+  .market-chip,
+  .status { white-space: normal; }
+  .cockpit-grid,
+  .right-stack,
+  .headline-grid { grid-template-columns: 1fr; }
+  .left-stack,
+  .right-stack { max-height: none; overflow: visible; }
+}
+@media (max-width: 560px) {
+  .brand-copy h1 { white-space: normal; }
+  .candidate { grid-template-columns: minmax(0, 1fr) 96px 34px; }
+  .candidate .badge { max-width: 96px; font-size: 8.5px; }
+  .candidate-timeframe { white-space: normal; }
+}
