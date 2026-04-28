@@ -271,3 +271,29 @@ def test_frontend_does_not_expose_manual_ml_launch_controls():
     assert "$('predictBtn')" not in js
     assert "/api/ml/train" not in js
     assert "/api/ml/predict/latest" not in js
+
+
+def test_frontend_uses_compact_badges_without_clipping_full_operator_label():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert "const DECISION_COMPACT_LABELS" in js
+    assert "review: 'ПРОВЕРКА'" in js
+    assert "compactDecisionLabel(s.decision)" in js
+    assert 'title="${label}" aria-label="${label}"' in js
+    assert "const MTF_ACTION_COMPACT_LABELS" in js
+    assert "compactMtfActionLabel(s)" in js
+    assert "NO_TRADE_ENTRY_CONFLICT" in js
+    assert "styles.css?v=trading-cockpit-v12" in html
+    assert "v12 trading UI hardening" in css
+    assert ".candidate .badge" in css
+    assert "text-overflow: ellipsis" in css
+    assert "grid-template-columns: minmax(0, 1fr) minmax(78px, 96px) 34px 12px" in css
+
+
+def test_frontend_latest_signals_request_is_category_scoped():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "/api/signals/latest?category=" in js
+    assert "encodeURIComponent($('category').value)" in js

@@ -42,6 +42,17 @@ def risk_reward(entry: Any, stop_loss: Any, take_profit: Any) -> float | None:
     return reward / risk
 
 
+def _directional_levels_problem(row: dict[str, Any], entry: float | None, stop: float | None, take: float | None) -> str | None:
+    direction = str(row.get("direction") or "").lower()
+    if entry is None or stop is None or take is None:
+        return None
+    if direction == "long" and not (stop < entry < take):
+        return "Для LONG требуется stop_loss < entry < take_profit."
+    if direction == "short" and not (take < entry < stop):
+        return "Для SHORT требуется take_profit < entry < stop_loss."
+    return None
+
+
 def _add_reason(target: list[dict[str, str]], code: str, title: str, detail: str) -> None:
     target.append({"code": code, "title": title, "detail": detail})
 
@@ -68,7 +79,7 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         _add_reason(hard, "freshness", "Рыночные данные устарели", "Рекомендация не должна строиться по старой или незакрытой свече.")
 
     mtf_status = str(row.get("mtf_status") or "").lower()
-    if row.get("mtf_veto") is True or row.get("higher_tf_conflict") is True or mtf_status in {"context_only", "no_trade_conflict", "invalid_direction"}:
+    if row.get("mtf_veto") is True or row.get("higher_tf_conflict") is True or mtf_status in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}:
         _add_reason(hard, "mtf", "MTF запрещает вход", str(row.get("mtf_reason") or "60m/240m конфликтуют с entry-TF или строка не является entry-кандидатом."))
     elif mtf_status in {"tactical_only", "weak_alignment", ""}:
         _add_reason(warnings, "mtf_partial", "MTF подтвержден не полностью", str(row.get("mtf_reason") or "Есть только тактический сигнал без полного подтверждения старших TF."))
@@ -85,9 +96,17 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     elif spread > settings.max_spread_pct:
         _add_reason(hard, "spread", "Spread шире лимита", f"Spread {spread:.4f}% > лимита {settings.max_spread_pct:.4f}%.")
 
-    rr = risk_reward(row.get("entry"), row.get("stop_loss"), row.get("take_profit"))
+    entry_v = _finite(row.get("entry"))
+    stop_v = _finite(row.get("stop_loss"))
+    take_v = _finite(row.get("take_profit"))
+    rr = risk_reward(entry_v, stop_v, take_v)
+    levels_problem = _directional_levels_problem(row, entry_v, stop_v, take_v)
     if rr is None:
         _add_reason(hard, "rr_missing", "SL/TP невалидны", "Нельзя оценить риск без корректных entry, stop-loss и take-profit.")
+    elif levels_problem:
+        # Абсолютный R/R может выглядеть приемлемо даже при перепутанных SL/TP.
+        # Для торговой рекомендации порядок уровней должен соответствовать направлению.
+        _add_reason(hard, "levels_order", "SL/TP противоречат направлению", levels_problem)
     elif rr < 1.15:
         _add_reason(hard, "rr_low", "Risk/Reward слишком низкий", f"R/R {rr:.2f} ниже минимального защитного порога 1.15.")
     elif rr < 1.45:
@@ -140,7 +159,7 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     score = int(round(max(0.0, min(100.0, score))))
 
     confidence_band = "high" if confidence >= 0.70 else "normal" if confidence >= 0.58 else "low"
-    core_entry_ok = not hard and confidence >= 0.58 and rr is not None and rr >= 1.45 and mtf_status not in {"context_only", "no_trade_conflict", "invalid_direction"}
+    core_entry_ok = not hard and confidence >= 0.58 and rr is not None and rr >= 1.45 and mtf_status not in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}
     if hard:
         action = "NO_TRADE"
         label = "НЕТ ВХОДА"

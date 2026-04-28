@@ -820,3 +820,74 @@ table { min-width: 1120px; }
   .candidate .badge { max-width: 96px; font-size: 8.5px; }
   .candidate-timeframe { white-space: normal; }
 }
+
+/* v12 trading UI hardening: компактные badge без обрезания текста и с устойчивой геометрией очереди. */
+.candidate {
+  grid-template-columns: minmax(0, 1fr) minmax(78px, 96px) 34px 12px;
+  gap: 8px;
+  overflow: hidden;
+}
+.candidate .badge,
+.decision-badge,
+.mtf-pill,
+.market-chip,
+.status {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1;
+  letter-spacing: 0.035em;
+}
+.candidate .badge {
+  width: 100%;
+  min-height: 24px;
+  padding: 5px 6px;
+  font-size: 9px;
+  justify-self: stretch;
+}
+.decision-badge {
+  max-width: min(100%, 240px);
+  white-space: normal;
+  line-height: 1.15;
+  text-align: center;
+}
+.mtf-pill {
+  width: auto;
+  min-width: 0;
+  max-width: 112px;
+  min-height: 26px;
+  padding: 6px 9px;
+}
+.queue-header {
+  grid-template-columns: minmax(0, 1fr) minmax(78px, 96px) 34px 12px;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.queue-more {
+  min-height: 36px;
+  line-height: 1.15;
+  white-space: normal;
+}
+.status.wide {
+  max-width: 190px;
+}
+.market-strip,
+.top-status {
+  overflow: hidden;
+}
+@media (max-width: 1540px) {
+  .status.wide { max-width: 220px; }
+}
+@media (max-width: 680px) {
+  .candidate,
+  .queue-header {
+    grid-template-columns: minmax(0, 1fr) 82px 30px;
+  }
+  .candidate .badge {
+    font-size: 8px;
+    padding-inline: 4px;
+  }
+  .candidate-chevron { display: none; }
+}

@@ -60,3 +60,17 @@ def test_operator_action_keeps_moderate_setup_in_wait():
 
     assert decision["operator_action"] == "WAIT"
     assert any(item["code"] == "confidence_moderate" for item in decision["operator_warnings"])
+
+
+def test_operator_action_blocks_directionally_inverted_levels_even_if_absolute_rr_looks_ok():
+    decision = classify_operator_action(base_row(direction="long", stop_loss=104.0, take_profit=96.0))
+
+    assert decision["operator_action"] == "NO_TRADE"
+    assert any(item["code"] == "levels_order" for item in decision["operator_hard_reasons"])
+
+
+def test_operator_action_blocks_short_with_long_ordered_levels():
+    decision = classify_operator_action(base_row(direction="short", stop_loss=98.0, take_profit=104.0))
+
+    assert decision["operator_action"] == "NO_TRADE"
+    assert any(item["code"] == "levels_order" for item in decision["operator_hard_reasons"])

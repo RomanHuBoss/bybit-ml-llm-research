@@ -69,3 +69,37 @@ def test_mtf_consensus_marks_60m_as_context_not_entry():
     assert bias["mtf_action_class"] == "CONTEXT_ONLY"
     assert bias["mtf_veto"] is True
     assert bias["mtf_is_entry_candidate"] is False
+
+
+def test_mtf_consensus_vetoes_entry_tf_internal_direction_conflict():
+    from app.mtf import apply_mtf_consensus
+
+    rows = [
+        row("XRPUSDT", "15", "long", 0.55),
+        row("XRPUSDT", "15", "short", 0.76),
+        row("XRPUSDT", "60", "neutral", 0.20),
+        row("XRPUSDT", "240", "neutral", 0.20),
+    ]
+
+    out = apply_mtf_consensus(rows)
+    weaker_long = next(item for item in out if item["interval"] == "15" and item["direction"] == "long")
+
+    assert weaker_long["mtf_status"] == "entry_tf_conflict"
+    assert weaker_long["mtf_action_class"] == "NO_TRADE_ENTRY_CONFLICT"
+    assert weaker_long["entry_tf_conflict"] is True
+    assert weaker_long["mtf_veto"] is True
+
+
+def test_mtf_consensus_does_not_mix_categories_for_same_symbol():
+    from app.mtf import apply_mtf_consensus
+
+    linear_entry = row("BTCUSDT", "15", "long", 0.72)
+    linear_entry["category"] = "linear"
+    spot_context = row("BTCUSDT", "60", "short", 0.80)
+    spot_context["category"] = "spot"
+
+    out = apply_mtf_consensus([linear_entry, spot_context])
+    entry = next(item for item in out if item.get("category") == "linear")
+
+    assert entry["higher_tf_conflict"] is False
+    assert entry["mtf_status"] == "tactical_only"

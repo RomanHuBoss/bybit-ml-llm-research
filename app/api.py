@@ -434,9 +434,10 @@ def api_signal_background_run_now() -> dict[str, Any]:
 
 
 @router.get("/signals/latest")
-def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
+def latest_signals(limit: int = 50, entry_only: bool = True, category: str = settings.default_category) -> dict[str, Any]:
     try:
         limit = bounded_int(limit, "limit", 1, 500)
+        category = normalize_category(category)
     except ValueError as exc:
         raise _bad_request(exc) from exc
 
@@ -451,7 +452,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
                        id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
                        entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
                 FROM signals
-                WHERE interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
+                WHERE category=%s AND interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
                   AND bar_time IS NOT NULL
                 ORDER BY category, symbol, interval, strategy, direction, created_at DESC
             )
@@ -461,7 +462,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
             ORDER BY created_at DESC
             LIMIT %s
             """,
-            (context_intervals, settings.max_signal_age_hours, query_limit),
+            (category, context_intervals, settings.max_signal_age_hours, query_limit),
         )
         rows = annotate_and_filter_fresh_signals(rows)
         rows = _apply_mtf_consensus(
@@ -473,21 +474,21 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
         if entry_only:
             rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
         rows = annotate_recommendations(rows[:limit])
-        return {"ok": True, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
+        return {"ok": True, "category": category, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
     rows = fetch_all(
         """
         SELECT id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit,
                atr, ml_probability, sentiment_score, rationale
         FROM signals
-        WHERE bar_time IS NOT NULL
+        WHERE category=%s AND bar_time IS NOT NULL
         ORDER BY created_at DESC
         LIMIT %s
         """,
-        (limit,),
+        (category, limit),
     )
     rows = annotate_recommendations(annotate_and_filter_fresh_signals(rows))
-    return {"ok": True, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
+    return {"ok": True, "category": category, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
 
 @router.get("/research/rank")

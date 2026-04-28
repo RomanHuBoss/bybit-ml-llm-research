@@ -485,6 +485,7 @@ const MTF_STATUS_LABELS = {
   tactical_only: 'Только 15m',
   weak_alignment: 'Слабая MTF-связь',
   no_trade_conflict: 'Конфликт старших TF',
+  entry_tf_conflict: 'Конфликт entry-TF',
   context_only: 'Контекст, не вход',
   invalid_direction: 'Нет направления',
 };
@@ -495,9 +496,35 @@ const MTF_ACTION_LABELS = {
   TACTICAL_ONLY: 'TACTICAL',
   LOW_CONVICTION_INTRADAY: 'LOW CONVICTION',
   NO_TRADE_CONFLICT: 'NO TRADE',
+  NO_TRADE_ENTRY_CONFLICT: 'ENTRY CONFLICT',
   CONTEXT_ONLY: 'CONTEXT',
   NO_TRADE_INVALID: 'NO TRADE',
 };
+
+const MTF_ACTION_COMPACT_LABELS = {
+  HIGH_CONVICTION_INTRADAY: 'MTF OK',
+  BIAS_ALIGNED_INTRADAY: 'BIAS OK',
+  TACTICAL_ONLY: 'TACTICAL',
+  LOW_CONVICTION_INTRADAY: 'LOW MTF',
+  NO_TRADE_CONFLICT: 'NO MTF',
+  NO_TRADE_ENTRY_CONFLICT: 'ENTRY X',
+  CONTEXT_ONLY: 'CTX',
+  NO_TRADE_INVALID: 'NO TRADE',
+};
+
+const DECISION_COMPACT_LABELS = {
+  review: 'ПРОВЕРКА',
+  watch: 'WATCH',
+  reject: 'STOP',
+};
+
+function compactDecisionLabel(decision) {
+  return DECISION_COMPACT_LABELS[decision?.level] || truncateText(decision?.label || '—', 12).toUpperCase();
+}
+
+function compactMtfActionLabel(s) {
+  return MTF_ACTION_COMPACT_LABELS[s?.mtf_action_class] || truncateText(MTF_ACTION_LABELS[s?.mtf_action_class] || s?.mtf_action_class || 'MTF', 12).toUpperCase();
+}
 
 function mtfLabel(s) {
   if (!s) return 'MTF: нет данных';
@@ -507,7 +534,7 @@ function mtfLabel(s) {
 function mtfSeverity(s) {
   if (!s) return 'fail';
   if (!s.mtf_status) return 'warn';
-  if (s.mtf_veto || s.higher_tf_conflict || s.mtf_status === 'no_trade_conflict' || s.mtf_status === 'context_only') return 'fail';
+  if (s.mtf_veto || s.higher_tf_conflict || s.entry_tf_conflict || ['no_trade_conflict', 'entry_tf_conflict', 'context_only'].includes(s.mtf_status)) return 'fail';
   if (s.mtf_status === 'tactical_only' || s.mtf_status === 'weak_alignment') return 'warn';
   return 'pass';
 }
@@ -535,7 +562,7 @@ function renderMtfMatrix(s) {
   box.className = `mtf-matrix ${sev}`;
   box.innerHTML = `
     <div class="mtf-state-row">
-      <span class="mtf-pill ${sev}">${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || s.mtf_action_class || 'MTF')}</span>
+      <span class="mtf-pill ${sev}" title="${escapeHtml(MTF_ACTION_LABELS[s.mtf_action_class] || s.mtf_action_class || 'MTF')}">${escapeHtml(compactMtfActionLabel(s))}</span>
       <strong>${escapeHtml(mtfLabel(s))}</strong>
       <small>${escapeHtml(s.mtf_reason || 'MTF-контекст не раскрыт.')}</small>
     </div>
@@ -863,7 +890,7 @@ function algorithmDecisionFor(s) {
   score += Math.max(0, Math.min(1, num(s.profit_factor, 0) / 2)) * 6;
   score += Math.max(0, Math.min(1, (num(s.roc_auc, 0.5) - 0.5) / 0.2)) * 5;
   score += Math.max(0, 1 - Math.min(1, num(s.max_drawdown, 0.4) / 0.35)) * 3;
-  if (s.mtf_veto || s.higher_tf_conflict || s.mtf_status === 'context_only') score -= 30;
+  if (s.mtf_veto || s.higher_tf_conflict || s.entry_tf_conflict || s.mtf_status === 'context_only') score -= 30;
   score = Math.round(Math.max(0, Math.min(100, score)));
 
   if (hardFails.length) {
@@ -1173,6 +1200,7 @@ function renderQueue() {
     const selected = Number(s.id) === Number(selectedId);
     const decisionLevel = cssToken(s.decision.level, 'reject');
     const label = escapeHtml(s.decision.label);
+    const compactLabel = escapeHtml(compactDecisionLabel(s.decision));
     const variants = num(s.variant_count, 1) > 1 ? ` · ${num(s.variant_count, 1)} вариантов` : '';
     return `
       <article class="candidate ${decisionLevel} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
@@ -1181,7 +1209,7 @@ function renderQueue() {
           <span class="symbol">${escapeHtml(s.symbol)}</span>
           <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)} · ${escapeHtml(s.data_status || 'fresh')}</span>
         </div>
-        <span class="badge ${decisionLevel}">${label}</span>
+        <span class="badge ${decisionLevel}" title="${label}" aria-label="${label}">${compactLabel}</span>
         <span class="candidate-score">${s.decision.score}</span>
         <span class="candidate-chevron" aria-hidden="true">›</span>
       </article>`;
@@ -1314,7 +1342,7 @@ async function refreshRank() {
 }
 
 async function refreshSignals() {
-  const data = await api('/api/signals/latest?limit=80&entry_only=true');
+  const data = await api(`/api/signals/latest?category=${encodeURIComponent($('category').value)}&limit=80&entry_only=true`);
   state.signals = data.signals || [];
   if (state.selectedId !== null && !state.signals.some((s) => Number(s.id) === Number(state.selectedId))) state.selectedId = null;
   renderQueue();

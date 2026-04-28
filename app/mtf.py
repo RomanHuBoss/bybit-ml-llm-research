@@ -118,6 +118,7 @@ def classify_candidate(candidate: dict[str, Any], context: dict[str, Any], inter
     entry_aligned = aligned(entry)
     bias_aligned = aligned(bias)
     regime_aligned = aligned(regime)
+    entry_conflict = conflicts(entry)
     bias_conflict = conflicts(bias)
     regime_conflict = conflicts(regime)
     higher_tf_conflict = bias_conflict or regime_conflict
@@ -135,6 +136,12 @@ def classify_candidate(candidate: dict[str, Any], context: dict[str, Any], inter
         score = 0.25 if not higher_tf_conflict else 0.05
         veto = True
         reason = f"{interval} используется как контекст. Вход разрешен только по {intervals.entry}."
+    elif entry_conflict:
+        status = "entry_tf_conflict"
+        action_class = "NO_TRADE_ENTRY_CONFLICT"
+        score = 0.05
+        veto = True
+        reason = "На entry-TF есть более сильный противоположный агрегированный сигнал."
     elif higher_tf_conflict:
         status = "no_trade_conflict"
         action_class = "NO_TRADE_CONFLICT"
@@ -173,6 +180,7 @@ def classify_candidate(candidate: dict[str, Any], context: dict[str, Any], inter
         "mtf_veto": veto,
         "mtf_reason": reason,
         "mtf_is_entry_candidate": is_entry_interval,
+        "entry_tf_conflict": entry_conflict,
         "higher_tf_conflict": higher_tf_conflict,
         "bias_conflict": bias_conflict,
         "regime_conflict": regime_conflict,
@@ -201,16 +209,18 @@ def apply_mtf_consensus(
     не нужна новая таблица, а API/LLM/UI получают единый MTF-контекст на лету.
     """
     intervals = MTFIntervals(_norm_interval(entry_interval), _norm_interval(bias_interval), _norm_interval(regime_interval))
-    by_symbol: dict[str, list[dict[str, Any]]] = {}
+    by_market: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
-        by_symbol.setdefault(str(row.get("symbol") or "").upper(), []).append(row)
+        # MTF-контекст нельзя смешивать между spot/linear/inverse с одинаковым symbol.
+        market_key = (str(row.get("category") or "").lower(), str(row.get("symbol") or "").upper())
+        by_market.setdefault(market_key, []).append(row)
 
-    contexts = {symbol: symbol_mtf_context(symbol_rows, intervals) for symbol, symbol_rows in by_symbol.items()}
+    contexts = {market_key: symbol_mtf_context(symbol_rows, intervals) for market_key, symbol_rows in by_market.items()}
     out: list[dict[str, Any]] = []
     for row in rows:
-        symbol = str(row.get("symbol") or "").upper()
+        market_key = (str(row.get("category") or "").lower(), str(row.get("symbol") or "").upper())
         base_score = _num(row.get("research_score"), 0.0)
-        mtf = classify_candidate(row, contexts.get(symbol, symbol_mtf_context([], intervals)), intervals)
+        mtf = classify_candidate(row, contexts.get(market_key, symbol_mtf_context([], intervals)), intervals)
         adjusted = base_score + mtf["mtf_score"] * 0.18
         if mtf["mtf_veto"]:
             adjusted -= 0.35

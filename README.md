@@ -1,4 +1,26 @@
-## Production hardening 2026-04-28 v11
+## Визуальный и trading-safety hotfix v12
+
+Эта сборка подготовлена строго на основе архива `bybit-ml-llm-research-main(6).zip`. Исправлены визуальные дефекты operator cockpit, которые были видны в очереди кандидатов, MTF-блоке и верхней панели: длинные подписи больше не обрезаются внутри badge, а компактные badge сохраняют полный текст в `title`/`aria-label`.
+
+Дополнительно усилена торговая безопасность:
+
+- backend блокирует рекомендации с SL/TP, перепутанными относительно направления LONG/SHORT, даже если абсолютный R/R выглядит приемлемо;
+- MTF-классификатор теперь veto-ит внутренний конфликт entry-TF, когда агрегированная 15m-картина сильнее в противоположную сторону;
+- MTF-контекст больше не смешивает разные категории рынка (`linear`, `spot`, `inverse`) для одинакового symbol;
+- `/api/signals/latest` получил category-scope, чтобы frontend не смешивал рекомендации из разных рынков;
+- frontend обращается к `/api/signals/latest` с выбранной категорией;
+- cache-busting версии frontend обновлены до `trading-cockpit-v12`.
+
+Проверено:
+
+```bash
+node --check frontend/app.js
+python -S -m compileall -q app tests install.py run.py sitecustomize.py
+```
+
+Прямым import-light runner проверены 28 тестов: operator decision, MTF consensus, frontend contract и API contract. Полный `pytest` в текущей среде не завершился из-за зависания runner/import окружения; live PostgreSQL/Bybit/Ollama не поднимались.
+
+## Production hardening 2026-04-28 v12
 
 Эта версия закрывает причину, по которой система могла долго оставлять пары в статусе `НАБЛЮДАТЬ` без понятного допуска к ручному входу: optional-evidence вроде ML/backtest/LLM больше не трактуется как вечный hard-veto. Backend теперь возвращает каноническое операторское решение `operator_action`:
 
@@ -156,7 +178,7 @@ python -m pytest -q tests
 - Vanilla JS/CSS/HTML.
 - Без React/Vue/Bootstrap.
 - Интерфейс переработан как рабочее место оператора, а не техническая витрина данных:
-  - сверху показывается только главное решение: `НЕТ ВХОДА`, `НАБЛЮДАТЬ` или `К ПРОВЕРКЕ`;
+  - сверху показывается только главное решение: `НЕТ ВХОДА`, `НАБЛЮДАТЬ` или `РУЧНАЯ ПРОВЕРКА ВХОДА`;
   - рядом выводится итоговая оценка допуска, но она не является приказом на сделку;
   - trade ticket показывает только то, что нужно для ручной проверки: symbol, direction, strategy, entry, SL, TP, R/R, confidence;
   - чек‑лист допуска отделяет hard stop-факторы от предупреждений;
