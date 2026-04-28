@@ -1,3 +1,22 @@
+## Финальная red-team ревизия 2026-04-28
+
+Дополнительная инженерная проверка советующей СППР выявила и закрыла два класса production-safety риска:
+
+- DB-драйвер `psycopg2` больше не импортируется при загрузке модулей приложения. Он подгружается лениво только перед фактическим обращением к PostgreSQL. Это защищает frontend/API/import-time диагностику от полного зависания в поврежденной локальной среде с проблемным C-extension и не скрывает ошибку подключения: при реальном DB-запросе возвращается `DatabaseConnectionError` с маскированным паролем.
+- Витрины `/api/signals/latest` и `/api/research/rank` теперь дополнительно подавляют stale-рекомендации по времени фактической рыночной свечи `bar_time`, а не только по `created_at` записи сигнала. Сигналы без `bar_time`, по незакрытой или устаревшей свече не должны попадать оператору как торговые кандидаты.
+- Добавлен модуль `app.safety`: расчет freshness-статуса, возраста закрытой свечи, risk/reward и аннотация строк сигналов для API/UI.
+- Frontend использует серверный `data_status/fresh/signal_age_minutes`, если эти поля пришли из API, и показывает freshness в checklist и очереди кандидатов. При отсутствии новых полей остается fallback по `created_at`.
+- Добавлены regression-тесты на lazy DB import и подавление stale/no-bar-time рекомендаций в safety/API/research слоях.
+
+Проверки в контейнере:
+
+```bash
+node --check frontend/app.js
+python -S -m py_compile app/db.py app/safety.py app/api.py app/research.py tests/test_db_lazy_import.py tests/test_recommendation_freshness_api.py
+```
+
+Ограничение среды: обычный запуск `python` в контейнере зависает уже на global site initialization, а импорт `pytest` после этого также становится недетерминированным. Поэтому полный `pytest`-прогон в этой среде не был надежно завершен; синтаксическая проверка измененных Python-файлов выполнена через `python -S`, а JavaScript проверен через `node --check`.
+
 # Bybit ML/LLM Research Lab
 
 ## Red-team ревизия 2026-04-28

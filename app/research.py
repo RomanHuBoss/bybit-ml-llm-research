@@ -5,6 +5,7 @@ from typing import Any
 from .config import settings
 from .db import fetch_all
 from .mtf import apply_mtf_consensus
+from .safety import annotate_and_filter_fresh_signals
 
 
 def _unique_intervals(values: list[str] | tuple[str, ...]) -> list[str]:
@@ -50,6 +51,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
                    entry, stop_loss, take_profit, sentiment_score, rationale
             FROM signals
             WHERE category=%s AND interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
+              AND bar_time IS NOT NULL
             ORDER BY symbol, interval, strategy, direction, created_at DESC
         ), latest_backtests AS (
             SELECT DISTINCT ON (symbol, interval, strategy)
@@ -117,6 +119,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
             query_limit,
         ),
     )
+    rows = annotate_and_filter_fresh_signals(rows)
     if settings.mtf_consensus_enabled:
         rows = apply_mtf_consensus(
             rows,

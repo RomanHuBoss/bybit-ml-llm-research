@@ -12,6 +12,7 @@ from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .research import rank_candidates, rank_candidates_multi
+from .safety import annotate_and_filter_fresh_signals
 from .signal_background import signal_refresher
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
 from .validation import bounded_int, normalize_category, normalize_interval, normalize_intervals, normalize_symbol, normalize_symbols
@@ -371,6 +372,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
                        entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
                 FROM signals
                 WHERE interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
+                  AND bar_time IS NOT NULL
                 ORDER BY category, symbol, interval, strategy, direction, created_at DESC
             )
             SELECT id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
@@ -381,6 +383,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
             """,
             (context_intervals, settings.max_signal_age_hours, query_limit),
         )
+        rows = annotate_and_filter_fresh_signals(rows)
         rows = _apply_mtf_consensus(
             rows,
             entry_interval=settings.mtf_entry_interval,
@@ -397,11 +400,13 @@ def latest_signals(limit: int = 50, entry_only: bool = True) -> dict[str, Any]:
         SELECT id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit,
                atr, ml_probability, sentiment_score, rationale
         FROM signals
+        WHERE bar_time IS NOT NULL
         ORDER BY created_at DESC
         LIMIT %s
         """,
         (limit,),
     )
+    rows = annotate_and_filter_fresh_signals(rows)
     return {"ok": True, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
 

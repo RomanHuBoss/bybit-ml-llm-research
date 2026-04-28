@@ -9,27 +9,22 @@ from typing import TYPE_CHECKING, Any, Iterable
 if TYPE_CHECKING:
     import pandas as pd
 
-try:
-    import psycopg2
-    from psycopg2.extras import Json, RealDictCursor, execute_values
-except ModuleNotFoundError:  # pragma: no cover - используется только в средах без установленного PostgreSQL-драйвера.
-    psycopg2 = None  # type: ignore[assignment]
-
-    class Json:  # type: ignore[no-redef]
-        def __init__(self, value: Any) -> None:
-            self.value = value
-
-    RealDictCursor = None  # type: ignore[assignment]
-
-    def execute_values(*_args: Any, **_kwargs: Any) -> None:  # type: ignore[no-redef]
-        raise RuntimeError("psycopg2-binary is not installed; database writes are unavailable")
-
 from .config import settings
 from .serialization import to_jsonable
 
 
 class DatabaseConnectionError(RuntimeError):
     """Понятная ошибка подключения к PostgreSQL без утечки пароля из .env."""
+
+
+# psycopg2-binary может подвисать или падать уже на импорте в поврежденной локальной
+# среде. Поэтому драйвер подгружается лениво только перед реальным DB-доступом: API,
+# UI и unit-тесты без БД должны импортироваться детерминированно.
+psycopg2 = None  # type: ignore[assignment]
+Json = None  # type: ignore[assignment]
+RealDictCursor = None  # type: ignore[assignment]
+execute_values = None  # type: ignore[assignment]
+_psycopg2_import_error: Exception | None = None
 
 
 TRANSIENT_CONNECT_HINT = (
@@ -41,9 +36,42 @@ TRANSIENT_CONNECT_HINT = (
 )
 
 
+def _load_psycopg2() -> None:
+    """Лениво загружает psycopg2 и DB helpers.
+
+    Import-time зависимость на C-extension опасна для советующей СППР: при проблеме
+    локального драйвера не должен умирать даже статический frontend и health-screen.
+    DB-ошибка поднимается только в момент фактического обращения к PostgreSQL.
+    """
+    global psycopg2, Json, RealDictCursor, execute_values, _psycopg2_import_error
+    if psycopg2 is not None:
+        return
+    if _psycopg2_import_error is not None:
+        raise DatabaseConnectionError(
+            "psycopg2-binary не был загружен. Выполните `python install.py` "
+            "или `python -m pip install -r requirements.txt`. "
+            f"Детали импорта: {_psycopg2_import_error}"
+        ) from _psycopg2_import_error
+    try:
+        import psycopg2 as _psycopg2  # type: ignore[import-not-found]
+        from psycopg2.extras import Json as _Json, RealDictCursor as _RealDictCursor, execute_values as _execute_values
+    except Exception as exc:  # pragma: no cover - зависит от локальной установки драйвера.
+        _psycopg2_import_error = exc
+        raise DatabaseConnectionError(
+            "psycopg2-binary не установлен или не может быть загружен. "
+            "Выполните `python install.py` или `python -m pip install -r requirements.txt`. "
+            f"Детали импорта: {exc}"
+        ) from exc
+    psycopg2 = _psycopg2
+    Json = _Json
+    RealDictCursor = _RealDictCursor
+    execute_values = _execute_values
+
+
 def _adapt_value(value: Any) -> Any:
     if isinstance(value, dict) or isinstance(value, list):
-        return Json(value)
+        _load_psycopg2()
+        return Json(value)  # type: ignore[misc, operator]
     if hasattr(value, "item"):
         return value.item()
     return value
@@ -92,14 +120,10 @@ def _tcp_preflight() -> None:
 
 def connect_raw():
     """Создает raw-соединение PostgreSQL с диагностикой, пригодной для CLI и API."""
-    if psycopg2 is None:
-        raise DatabaseConnectionError(
-            "psycopg2-binary не установлен. Выполните `python install.py` "
-            "или `python -m pip install -r requirements.txt`."
-        )
+    _load_psycopg2()
     _tcp_preflight()
     try:
-        conn = psycopg2.connect(**_connect_kwargs())
+        conn = psycopg2.connect(**_connect_kwargs())  # type: ignore[union-attr]
         # Явно фиксируем клиентскую кодировку для чтения/записи данных после подключения.
         # Ошибки аутентификации происходят раньше, поэтому они дополнительно ловятся ниже.
         conn.set_client_encoding("UTF8")
@@ -133,13 +157,15 @@ def get_conn():
 
 
 def fetch_all(sql: str, params: tuple | dict | None = None) -> list[dict[str, Any]]:
-    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+    _load_psycopg2()
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:  # type: ignore[arg-type]
         cur.execute(sql, params)
         return [dict(row) for row in cur.fetchall()]
 
 
 def fetch_one(sql: str, params: tuple | dict | None = None) -> dict[str, Any] | None:
-    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+    _load_psycopg2()
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:  # type: ignore[arg-type]
         cur.execute(sql, params)
         row = cur.fetchone()
         return dict(row) if row else None
@@ -156,19 +182,20 @@ def _adapt_params(params: tuple | dict | None) -> tuple | dict | None:
 
 
 def execute(sql: str, params: tuple | dict | None = None) -> int:
+    _load_psycopg2()
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, _adapt_params(params))
         return cur.rowcount
 
 
 def execute_many_values(sql: str, rows: Iterable[tuple], page_size: int = 1000) -> int:
+    _load_psycopg2()
     rows = [tuple(_adapt_value(v) for v in row) for row in rows]
     if not rows:
         return 0
     with get_conn() as conn, conn.cursor() as cur:
-        execute_values(cur, sql, rows, page_size=page_size)
+        execute_values(cur, sql, rows, page_size=page_size)  # type: ignore[misc, operator]
         return cur.rowcount
-
 
 
 def execute_many_values_returning(sql: str, rows: Iterable[tuple], page_size: int = 1000) -> list[dict[str, Any]]:
@@ -178,11 +205,12 @@ def execute_many_values_returning(sql: str, rows: Iterable[tuple], page_size: in
     при параллельных backtest-запусках такой SELECT может забрать чужую последнюю запись.
     SQL обязан содержать RETURNING с именованными колонками.
     """
+    _load_psycopg2()
     rows = [tuple(_adapt_value(v) for v in row) for row in rows]
     if not rows:
         return []
-    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        returned = execute_values(cur, sql, rows, page_size=page_size, fetch=True)
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:  # type: ignore[arg-type]
+        returned = execute_values(cur, sql, rows, page_size=page_size, fetch=True)  # type: ignore[misc, operator]
         return [dict(row) for row in returned]
 
 

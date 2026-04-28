@@ -773,14 +773,22 @@ function baseChecklistFor(s) {
   const liquidityKnown = s.is_eligible !== null && s.is_eligible !== undefined;
   const eligible = bool(s.is_eligible);
   const maxAgeHours = num(state.status?.max_signal_age_hours, 24) || 24;
+  const serverFreshnessKnown = typeof s.fresh === 'boolean' || Boolean(s.data_status);
   const created = s.created_at ? new Date(s.created_at) : null;
-  const stale = !created || Number.isNaN(created.getTime()) || Date.now() - created.getTime() > maxAgeHours * 3600_000;
+  const createdStale = !created || Number.isNaN(created.getTime()) || Date.now() - created.getTime() > maxAgeHours * 3600_000;
+  const stale = serverFreshnessKnown ? s.fresh !== true : createdStale;
+  const freshnessTitle = stale
+    ? (s.data_status === 'no_bar_time' ? 'Нет времени рыночной свечи' : s.data_status === 'unclosed_bar' ? 'Свеча не закрыта' : 'Сигнал устарел')
+    : 'Сигнал свежий';
+  const freshnessText = serverFreshnessKnown
+    ? `Bar closed ${compactDateTime(s.bar_closed_at)}; age ${fmt(s.signal_age_minutes, 0)} мин. API freshness: ${escapeHtml(s.data_status || 'fresh')}.`
+    : `Создан ${ageText(s.created_at)}. Максимальный возраст: ${maxAgeHours} ч.`;
   const spreadStatus = !hasSpread ? 'warn' : spread <= 0.08 ? 'pass' : spread <= 0.15 ? 'warn' : 'fail';
   const liquidityStatus = !liquidityKnown ? 'warn' : eligible ? 'pass' : 'fail';
   const backtestStatus = backtestEvidenceStatus(s);
 
   return [
-    { key: 'freshness', status: stale ? 'fail' : 'pass', title: stale ? 'Сигнал устарел' : 'Сигнал свежий', text: `Создан ${ageText(s.created_at)}. Максимальный возраст: ${maxAgeHours} ч.` },
+    { key: 'freshness', status: stale ? 'fail' : 'pass', title: freshnessTitle, text: freshnessText },
     { key: 'direction', status: s.direction === 'long' || s.direction === 'short' ? 'pass' : 'fail', title: s.direction === 'long' || s.direction === 'short' ? 'Направление задано' : 'Нет направления сделки', text: `Направление: ${String(s.direction || 'flat').toUpperCase()}. Flat не является сделкой.` },
     { key: 'mtf', status: mtfSeverity(s), title: mtfSeverity(s) === 'pass' ? 'MTF согласован' : mtfSeverity(s) === 'warn' ? 'MTF неполный' : 'MTF запрещает вход', text: `${mtfLabel(s)}. ${s.mtf_reason || '15m — вход; 60m и 240m — фильтры, а не отдельные триггеры.'}` },
     { key: 'liquidity', status: liquidityStatus, title: liquidityStatus === 'pass' ? 'Ликвидность допущена' : liquidityStatus === 'warn' ? 'Ликвидность ожидает snapshot' : 'Ликвидность не допущена', text: `Liquidity score ${fmt(s.liquidity_score, 2)}, spread ${hasSpread ? pctRaw(spread, 4) : '—'}, turnover 24h ${fmt(s.turnover_24h, 1)} USDT.` },
@@ -1128,7 +1136,7 @@ function renderQueue() {
         <span class="candidate-star" aria-hidden="true">☆</span>
         <div class="candidate-copy">
           <span class="symbol">${escapeHtml(s.symbol)}</span>
-          <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)}</span>
+          <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)} · ${escapeHtml(s.data_status || 'fresh')}</span>
         </div>
         <span class="badge ${decisionLevel}">${label}</span>
         <span class="candidate-score">${s.decision.score}</span>
