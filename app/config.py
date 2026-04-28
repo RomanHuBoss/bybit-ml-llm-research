@@ -119,6 +119,10 @@ class Settings:
     cryptopanic_token: str = os.getenv("CRYPTOPANIC_TOKEN", os.getenv("CRYPTOPANIC_API_KEY", ""))
     sentiment_lookback_days: int = _int("SENTIMENT_LOOKBACK_DAYS", 7)
     sentiment_http_timeout_sec: float = _float("SENTIMENT_HTTP_TIMEOUT_SEC", 3.0)
+    gdelt_http_timeout_sec: float = _float("GDELT_HTTP_TIMEOUT_SEC", 6.0)
+    gdelt_circuit_breaker_failures: int = _int("GDELT_CIRCUIT_BREAKER_FAILURES", 2)
+    gdelt_failure_cooldown_sec: int = _int("GDELT_FAILURE_COOLDOWN_SEC", 300)
+    gdelt_max_records: int = _int("GDELT_MAX_RECORDS", 50)
     sentiment_sync_budget_sec: int = _int("SENTIMENT_SYNC_BUDGET_SEC", 150)
     rss_urls: tuple[str, ...] = _csv("RSS_URLS", RSS_URLS_DEFAULT)
 
@@ -193,6 +197,16 @@ def _validate_settings(s: Settings) -> None:
         problems.append("MAX_LEVERAGE должен быть > 0")
     if s.max_position_notional_usdt <= 0:
         problems.append("MAX_POSITION_NOTIONAL_USDT должен быть > 0")
+    if s.sentiment_http_timeout_sec <= 0:
+        problems.append("SENTIMENT_HTTP_TIMEOUT_SEC должен быть > 0")
+    if s.gdelt_http_timeout_sec <= 0:
+        problems.append("GDELT_HTTP_TIMEOUT_SEC должен быть > 0")
+    if not (1 <= s.gdelt_circuit_breaker_failures <= 20):
+        problems.append("GDELT_CIRCUIT_BREAKER_FAILURES должен быть в диапазоне [1; 20]")
+    if not (10 <= s.gdelt_failure_cooldown_sec <= 3600):
+        problems.append("GDELT_FAILURE_COOLDOWN_SEC должен быть в диапазоне [10; 3600]")
+    if not (1 <= s.gdelt_max_records <= 250):
+        problems.append("GDELT_MAX_RECORDS должен быть в диапазоне [1; 250]")
     if s.llm_auto_eval_interval_sec < 30:
         problems.append("LLM_AUTO_EVAL_INTERVAL_SEC должен быть >= 30")
     if s.llm_auto_eval_startup_delay_sec < 0:

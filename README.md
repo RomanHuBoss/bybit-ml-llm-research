@@ -159,6 +159,24 @@ Market-derived sentiment: funding + OI + trend + volume
 Local LLM через Ollama
 ```
 
+GDELT является best-effort источником и не считается hard dependency торгового цикла.
+Для него добавлен отдельный timeout и circuit breaker: после серии таймаутов источник
+временно пропускается для всех следующих символов, чтобы один нестабильный внешний
+endpoint не блокировал `signal-auto-refresher` и не засорял журнал однотипными warning.
+
+```env
+USE_GDELT=true
+GDELT_HTTP_TIMEOUT_SEC=6
+GDELT_CIRCUIT_BREAKER_FAILURES=2
+GDELT_FAILURE_COOLDOWN_SEC=300
+GDELT_MAX_RECORDS=50
+```
+
+Если GDELT стабильно недоступен из вашей сети, безопасный режим — оставить
+`USE_RSS=true` и `USE_MARKET_SENTIMENT=true`, но временно поставить `USE_GDELT=false`.
+Торговые рекомендации при этом продолжают строиться на market data, MTF, risk/veto и
+рыночном micro-sentiment; news-sentiment просто становится менее полным.
+
 CryptoPanic оставлен как optional plugin:
 
 ```env

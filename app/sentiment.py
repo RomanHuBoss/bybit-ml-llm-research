@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -32,6 +33,60 @@ from .llm import classify_news_with_llm
 
 logger = logging.getLogger(__name__)
 _analyzer = SentimentIntensityAnalyzer()
+
+_GDELT_LOCK = threading.Lock()
+_GDELT_CONSECUTIVE_FAILURES = 0
+_GDELT_DISABLED_UNTIL = 0.0
+
+
+def _gdelt_circuit_status(now: float | None = None) -> dict[str, Any]:
+    """Возвращает состояние circuit breaker для GDELT.
+
+    GDELT — внешний бесплатный источник новостей, поэтому он не должен быть
+    hard dependency для торгового цикла. При серии таймаутов временно
+    пропускаем этот источник, чтобы не блокировать sentiment sync по каждому
+    символу и не засорять журнал однотипными ошибками.
+    """
+    moment = time.monotonic() if now is None else now
+    with _GDELT_LOCK:
+        return {
+            "enabled": moment >= _GDELT_DISABLED_UNTIL,
+            "disabled_until": _GDELT_DISABLED_UNTIL,
+            "cooldown_remaining_sec": max(0.0, _GDELT_DISABLED_UNTIL - moment),
+            "consecutive_failures": _GDELT_CONSECUTIVE_FAILURES,
+        }
+
+
+def _record_gdelt_success() -> None:
+    global _GDELT_CONSECUTIVE_FAILURES, _GDELT_DISABLED_UNTIL
+    with _GDELT_LOCK:
+        _GDELT_CONSECUTIVE_FAILURES = 0
+        _GDELT_DISABLED_UNTIL = 0.0
+
+
+def _record_gdelt_failure(symbol: str, exc: Exception) -> None:
+    global _GDELT_CONSECUTIVE_FAILURES, _GDELT_DISABLED_UNTIL
+    with _GDELT_LOCK:
+        _GDELT_CONSECUTIVE_FAILURES += 1
+        threshold = max(1, int(settings.gdelt_circuit_breaker_failures))
+        if _GDELT_CONSECUTIVE_FAILURES >= threshold:
+            cooldown = max(10, int(settings.gdelt_failure_cooldown_sec))
+            _GDELT_DISABLED_UNTIL = time.monotonic() + cooldown
+            logger.warning(
+                "GDELT temporarily disabled for %ss after %s consecutive failures; last symbol=%s; error=%s",
+                cooldown,
+                _GDELT_CONSECUTIVE_FAILURES,
+                symbol,
+                exc,
+            )
+        else:
+            logger.warning(
+                "GDELT sync failed for %s (%s/%s before cooldown): %s",
+                symbol,
+                _GDELT_CONSECUTIVE_FAILURES,
+                threshold,
+                exc,
+            )
 
 
 SYMBOL_ALIASES: dict[str, str] = {
@@ -165,17 +220,26 @@ def sync_fear_greed(limit: int = 30) -> int:
     )
 
 
-def fetch_gdelt_news(symbol: str, days: int = 2, maxrecords: int = 75) -> list[dict[str, Any]]:
+def fetch_gdelt_news(symbol: str, days: int = 2, maxrecords: int | None = None) -> list[dict[str, Any]]:
     if not settings.use_gdelt:
         return []
+
+    circuit = _gdelt_circuit_status()
+    if not circuit["enabled"]:
+        # Не логируем каждый символ внутри cooldown: иначе один недоступный GDELT
+        # превращается в шум в журнале и маскирует реальные trading/core ошибки.
+        return []
+
+    limit = max(1, min(int(maxrecords or settings.gdelt_max_records), int(settings.gdelt_max_records)))
     query = quote_plus(f"({_symbol_query(symbol)}) crypto market")
     timespan = f"{max(1, days)}d"
-    url = f"https://api.gdeltproject.org/api/v2/doc/doc?query={query}&mode=artlist&format=json&maxrecords={maxrecords}&timespan={timespan}"
+    url = f"https://api.gdeltproject.org/api/v2/doc/doc?query={query}&mode=artlist&format=json&maxrecords={limit}&timespan={timespan}"
     try:
-        payload = _safe_get_json(url)
+        payload = _safe_get_json(url, timeout=settings.gdelt_http_timeout_sec)
+        _record_gdelt_success()
         return payload.get("articles", [])
     except Exception as exc:
-        logger.warning("GDELT sync failed for %s: %s", symbol, exc)
+        _record_gdelt_failure(symbol, exc)
         return []
 
 
@@ -408,12 +472,16 @@ def sync_sentiment_bundle_multi(
         "intervals": normalized_intervals,
         "cryptopanic_enabled": bool(settings.use_cryptopanic and settings.cryptopanic_token),
         "budget_sec": int(settings.sentiment_sync_budget_sec),
+        "gdelt_circuit": _gdelt_circuit_status(),
         "skipped": skipped,
     }
     for symbol in symbols:
         gdelt = 0
         cp = 0
-        if _has_sentiment_budget(deadline):
+        gdelt_status = _gdelt_circuit_status()
+        if not gdelt_status["enabled"]:
+            skipped.append(f"{symbol}:gdelt_cooldown")
+        elif _has_sentiment_budget(deadline):
             gdelt = sync_gdelt_news(symbol, days=min(max(days, 1), 7), use_llm=use_llm)
         else:
             skipped.append(f"{symbol}:gdelt")
@@ -436,6 +504,7 @@ def sync_sentiment_bundle_multi(
             "market_microstructure_by_interval": market_by_interval,
         }
     result["skipped"] = skipped
+    result["gdelt_circuit"] = _gdelt_circuit_status()
     return result
 
 def sentiment_summary(symbol: str = "BTCUSDT", limit: int = 20) -> dict[str, Any]:
