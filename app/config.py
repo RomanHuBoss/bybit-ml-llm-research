@@ -87,6 +87,14 @@ class Settings:
     bybit_timeout_sec: float = _float("BYBIT_TIMEOUT_SEC", 30.0)
     bybit_max_retries: int = _int("BYBIT_MAX_RETRIES", 4)
     bybit_retry_backoff_sec: float = _float("BYBIT_RETRY_BACKOFF_SEC", 0.75)
+    bybit_max_concurrent_requests: int = _int("BYBIT_MAX_CONCURRENT_REQUESTS", 4)
+
+    # Управляемый параллелизм для тяжелых фоновых операций. Значения намеренно
+    # небольшие: проект работает с внешним API и PostgreSQL, поэтому безопаснее
+    # ускоряться ограниченными пачками, а не создавать десятки одновременных задач.
+    market_sync_workers: int = _int("MARKET_SYNC_WORKERS", 4)
+    signal_build_workers: int = _int("SIGNAL_BUILD_WORKERS", 2)
+    backtest_auto_workers: int = _int("BACKTEST_AUTO_WORKERS", 2)
 
     default_category: str = os.getenv("DEFAULT_CATEGORY", "linear")
     default_symbols: tuple[str, ...] = tuple(s.upper() for s in _csv("DEFAULT_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT"))
@@ -230,6 +238,14 @@ def _validate_settings(s: Settings) -> None:
         problems.append("UNIVERSE_LIMIT и DYNAMIC_SYMBOL_LIMIT должны быть > 0")
     if s.bybit_max_retries < 0:
         problems.append("BYBIT_MAX_RETRIES не может быть отрицательным")
+    if not (1 <= s.bybit_max_concurrent_requests <= 16):
+        problems.append("BYBIT_MAX_CONCURRENT_REQUESTS должен быть в диапазоне [1; 16]")
+    if not (1 <= s.market_sync_workers <= 16):
+        problems.append("MARKET_SYNC_WORKERS должен быть в диапазоне [1; 16]")
+    if not (1 <= s.signal_build_workers <= 8):
+        problems.append("SIGNAL_BUILD_WORKERS должен быть в диапазоне [1; 8]")
+    if not (1 <= s.backtest_auto_workers <= 4):
+        problems.append("BACKTEST_AUTO_WORKERS должен быть в диапазоне [1; 4]")
     if problems:
         raise ValueError("Некорректная конфигурация: " + "; ".join(problems))
 

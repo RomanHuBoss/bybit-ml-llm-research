@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,9 @@ from .config import settings
 from .db import execute_many_values
 
 logger = logging.getLogger(__name__)
+
+
+_BYBIT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(max(1, int(settings.bybit_max_concurrent_requests)))
 
 
 class BybitAPIError(RuntimeError):
@@ -67,12 +71,16 @@ class BybitClient:
         for attempt in range(settings.bybit_max_retries + 1):
             transient = False
             try:
-                response = requests.get(
-                    url,
-                    params=params,
-                    timeout=settings.bybit_timeout_sec,
-                    headers={"User-Agent": "bybit-ml-llm-research-lab/2.1"},
-                )
+                # Даже при параллельной загрузке истории держим общий лимит
+                # одновременных HTTP-запросов к Bybit. Иначе ускорение легко
+                # превращается в retCode=10006/10429 и каскад retry.
+                with _BYBIT_REQUEST_SEMAPHORE:
+                    response = requests.get(
+                        url,
+                        params=params,
+                        timeout=settings.bybit_timeout_sec,
+                        headers={"User-Agent": "bybit-ml-llm-research-lab/2.1"},
+                    )
                 if response.status_code in TRANSIENT_HTTP_STATUSES:
                     transient = True
                     raise BybitAPIError(

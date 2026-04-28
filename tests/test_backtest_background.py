@@ -45,11 +45,14 @@ def test_candidates_needing_backtest_uses_staleness_query(monkeypatch):
     assert captured["params"][2] == "15"
 
 
-def test_backtest_background_run_once_runs_candidates_sequentially(monkeypatch):
+def test_backtest_background_run_once_runs_candidates_with_bounded_workers(monkeypatch):
+    from dataclasses import replace
+
     import app.backtest_background as bg
 
     runner = bg.BacktestBackgroundRunner()
     calls = []
+    monkeypatch.setattr(bg, "settings", replace(bg.settings, backtest_auto_workers=1))
 
     monkeypatch.setattr(
         bg,
@@ -74,5 +77,6 @@ def test_backtest_background_run_once_runs_candidates_sequentially(monkeypatch):
     assert result["queued"] == 2
     assert result["backtested"] == 1
     assert result["failed"] == 1
+    assert result["workers"] == 1
     assert result["items"][0]["run_id"] == 101
     assert result["items"][1]["status"] == "error"

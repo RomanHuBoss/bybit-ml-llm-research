@@ -433,7 +433,8 @@ GET  /api/news/latest
 - Core symbols больше не обходят фильтры ликвидности молча. Для ручного override нужен явный флаг `ALLOW_UNVERIFIED_CORE_SYMBOLS=true`.
 - PreLaunch-инструменты Bybit исключаются из universe.
 - Funding и open interest синхронизируются chunk/page-подходом, чтобы не терять историю из-за лимита API.
-- Bybit REST client получил retry/backoff для transient HTTP/status/retCode ошибок и явную обработку не-JSON ответов.
+- История и тяжелые фоновые операции теперь ускоряются ограниченным parallel worker-пулом: MTF market-sync параллелит независимые interval-задачи, funding не повторяется на каждый таймфрейм, signal-build и auto-backtest выполняются ограниченными пачками.
+- Bybit REST client получил retry/backoff для transient HTTP/status/retCode ошибок, явную обработку не-JSON ответов и общий semaphore `BYBIT_MAX_CONCURRENT_REQUESTS`, чтобы параллельная загрузка не пробивала rate limits.
 - Сигналы дедуплицируются по `category + symbol + interval + strategy + direction + bar_time`, чтобы повторный `Build signals` не создавал серию одинаковых рекомендаций.
 - ML target больше не маркирует последние `horizon_bars` строк как отрицательный класс, если будущая доходность ещё неизвестна.
 - Research ranking использует только свежие сигналы (`MAX_SIGNAL_AGE_HOURS`) и штрафует сигналы без ликвидности/с малым числом сделок в бэктесте.
@@ -445,6 +446,10 @@ POSTGRES_CONNECT_TIMEOUT_SEC=5
 BYBIT_TIMEOUT_SEC=30
 BYBIT_MAX_RETRIES=4
 BYBIT_RETRY_BACKOFF_SEC=0.75
+BYBIT_MAX_CONCURRENT_REQUESTS=4
+MARKET_SYNC_WORKERS=4
+SIGNAL_BUILD_WORKERS=2
+BACKTEST_AUTO_WORKERS=2
 ALLOW_UNVERIFIED_CORE_SYMBOLS=false
 MAX_POSITION_NOTIONAL_USDT=1000
 MAX_LEVERAGE=2
@@ -624,7 +629,7 @@ liquidity universe -> market sync по TF -> sentiment sync по TF -> build/per
 - сервис не отправляет ордера, не создает grid-ботов и не меняет биржевой аккаунт;
 - universe берется из актуального liquidity-среза Bybit, затем ограничивается `SIGNAL_AUTO_MAX_SYMBOLS`;
 - `SIGNAL_AUTO_INTERVALS` задает независимые Bybit-таймфреймы, по умолчанию `15,60,240` = 15m/1h/4h;
-- свечи/funding/OI догружаются по каждому таймфрейму окном `SIGNAL_AUTO_SYNC_DAYS`;
+- свечи/funding/OI догружаются окном `SIGNAL_AUTO_SYNC_DAYS`; в MTF-режиме funding синхронизируется один раз на symbol, а candles/OI параллелятся по независимым interval-задачам;
 - cold start по умолчанию грузит 30 дней, чтобы 1h/4h контуры имели запас больше минимальных 250 баров;
 - сигналы строятся только по закрытым свечам и проходят `validate_signal()` перед сохранением;
 - если появились новые/обновленные сигналы, автоматически будятся фоновый backtest и LLM-разбор;
@@ -642,7 +647,12 @@ SIGNAL_AUTO_SYNC_DAYS=30
 SIGNAL_AUTO_INTERVALS=15,60,240
 SIGNAL_AUTO_REFRESH_UNIVERSE=true
 SIGNAL_AUTO_SYNC_SENTIMENT=true
+MARKET_SYNC_WORKERS=4
+SIGNAL_BUILD_WORKERS=2
+BYBIT_MAX_CONCURRENT_REQUESTS=4
 ```
+
+`MARKET_SYNC_WORKERS` ускоряет независимые symbol/interval задачи, но не снимает общий лимит Bybit-запросов: фактическая HTTP-конкурентность ограничивается `BYBIT_MAX_CONCURRENT_REQUESTS`. Для слабой БД или частых `retCode=10006/10429` снижайте оба значения до `1-2`.
 
 Проверка и ручной внеочередной запуск:
 
@@ -694,14 +704,14 @@ MTF_REGIME_INTERVAL=240
 Backtest теперь работает не только по ручной кнопке. При запуске FastAPI стартует фоновый сервис `backtest-auto-runner`, который периодически ищет свежие рекомендации без актуального backtest по паре `category + interval + symbol + strategy` и пересчитывает их ограниченной очередью:
 
 ```text
-latest signals -> stale/missing backtest filter -> sequential backtest -> PostgreSQL backtest_runs/backtest_trades -> research ranking/UI
+latest signals -> stale/missing backtest filter -> bounded parallel backtest -> PostgreSQL backtest_runs/backtest_trades -> research ranking/UI
 ```
 
 Поведение:
 
 - сервис не отправляет ордера и не меняет сами рекомендации;
 - пересчитываются только свежие signal-кандидаты, у которых backtest отсутствует, старее сигнала или старее `BACKTEST_AUTO_TTL_HOURS`;
-- тяжелая работа ограничена `BACKTEST_AUTO_MAX_CANDIDATES` за цикл и `BACKTEST_AUTO_LIMIT` свечами на один прогон;
+- тяжелая работа ограничена `BACKTEST_AUTO_MAX_CANDIDATES` за цикл, `BACKTEST_AUTO_LIMIT` свечами на один прогон и `BACKTEST_AUTO_WORKERS` одновременными расчетами;
 - циклы защищены lock'ом: ручной `run-now` и плановый цикл не выполняются параллельно;
 - после `POST /api/signals/build`, если появились новые сигналы, фоновый backtest будится автоматически;
 - ручная кнопка `Авто-бэктест сейчас` только ставит запрос на ближайший фоновый цикл, а не блокирует UI тяжелым расчетом.
@@ -715,6 +725,7 @@ BACKTEST_AUTO_STARTUP_DELAY_SEC=45
 BACKTEST_AUTO_MAX_CANDIDATES=8
 BACKTEST_AUTO_LIMIT=5000
 BACKTEST_AUTO_TTL_HOURS=24
+BACKTEST_AUTO_WORKERS=2
 ```
 
 Проверка состояния:

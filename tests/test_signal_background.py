@@ -24,12 +24,20 @@ def test_signal_background_run_once_full_pipeline(monkeypatch):
     runner = sb.SignalAutoRefresher()
     calls: list[tuple] = []
 
-    monkeypatch.setattr(sb, "settings", replace(sb.settings, signal_auto_intervals=("60", "240")))
+    monkeypatch.setattr(sb, "settings", replace(sb.settings, signal_auto_intervals=("60", "240"), market_sync_workers=1, signal_build_workers=1))
     monkeypatch.setattr(sb, "select_auto_symbols", lambda category: (["BTCUSDT", "ETHUSDT"], "unit"))
 
-    def fake_sync_market(category, symbol, interval, days):
-        calls.append(("market", category, symbol, interval, days))
-        return {"candles": 10, "funding_rates": 2, "open_interest": 2}
+    def fake_sync_funding(category, symbol, days):
+        calls.append(("funding", category, symbol, days))
+        return 2
+
+    def fake_sync_candles(category, symbol, interval, days):
+        calls.append(("candles", category, symbol, interval, days))
+        return 10
+
+    def fake_sync_open_interest(category, symbol, interval, days):
+        calls.append(("open_interest", category, symbol, interval, days))
+        return 2
 
     def fake_sync_sentiment(symbols, days, intervals, use_llm, category):
         calls.append(("sentiment", tuple(symbols), days, tuple(intervals), use_llm, category))
@@ -46,7 +54,9 @@ def test_signal_background_run_once_full_pipeline(monkeypatch):
     backtest_requests = []
     llm_requests = []
 
-    monkeypatch.setattr(sb, "sync_market_bundle", fake_sync_market)
+    monkeypatch.setattr(sb, "sync_funding", fake_sync_funding)
+    monkeypatch.setattr(sb, "sync_candles", fake_sync_candles)
+    monkeypatch.setattr(sb, "sync_open_interest", fake_sync_open_interest)
     monkeypatch.setattr(sb, "sync_sentiment_bundle_multi", fake_sync_sentiment)
     monkeypatch.setattr(sb, "build_latest_signals", fake_build)
     monkeypatch.setattr(sb, "persist_signals", fake_persist)
@@ -65,10 +75,12 @@ def test_signal_background_run_once_full_pipeline(monkeypatch):
     assert backtest_requests == [True]
     assert llm_requests == [True]
     call_names = [c[0] for c in calls]
-    assert call_names[:4] == ["market", "market", "market", "market"]
-    assert call_names.index("sentiment") > call_names.index("market")
+    assert call_names.count("funding") == 2
+    assert call_names.count("candles") == 4
+    assert call_names.count("open_interest") == 4
+    assert call_names.index("sentiment") > call_names.index("candles")
     assert call_names.count("persist") == 4
-    assert {c[3] for c in calls if c[0] == "market"} == {"60", "240"}
+    assert {c[3] for c in calls if c[0] == "candles"} == {"60", "240"}
 
 
 def test_select_auto_symbols_falls_back_to_defaults(monkeypatch):

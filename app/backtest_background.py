@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
+from .concurrency import bounded_worker_count
 from .config import settings
 from .db import fetch_all, fetch_one
 
@@ -44,6 +46,7 @@ class BacktestBackgroundRunner:
             "backtested": 0,
             "skipped": 0,
             "failed": 0,
+            "workers": 0,
             "items": [],
         }
 
@@ -85,6 +88,7 @@ class BacktestBackgroundRunner:
                 "ttl_hours": settings.backtest_auto_ttl_hours,
                 "max_candidates": settings.backtest_auto_max_candidates,
                 "limit": settings.backtest_auto_limit,
+                "workers": settings.backtest_auto_workers,
                 "last_error": self._last_error,
                 "last_started_at": self._last_started_at,
                 "last_finished_at": self._last_finished_at,
@@ -125,10 +129,10 @@ class BacktestBackgroundRunner:
         if not self._run_lock.acquire(blocking=False):
             # Backtest может быть тяжелым: перекрытие циклов недопустимо, иначе один и тот же
             # symbol+strategy будет конкурировать сам с собой за CPU/БД и портить наблюдаемость.
-            return {"queued": 0, "backtested": 0, "skipped": 1, "failed": 0, "reason": "already_running", "items": []}
+            return {"queued": 0, "backtested": 0, "skipped": 1, "failed": 0, "workers": 0, "reason": "already_running", "items": []}
 
         started = _now()
-        summary: dict[str, Any] = {"queued": 0, "backtested": 0, "skipped": 0, "failed": 0, "items": []}
+        summary: dict[str, Any] = {"queued": 0, "backtested": 0, "skipped": 0, "failed": 0, "workers": 0, "items": []}
         try:
             with self._condition:
                 self._running = True
@@ -138,7 +142,10 @@ class BacktestBackgroundRunner:
 
             candidates = candidates_needing_backtest(limit=settings.backtest_auto_max_candidates)
             summary["queued"] = len(candidates)
-            for candidate in candidates:
+            workers = bounded_worker_count(settings.backtest_auto_workers, len(candidates), default=1, hard_limit=4)
+            summary["workers"] = workers
+
+            def run_candidate(idx: int, candidate: dict[str, Any]) -> tuple[int, dict[str, Any]]:
                 item = {
                     "category": candidate.get("category"),
                     "symbol": candidate.get("symbol"),
@@ -155,12 +162,24 @@ class BacktestBackgroundRunner:
                         limit=settings.backtest_auto_limit,
                     )
                     item.update({"status": "ok", "run_id": result.get("run_id"), "trades_count": result.get("trades_count")})
-                    summary["backtested"] += 1
                 except Exception as exc:  # один плохой инструмент не должен останавливать весь цикл
                     message = str(exc)
                     item.update({"status": "error", "error": message[:500]})
-                    summary["failed"] += 1
                     logger.warning("background backtest failed for %s: %s", item, message)
+                return idx, item
+
+            if workers <= 1:
+                completed = [run_candidate(idx, candidate) for idx, candidate in enumerate(candidates)]
+            else:
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="backtest-auto") as pool:
+                    futures = [pool.submit(run_candidate, idx, candidate) for idx, candidate in enumerate(candidates)]
+                    completed = [future.result() for future in as_completed(futures)]
+
+            for _, item in sorted(completed, key=lambda pair: pair[0]):
+                if item.get("status") == "ok":
+                    summary["backtested"] += 1
+                else:
+                    summary["failed"] += 1
                 summary["items"].append(item)
         except Exception as exc:
             with self._condition:

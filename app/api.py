@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -7,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from .backtest_background import background_backtester, backtest_background_summary
 from .bybit_client import sync_candles, sync_funding, sync_market_bundle, sync_open_interest
+from .concurrency import bounded_worker_count
 from .config import settings
 from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
@@ -146,17 +148,32 @@ def _bad_request(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
+def _sync_market_interval(category: str, symbol: str, interval: str, days: int, funding_rows: int) -> tuple[str, dict[str, int]]:
+    # Funding не зависит от таймфрейма и уже синхронизирован один раз на symbol.
+    # Остальные операции независимы по interval и безопасны для ограниченного ThreadPool:
+    # каждая запись идет в свою DB-транзакцию, а HTTP-запросы дополнительно ограничены
+    # глобальным Bybit semaphore в клиенте.
+    return interval, {
+        "candles": sync_candles(category, symbol, interval, days),
+        "funding_rates": funding_rows,
+        "open_interest": sync_open_interest(category, symbol, interval, days),
+    }
+
+
 def _sync_market_bundle_multi(category: str, symbol: str, intervals: list[str], days: int) -> dict[str, dict[str, int]]:
     """Sync multi-timeframe market data without repeating interval-independent funding calls."""
     funding_rows = sync_funding(category, symbol, days)
-    return {
-        interval: {
-            "candles": sync_candles(category, symbol, interval, days),
-            "funding_rates": funding_rows,
-            "open_interest": sync_open_interest(category, symbol, interval, days),
-        }
-        for interval in intervals
-    }
+    workers = bounded_worker_count(settings.market_sync_workers, len(intervals), default=1, hard_limit=8)
+    if workers <= 1:
+        return dict(_sync_market_interval(category, symbol, interval, days, funding_rows) for interval in intervals)
+
+    result: dict[str, dict[str, int]] = {}
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="market-sync-api") as pool:
+        futures = [pool.submit(_sync_market_interval, category, symbol, interval, days, funding_rows) for interval in intervals]
+        for future in as_completed(futures):
+            interval, payload = future.result()
+            result[interval] = payload
+    return {interval: result[interval] for interval in intervals if interval in result}
 
 
 @router.get("/status")
@@ -183,6 +200,7 @@ def status() -> dict[str, Any]:
             "interval_sec": settings.backtest_auto_interval_sec,
             "max_candidates": settings.backtest_auto_max_candidates,
             "ttl_hours": settings.backtest_auto_ttl_hours,
+            "workers": settings.backtest_auto_workers,
         },
         "mtf_consensus": {
             "enabled": settings.mtf_consensus_enabled,
@@ -197,6 +215,8 @@ def status() -> dict[str, Any]:
             "sync_days": settings.signal_auto_sync_days,
             "intervals": settings.signal_auto_intervals,
             "sync_sentiment": settings.signal_auto_sync_sentiment,
+            "market_sync_workers": settings.market_sync_workers,
+            "signal_build_workers": settings.signal_build_workers,
         },
         "sentiment_sources": {
             "fear_greed": settings.use_fear_greed,

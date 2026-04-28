@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
 from .backtest_background import background_backtester
-from .bybit_client import sync_market_bundle
+from .bybit_client import sync_candles, sync_funding, sync_market_bundle, sync_open_interest
+from .concurrency import bounded_worker_count
 from .config import settings
 from .llm_background import background_evaluator
 from .symbols import build_universe, latest_universe
@@ -100,6 +102,8 @@ class SignalAutoRefresher:
                 "intervals": settings.signal_auto_intervals,
                 "refresh_universe": settings.signal_auto_refresh_universe,
                 "sync_sentiment": settings.signal_auto_sync_sentiment,
+                "market_sync_workers": settings.market_sync_workers,
+                "signal_build_workers": settings.signal_build_workers,
                 "last_error": self._last_error,
                 "last_started_at": self._last_started_at,
                 "last_finished_at": self._last_finished_at,
@@ -165,6 +169,7 @@ class SignalAutoRefresher:
                 return summary
 
             items_by_symbol: dict[str, dict[str, Any]] = {}
+            market_jobs: list[tuple[str, str]] = []
             for symbol in symbols:
                 item: dict[str, Any] = {"symbol": symbol, "status": "pending", "intervals": {}}
                 items_by_symbol[symbol] = item
@@ -172,17 +177,75 @@ class SignalAutoRefresher:
                 for interval in intervals:
                     interval_item: dict[str, Any] = {"interval": interval, "status": "pending", "market_ok": False}
                     item["intervals"][interval] = interval_item
-                    try:
-                        interval_item["market"] = sync_market_bundle(category, symbol, interval, settings.signal_auto_sync_days)
-                        interval_item["market_ok"] = True
-                        summary["market_synced"] += 1
-                    except Exception as exc:
-                        # Нельзя строить новую рекомендацию поверх неудачной синхронизации свечей:
-                        # это создает иллюзию свежего сигнала на старом/частичном рынке.
-                        message = str(exc)
-                        interval_item.update({"status": "market_error", "error": message[:500]})
-                        summary["failed"] += 1
-                        logger.warning("background market sync failed for %s %s: %s", symbol, interval, message)
+                    market_jobs.append((symbol, interval))
+
+            def run_funding_job(symbol: str) -> tuple[str, int | None, str | None]:
+                try:
+                    return symbol, sync_funding(category, symbol, settings.signal_auto_sync_days), None
+                except Exception as exc:
+                    return symbol, None, str(exc)
+
+            # Funding не зависит от таймфрейма: при MTF-режиме его нельзя дергать
+            # по одному разу на каждый interval. Сначала синхронизируем funding один
+            # раз на symbol, затем параллелим только candles/open-interest по interval.
+            market_workers = bounded_worker_count(settings.market_sync_workers, max(len(symbols), len(market_jobs)), default=1, hard_limit=8)
+            summary["market_workers"] = market_workers
+            if len(intervals) == 1:
+                funding_by_symbol: dict[str, int] = {}
+                funding_errors: dict[str, str] = {}
+            elif market_workers <= 1:
+                funding_results = [run_funding_job(symbol) for symbol in symbols]
+                funding_by_symbol = {symbol: int(rows or 0) for symbol, rows, error in funding_results if error is None}
+                funding_errors = {symbol: str(error) for symbol, _rows, error in funding_results if error is not None}
+            else:
+                with ThreadPoolExecutor(max_workers=min(market_workers, len(symbols)), thread_name_prefix="signal-funding-sync") as pool:
+                    funding_results = [future.result() for future in as_completed([pool.submit(run_funding_job, symbol) for symbol in symbols])]
+                funding_by_symbol = {symbol: int(rows or 0) for symbol, rows, error in funding_results if error is None}
+                funding_errors = {symbol: str(error) for symbol, _rows, error in funding_results if error is not None}
+
+            for symbol, error in funding_errors.items():
+                for interval in intervals:
+                    interval_item = items_by_symbol[symbol]["intervals"][interval]
+                    interval_item.update({"status": "market_error", "error": error[:500]})
+                    summary["failed"] += 1
+                    logger.warning("background funding sync failed for %s: %s", symbol, error)
+
+            def run_market_job(job: tuple[str, str]) -> tuple[str, str, dict[str, int] | None, str | None]:
+                symbol, interval = job
+                try:
+                    if len(intervals) == 1:
+                        return symbol, interval, sync_market_bundle(category, symbol, interval, settings.signal_auto_sync_days), None
+                    funding_rows = funding_by_symbol.get(symbol)
+                    if funding_rows is None:
+                        return symbol, interval, None, funding_errors.get(symbol, "funding_sync_failed")
+                    return symbol, interval, {
+                        "candles": sync_candles(category, symbol, interval, settings.signal_auto_sync_days),
+                        "funding_rates": funding_rows,
+                        "open_interest": sync_open_interest(category, symbol, interval, settings.signal_auto_sync_days),
+                    }, None
+                except Exception as exc:  # один инструмент/таймфрейм не должен останавливать весь цикл
+                    return symbol, interval, None, str(exc)
+
+            effective_market_jobs = [(symbol, interval) for symbol, interval in market_jobs if not funding_errors.get(symbol)]
+            if market_workers <= 1:
+                market_results = [run_market_job(job) for job in effective_market_jobs]
+            else:
+                with ThreadPoolExecutor(max_workers=market_workers, thread_name_prefix="signal-market-sync") as pool:
+                    futures = [pool.submit(run_market_job, job) for job in effective_market_jobs]
+                    market_results = [future.result() for future in as_completed(futures)]
+
+            for symbol, interval, payload, error in market_results:
+                interval_item = items_by_symbol[symbol]["intervals"][interval]
+                if error is None:
+                    interval_item["market"] = payload or {}
+                    interval_item["market_ok"] = True
+                    summary["market_synced"] += 1
+                else:
+                    # Нельзя строить новую рекомендацию поверх неудачной синхронизации свечей:
+                    # это создает иллюзию свежего сигнала на старом/частичном рынке.
+                    interval_item.update({"status": "market_error", "error": error[:500]})
+                    summary["failed"] += 1
+                    logger.warning("background market sync failed for %s %s: %s", symbol, interval, error)
 
             if settings.signal_auto_sync_sentiment:
                 try:
@@ -196,23 +259,45 @@ class SignalAutoRefresher:
                     summary["warnings"].append({"stage": "sentiment", "error": message[:500]})
                     logger.warning("background sentiment sync failed: %s", message)
 
+            signal_jobs = [
+                (symbol, interval)
+                for symbol, item in items_by_symbol.items()
+                for interval, interval_item in item["intervals"].items()
+                if interval_item.get("market_ok")
+            ]
+
+            def run_signal_job(job: tuple[str, str]) -> tuple[str, str, int, int, str | None]:
+                symbol, interval = job
+                try:
+                    signals = build_latest_signals(category, symbol, interval)
+                    upserted = int(persist_signals(category, symbol, interval, signals) or 0)
+                    return symbol, interval, len(signals), upserted, None
+                except Exception as exc:
+                    return symbol, interval, 0, 0, str(exc)
+
+            signal_workers = bounded_worker_count(settings.signal_build_workers, len(signal_jobs), default=1, hard_limit=8)
+            summary["signal_workers"] = signal_workers
+            if signal_workers <= 1:
+                signal_results = [run_signal_job(job) for job in signal_jobs]
+            else:
+                with ThreadPoolExecutor(max_workers=signal_workers, thread_name_prefix="signal-build") as pool:
+                    futures = [pool.submit(run_signal_job, job) for job in signal_jobs]
+                    signal_results = [future.result() for future in as_completed(futures)]
+
             total_upserted = 0
-            for symbol, item in items_by_symbol.items():
-                for interval, interval_item in item["intervals"].items():
-                    if not interval_item.get("market_ok"):
-                        continue
-                    try:
-                        signals = build_latest_signals(category, symbol, interval)
-                        upserted = int(persist_signals(category, symbol, interval, signals) or 0)
-                        total_upserted += upserted
-                        interval_item.update({"status": "ok", "built": len(signals), "upserted": upserted})
-                        summary["signals_built"] += len(signals)
-                        summary["signals_upserted"] += upserted
-                    except Exception as exc:
-                        message = str(exc)
-                        interval_item.update({"status": "signal_error", "error": message[:500]})
-                        summary["failed"] += 1
-                        logger.warning("background signal refresh failed for %s %s: %s", symbol, interval, message)
+            for symbol, interval, built, upserted, error in signal_results:
+                interval_item = items_by_symbol[symbol]["intervals"][interval]
+                if error is None:
+                    total_upserted += upserted
+                    interval_item.update({"status": "ok", "built": built, "upserted": upserted})
+                    summary["signals_built"] += built
+                    summary["signals_upserted"] += upserted
+                else:
+                    interval_item.update({"status": "signal_error", "error": error[:500]})
+                    summary["failed"] += 1
+                    logger.warning("background signal refresh failed for %s %s: %s", symbol, interval, error)
+
+            for item in items_by_symbol.values():
                 statuses = [payload.get("status") for payload in item["intervals"].values()]
                 item["status"] = "ok" if statuses and all(status == "ok" for status in statuses) else "partial"
 
@@ -247,6 +332,8 @@ def _empty_summary() -> dict[str, Any]:
         "signals_upserted": 0,
         "skipped": 0,
         "failed": 0,
+        "market_workers": 0,
+        "signal_workers": 0,
         "symbol_source": None,
         "symbols": [],
         "intervals": [],
