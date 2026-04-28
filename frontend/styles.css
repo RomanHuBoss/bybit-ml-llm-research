@@ -288,6 +288,10 @@ input:focus, select:focus { border-color: rgba(84, 163, 255, 0.52); box-shadow: 
 .operation-status { min-height: 38px; padding: 10px; border: 1px solid var(--stroke); border-radius: 14px; color: var(--muted); background: rgba(2, 6, 23, 0.36); font-size: 12px; }
 
 .queue-panel, .trade-ticket, .mtf-card, .ticket, .mtf-panel { height: clamp(430px, 45vh, 560px); display: flex; flex-direction: column; }
+/* Основные операторские панели выровнены по высоте, чтобы очередь, тикет и MTF не прыгали при выборе сигнала. */
+.queue-panel, .ticket, .mtf-panel { height: clamp(430px, 45vh, 560px); }
+.ticket-body, .mtf-matrix { overflow-y: auto; }
+
 .segmented { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
 .filter { min-height: 34px; border: 1px solid var(--stroke); color: var(--muted); background: rgba(2, 6, 23, 0.30); border-radius: 12px; font-size: 12px; font-weight: 850; }
 .filter.active { color: var(--text); border-color: rgba(84, 163, 255, 0.35); background: var(--blue-soft); }
@@ -738,3 +742,5 @@ tbody tr.dir-short td, tbody tr td.short { color: var(--red); }
   .ticket,
   .mtf-panel { height: auto; min-height: 340px; }
 }
+
+.support-grid { display: grid; gap: 12px; }

@@ -89,7 +89,7 @@ def test_frontend_explains_background_llm_instead_of_manual_brief():
     assert "/api/llm/brief" not in js
 
 
-def test_frontend_has_light_fintech_redesign_and_sidebar():
+def test_frontend_has_dark_trading_terminal_redesign_and_sidebar():
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -106,17 +106,19 @@ def test_frontend_has_light_fintech_redesign_and_sidebar():
     assert 'id="opsBody" hidden' not in html
     assert 'queue-header' in html
     assert 'Свернуть панель' in html
+    assert 'dark-mode' in html
+    assert 'LIVE OFF' in html
 
     required_css_fragments = [
-        "color-scheme: light",
-        "--page: #f4f2ee",
-        "--surface: #ffffff",
-        "--blue: #2456a6",
+        "color-scheme: dark",
+        "--page: #070a12",
+        "--surface: rgba(14, 22, 40",
+        "--green: #00e38c",
+        "--red: #ff4d6d",
         ".app-frame",
-        "grid-template-columns: 76px minmax(0, 1fr)",
+        "grid-template-columns: var(--nav) minmax(0, 1fr)",
         ".side-nav",
         ".topbar",
-        "background: rgba(250,249,246",
         ".operation-toast",
         ".decision-board",
         ".support-grid",

@@ -78,10 +78,10 @@
             </section>
 
             <section class="panel ops-panel" id="opsPanel">
-              <button id="opsToggleBtn" class="ops-toggle" type="button" aria-expanded="false" aria-controls="opsBody">
+              <button id="opsToggleBtn" class="ops-toggle" type="button" aria-expanded="true" aria-controls="opsBody">
                 <span class="ops-title"><span class="ops-icon">●</span>Параметры рынка и операций</span>
                 <span class="ops-helper" id="opsHelper">Символы, MTF, стратегия и ручные операции.</span>
-                <span class="ops-toggle-state" id="opsToggleState">Открыть панель ↓</span>
+                <span class="ops-toggle-state" id="opsToggleState">Свернуть панель ↑</span>
               </button>
               <div class="ops-body" id="opsBody">
                 <label class="wide-field asset-selector">Символы
@@ -248,6 +248,8 @@
               </section>
             </article>
 
+            <div class="support-grid" aria-hidden="true" hidden></div>
+
             <article class="panel support-card compact-news support-grid">
               <p class="eyebrow">News & sentiment</p>
               <h2>Рыночный фон</h2>
@@ -262,7 +264,7 @@
           </aside>
         </section>
 
-        <details class="panel technical-details debug-console" id="technicalDetails">
+        <details class="panel technical-details" id="technicalDetails">
           <summary>Технические детали и журнал / сырые данные</summary>
           <div class="technical-grid">
             <section class="raw-table-card signal-history-table">

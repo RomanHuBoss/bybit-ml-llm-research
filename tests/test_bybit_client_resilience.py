@@ -45,3 +45,27 @@ def test_bybit_instruments_info_detects_cursor_loop():
         assert client.calls == 2
     else:  # pragma: no cover
         raise AssertionError("ожидалась BybitAPIError при повторяющемся курсоре")
+
+
+def test_bybit_market_list_endpoints_reject_non_list_payload(monkeypatch):
+    from app.bybit_client import BybitAPIError, BybitClient
+
+    class Response:
+        status_code = 200
+        text = "bad list"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"retCode": 0, "retMsg": "OK", "result": {"list": {"unexpected": "object"}}}
+
+    monkeypatch.setattr("app.bybit_client.requests.get", lambda *args, **kwargs: Response())
+    monkeypatch.setattr("app.bybit_client.time.sleep", lambda *_args, **_kwargs: None)
+
+    try:
+        BybitClient(sleep_sec=0).get_tickers("linear")
+    except BybitAPIError as exc:
+        assert "result.list has unexpected type" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("ожидалась BybitAPIError для не-list payload")

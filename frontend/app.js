@@ -1382,11 +1382,16 @@ async function refreshAll() {
   }
 }
 
+function showBusySkip(title) {
+  showOperationStatus(`Операция «${title}» пропущена: предыдущая еще выполняется.`, 'warn');
+  log(`SKIP ${title}: предыдущая операция еще выполняется`);
+  return null;
+}
+
 async function runOperation(title, fn) {
   if (document.body.classList.contains('is-busy')) {
-    showOperationStatus(`Операция «${title}» пропущена: предыдущая еще выполняется.`, 'warn');
-    log(`SKIP ${title}: предыдущая операция еще выполняется`);
-    return null;
+    showBusySkip(title);
+    if (document.body.classList.contains('is-busy')) return;
   }
   setBusy(true);
   showOperationStatus(`Выполняется: ${title}…`, 'busy');
@@ -1565,7 +1570,7 @@ function bindControls() {
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && $('opsPanel')?.classList.contains('open')) {
-      setOpsPanelOpen(false);
+      setOpsPanelOpen(true);
     }
   });
 
@@ -1620,7 +1625,7 @@ function bindControls() {
 
 bindControls();
 setContextTab(state.contextTab);
-setOpsPanelOpen(false);
+setOpsPanelOpen(true);
 
 let autoRefreshInFlight = false;
 async function refreshBackgroundTick() {

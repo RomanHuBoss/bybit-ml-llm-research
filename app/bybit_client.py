@@ -42,6 +42,15 @@ TRANSIENT_BYBIT_RET_CODES = {
 }
 
 
+def _result_list(result: dict[str, Any], endpoint: str) -> list[Any]:
+    items = result.get("list", [])
+    if items is None:
+        return []
+    if not isinstance(items, list):
+        raise BybitAPIError(f"Bybit {endpoint} result.list has unexpected type: {type(items).__name__}")
+    return items
+
+
 @dataclass
 class BybitClient:
     base_url: str = settings.bybit_base_url
@@ -122,7 +131,7 @@ class BybitClient:
         if end_ms is not None:
             params["end"] = end_ms
         result = self._get("/v5/market/kline", params)
-        return result.get("list", [])
+        return _result_list(result, "/v5/market/kline")
 
     def get_funding_history(
         self,
@@ -138,7 +147,7 @@ class BybitClient:
         if end_ms is not None:
             params["endTime"] = end_ms
         result = self._get("/v5/market/funding/history", params)
-        return result.get("list", [])
+        return _result_list(result, "/v5/market/funding/history")
 
     def get_open_interest(
         self,
@@ -155,11 +164,11 @@ class BybitClient:
         if end_ms is not None:
             params["endTime"] = end_ms
         result = self._get("/v5/market/open-interest", params)
-        return result.get("list", [])
+        return _result_list(result, "/v5/market/open-interest")
 
     def get_tickers(self, category: str = "linear") -> list[dict[str, Any]]:
         result = self._get("/v5/market/tickers", {"category": category})
-        return result.get("list", [])
+        return _result_list(result, "/v5/market/tickers")
 
     def get_instruments_info(self, category: str = "linear") -> list[dict[str, Any]]:
         all_items: list[dict[str, Any]] = []

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -34,6 +35,50 @@ def _finite(value: Any, default: float | None = None) -> float | None:
         return default
     return out
 
+
+
+
+def _interval_to_timedelta(interval: str) -> timedelta:
+    value = str(interval or "").strip().upper()
+    if value.isdigit():
+        return timedelta(minutes=int(value))
+    return {"D": timedelta(days=1), "W": timedelta(days=7), "M": timedelta(days=31)}.get(value, timedelta(hours=1))
+
+
+def _parse_bar_time(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    except Exception:
+        return None
+    if pd.isna(parsed):
+        return None
+    return parsed.to_pydatetime()
+
+
+def is_market_snapshot_fresh(bar_time: Any, interval: str, *, now: datetime | None = None) -> bool:
+    """Защищает оператора от свежесозданного сигнала на старой последней свече.
+
+    Критичный риск: если БД давно не синхронизировалась, `created_at` у сигнала будет
+    новым, хотя `bar_time` относится к старому рынку. Поэтому freshness проверяется
+    по времени закрытия свечи, а не по времени пересчета рекомендации.
+    """
+    parsed = _parse_bar_time(bar_time)
+    if parsed is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    # Допускаем лаг фоновых задач и Bybit API, но не позволяем пересчитать старый рынок
+    # в новую рекомендацию. Для крупных TF используем минимум один полный бар + 15 минут.
+    allowed_lag = max(_interval_to_timedelta(interval) + timedelta(minutes=15), timedelta(hours=1))
+    max_config_lag = timedelta(hours=max(1, int(settings.max_signal_age_hours)))
+    allowed_lag = min(max_config_lag, allowed_lag)
+    closed_at = parsed + _interval_to_timedelta(interval)
+    return closed_at <= now and now - closed_at <= allowed_lag
 
 def _risk_levels(direction: str, close: float, atr: float, sl_atr: float = 1.8, tp_atr: float = 3.0) -> tuple[float, float]:
     atr = max(float(atr), close * 0.002)
@@ -291,6 +336,11 @@ def build_latest_signals(category: str, symbol: str, interval: str, limit: int =
     if df.empty or len(df) < 250:
         return []
     latest = df.iloc[-1]
+    bar_time = latest.get("start_time")
+    if not is_market_snapshot_fresh(bar_time, interval):
+        # Нельзя выдавать новую рекомендацию оператору, если последний рыночный бар
+        # старый или не имеет времени. Такое состояние должно отображаться как no signal/stale data.
+        return []
     history = df.iloc[:-1]
     candidates = [
         donchian_breakout(latest),
@@ -302,7 +352,6 @@ def build_latest_signals(category: str, symbol: str, interval: str, limit: int =
         sentiment_filter(latest),
         regime_adaptive_combo(latest, history),
     ]
-    bar_time = latest.get("start_time")
     result: list[StrategySignal] = []
     for candidate in candidates:
         if candidate is None:

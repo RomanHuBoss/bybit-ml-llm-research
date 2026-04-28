@@ -1,5 +1,28 @@
 # Bybit ML/LLM Research Lab
 
+## Red-team ревизия 2026-04-28
+
+Эта ревизия закрывает дополнительные production-safety дефекты, обнаруженные при повторной инженерной проверке советующей СППР:
+
+- `pytest.ini` фиксирует `pythonpath = .`, поэтому тесты воспроизводимо запускаются через `pytest` и `python run.py check` без ручного `PYTHONPATH`.
+- `build_latest_signals()` больше не строит свежую рекомендацию на старом последнем баре: проверяется именно `bar_time` закрытой свечи, а не только новый `created_at` сигнала. Если рынок устарел или timestamp отсутствует, система возвращает no-signal/stale-data состояние вместо потенциально опасного входа.
+- Bybit public REST client теперь валидирует, что `result.list` действительно является массивом для kline/funding/open-interest/tickers; нестандартный gateway/body не превращается в молчаливый пустой рынок.
+- Frontend закреплен как dark-mode trading terminal: открытая операционная панель, LIVE OFF в верхней панели, кандидатская очередь, trade ticket, MTF, LLM, risk/evidence, news и technical details остаются доступными без декоративной навигации.
+- Busy guard не блокирует навигацию, вкладки и фильтры; повторный API-запуск отсекается только для `data-busy-lock="true"`.
+- Обновлены regression-тесты под фактическую dark trading-верстку и добавлены новые safety-тесты на stale market snapshot и невалидный Bybit `result.list`.
+
+Проверено в текущем контейнере:
+
+```bash
+node --check frontend/app.js
+python -m compileall -q app
+python run.py check
+# результат: 68 passed
+```
+
+Ограничения проверки: live-подключение к реальной PostgreSQL/Bybit/Ollama в контейнере не выполнялось; проверены импорт приложения, синтаксис JS, compileall и весь локальный pytest-набор с monkeypatch/stub-сценариями.
+
+
 ## Production-safety изменения ревизии 2026-04-26
 
 Проект остается **research/recommendation-only** системой: он не создает live-ордера, не управляет позициями на бирже и не является grid-ботом. Любая интеграция реального исполнения должна быть вынесена в отдельный модуль с account-state reconciliation, idempotency key, durable outbox, kill-switch, лимитами ордеров и пост-трейд аудитом.
@@ -40,7 +63,7 @@ python -m compileall -q app tests run.py install.py sitecustomize.py
 python -m pytest -q tests
 ```
 
-Baseline проекта ранее прогонялся по файлам как `47 passed`. После UX/edge-case доработки добавлены 5 targeted regression-тестов; в текущем контейнере подтверждены `node --check`, `compileall`, frontend/bybit/runtime/smoke регрессии, а полный pandas-зависимый набор может зависать на уровне окружения.
+В текущем контейнере подтверждены `node --check frontend/app.js`, `python -m compileall -q app` и полный запуск `python run.py check`: `68 passed`.
 
 
 Локальная исследовательская система для Bybit: сбор рыночных данных, автоотбор ликвидных пар, расчёт признаков, бэктестинг стратегий, ML-ранжирование сетапов, бесплатный sentiment pipeline, LLM-резюме и paper-research.
@@ -725,7 +748,7 @@ POST /api/llm/background/run-now
 
 ### Frontend redesign v3
 
-Интерфейс рабочего места оператора переработан как светлый fintech cockpit:
+Интерфейс рабочего места оператора переработан как dark-mode trading terminal:
 
 - новая shell-компоновка: sidebar, topbar со статусами, левая колонка `KPI + Candidate queue + Data operations`, основная область `Primary decision + Trade sheet + MTF consensus`;
 - главный вердикт и score визуально отделены от технических данных;
@@ -747,7 +770,7 @@ POST /api/llm/background/run-now
 
 ### UI v5: операторский cockpit
 
-Фронтенд пересобран в более спокойной светлой B2B/fintech-стилистике. Основные изменения:
+Фронтенд пересобран в более спокойной dark-mode trading/fintech-стилистике. Основные изменения:
 
 - компактная карточка первичного решения вместо чрезмерно большой плашки;
 - полностью раскрытая и читаемая `Candidate Queue`;
