@@ -20,6 +20,7 @@ const state = {
   entryInterval: '15',
   recommendationIntervals: ['15'],
   contextIntervals: ['60', '240'],
+  rawSort: { key: 'score', dir: 'desc' },
 };
 
 const STRATEGY_LABELS = {
@@ -1018,6 +1019,44 @@ function compareCandidates(a, b) {
   return String(a?.symbol || '').localeCompare(String(b?.symbol || ''));
 }
 
+const RAW_SORTERS = {
+  decision: (s) => String(s.decision?.label || ''),
+  score: (s) => num(s.decision?.score, -1),
+  mtf: (s) => String(mtfLabel(s)),
+  symbol: (s) => String(s.symbol || ''),
+  interval: (s) => num(s.interval, 0),
+  direction: (s) => String(s.direction || ''),
+  strategy: (s) => String(s.strategy || ''),
+  confidence: (s) => num(s.confidence, -1),
+  rr: (s) => riskReward(s)?.ratio ?? -1,
+  pf: (s) => num(s.profit_factor, -1),
+  dd: (s) => num(s.max_drawdown, 999),
+  spread: (s) => num(s.spread_pct, 999),
+  llm: (s) => String(llmVerdictFor(s).recommendation || ''),
+};
+
+function sortedRawRows(list) {
+  const { key, dir } = state.rawSort || { key: 'score', dir: 'desc' };
+  const getter = RAW_SORTERS[key] || RAW_SORTERS.score;
+  const direction = dir === 'asc' ? 1 : -1;
+  return [...list].sort((a, b) => {
+    const av = getter(a);
+    const bv = getter(b);
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * direction;
+    return String(av).localeCompare(String(bv), 'ru', { numeric: true, sensitivity: 'base' }) * direction;
+  });
+}
+
+function updateRawTableSortHeaders() {
+  const table = $('rawTable');
+  if (!table) return;
+  table.querySelectorAll('th[data-sort]').forEach((th) => {
+    const active = th.dataset.sort === state.rawSort.key;
+    th.classList.toggle('sort-active', active);
+    th.setAttribute('aria-sort', active ? (state.rawSort.dir === 'asc' ? 'ascending' : 'descending') : 'none');
+  });
+}
+
 function dedupeCandidatesByMarket(items) {
   const bestByMarket = new Map();
   items.forEach((item) => {
@@ -1240,8 +1279,12 @@ function renderQueue() {
 }
 
 function renderRawTable(list = candidates()) {
-  const body = $('rawTable').querySelector('tbody');
-  body.innerHTML = list.map((s) => {
+  const table = $('rawTable');
+  const body = table?.querySelector('tbody');
+  if (!body) return;
+  const rows = sortedRawRows(list);
+  updateRawTableSortHeaders();
+  body.innerHTML = rows.map((s) => {
     const rr = riskReward(s);
     return `<tr class="dir-${cssToken(s.direction, 'flat')}">
       <td>${escapeHtml(s.decision.label)}</td>
@@ -1488,7 +1531,31 @@ async function runOperation(title, fn) {
   }
 }
 
+function bindRawTableSorting() {
+  const table = $('rawTable');
+  if (!table) return;
+  table.querySelectorAll('th[data-sort]').forEach((th) => {
+    th.tabIndex = 0;
+    th.setAttribute('role', 'button');
+    th.addEventListener('click', () => {
+      const key = th.dataset.sort;
+      if (!key) return;
+      const sameKey = state.rawSort.key === key;
+      state.rawSort = { key, dir: sameKey && state.rawSort.dir === 'desc' ? 'asc' : 'desc' };
+      renderRawTable();
+    });
+    th.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        th.click();
+      }
+    });
+  });
+  updateRawTableSortHeaders();
+}
+
 function bindControls() {
+  bindRawTableSorting();
   $('refreshAllBtn').onclick = async () => runOperation('Обновление экрана', refreshAll);
   const refreshQueueBtn = $('refreshQueueBtn');
   if (refreshQueueBtn) refreshQueueBtn.onclick = async () => runOperation('Обновление очереди', async () => { await refreshRank(); await refreshSignals(); return { ok: true }; });

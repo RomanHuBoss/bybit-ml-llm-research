@@ -79,7 +79,12 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         _add_reason(hard, "freshness", "Рыночные данные устарели", "Рекомендация не должна строиться по старой или незакрытой свече.")
 
     mtf_status = str(row.get("mtf_status") or "").lower()
-    if row.get("mtf_veto") is True or row.get("higher_tf_conflict") is True or mtf_status in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}:
+    mtf_veto = _boolish(row.get("mtf_veto")) is True
+    higher_tf_conflict = _boolish(row.get("higher_tf_conflict")) is True
+    # API/DB/JSON-слои иногда возвращают булевы флаги строками. Для veto это
+    # критично: строка "false" не должна становиться truthy, а строка "true"
+    # не должна обходить запрет на вход.
+    if mtf_veto or higher_tf_conflict or mtf_status in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}:
         _add_reason(hard, "mtf", "MTF запрещает вход", str(row.get("mtf_reason") or "60m/240m конфликтуют с entry-TF или строка не является entry-кандидатом."))
     elif mtf_status in {"tactical_only", "weak_alignment", ""}:
         _add_reason(warnings, "mtf_partial", "MTF подтвержден не полностью", str(row.get("mtf_reason") or "Есть только тактический сигнал без полного подтверждения старших TF."))

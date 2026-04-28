@@ -234,3 +234,25 @@ def test_spot_liquidity_does_not_require_open_interest(monkeypatch):
     monkeypatch.setattr(bc, "execute_many_values", fake_execute_many_values)
     assert bc.sync_liquidity_snapshots("spot") == 1
     assert captured[0][13] is True
+
+
+def test_safety_annotations_include_directional_level_validity():
+    from datetime import datetime, timezone
+
+    from app.safety import annotate_signal_row, directional_risk_reward
+
+    row = {
+        "bar_time": datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
+        "interval": "60",
+        "direction": "long",
+        "entry": 100.0,
+        "stop_loss": 104.0,
+        "take_profit": 96.0,
+    }
+    annotated = annotate_signal_row(row)
+
+    assert annotated["levels_valid"] is False
+    assert annotated["levels_problem"] == "long_levels_not_ordered"
+    assert annotated["risk_reward"] == 1.0
+    assert annotated["directional_risk_reward"] is None
+    assert directional_risk_reward("short", 100.0, 104.0, 96.0) == 1.0

@@ -80,11 +80,39 @@ def risk_reward(entry: Any, stop_loss: Any, take_profit: Any) -> float | None:
     return round(reward / risk, 6)
 
 
+def directional_levels_problem(direction: Any, entry: Any, stop_loss: Any, take_profit: Any) -> str | None:
+    entry_v = finite_float(entry)
+    stop_v = finite_float(stop_loss)
+    take_v = finite_float(take_profit)
+    if entry_v is None or stop_v is None or take_v is None:
+        return "missing_levels"
+    side = str(direction or "").strip().lower()
+    if side == "long" and not (stop_v < entry_v < take_v):
+        return "long_levels_not_ordered"
+    if side == "short" and not (take_v < entry_v < stop_v):
+        return "short_levels_not_ordered"
+    if side not in {"long", "short"}:
+        return "invalid_direction"
+    return None
+
+
+def directional_risk_reward(direction: Any, entry: Any, stop_loss: Any, take_profit: Any) -> float | None:
+    # Абсолютный R/R полезен для диагностики, но для торговой рекомендации он
+    # безопасен только после проверки порядка уровней относительно LONG/SHORT.
+    if directional_levels_problem(direction, entry, stop_loss, take_profit) is not None:
+        return None
+    return risk_reward(entry, stop_loss, take_profit)
+
+
 def annotate_signal_row(row: dict[str, Any]) -> dict[str, Any]:
     out = dict(row)
     freshness = signal_freshness(out.get("bar_time"), out.get("interval"))
     out.update(freshness)
+    levels_problem = directional_levels_problem(out.get("direction"), out.get("entry"), out.get("stop_loss"), out.get("take_profit"))
     out["risk_reward"] = risk_reward(out.get("entry"), out.get("stop_loss"), out.get("take_profit"))
+    out["directional_risk_reward"] = directional_risk_reward(out.get("direction"), out.get("entry"), out.get("stop_loss"), out.get("take_profit"))
+    out["levels_valid"] = levels_problem is None
+    out["levels_problem"] = levels_problem
     return out
 
 

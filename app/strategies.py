@@ -37,6 +37,17 @@ def _finite(value: Any, default: float | None = None) -> float | None:
     return out
 
 
+def _boolish(value: Any, default: bool | None = None) -> bool | None:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    if text in {"false", "0", "no", "n", "off"}:
+        return False
+    return default
 
 
 def _interval_to_timedelta(interval: str) -> timedelta:
@@ -112,9 +123,13 @@ def _risk_levels(direction: str, close: float, atr: float, sl_atr: float = 1.8, 
 def _market_quality(row: pd.Series) -> tuple[bool, dict[str, Any]]:
     spread = _finite(row.get("spread_pct"), 999.0) or 999.0
     liquidity = _finite(row.get("liquidity_score"), 0.0) or 0.0
-    is_eligible = bool(row.get("is_eligible", False))
+    eligible_raw = _boolish(row.get("is_eligible"), None)
     if liquidity == 0 and spread >= 999:
-        return (not settings.require_liquidity_for_signals), {"liquidity_state": "unknown"}
+        return (not settings.require_liquidity_for_signals), {"liquidity_state": "unknown", "is_eligible": eligible_raw}
+    # Нельзя использовать bool(value): строка "false" стала бы True и пропустила бы
+    # неликвидный рынок в генератор рекомендаций. Unknown трактуется безопасно как veto
+    # при REQUIRE_LIQUIDITY_FOR_SIGNALS=true.
+    is_eligible = eligible_raw is True
     ok = spread <= settings.max_spread_pct and liquidity >= 0 and is_eligible
     return ok, {"spread_pct": spread, "liquidity_score": liquidity, "is_eligible": is_eligible}
 

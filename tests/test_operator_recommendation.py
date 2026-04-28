@@ -74,3 +74,17 @@ def test_operator_action_blocks_short_with_long_ordered_levels():
 
     assert decision["operator_action"] == "NO_TRADE"
     assert any(item["code"] == "levels_order" for item in decision["operator_hard_reasons"])
+
+
+def test_operator_action_blocks_string_mtf_veto_from_json_boundary():
+    decision = classify_operator_action(base_row(mtf_veto="true", higher_tf_conflict="true", mtf_status="weak_alignment"))
+
+    assert decision["operator_action"] == "NO_TRADE"
+    assert any(item["code"] == "mtf" for item in decision["operator_hard_reasons"])
+
+
+def test_operator_action_does_not_treat_string_false_as_mtf_veto():
+    decision = classify_operator_action(base_row(mtf_veto="false", higher_tf_conflict="false", mtf_status="aligned_bias"))
+
+    assert decision["operator_action"] == "REVIEW_ENTRY"
+    assert not any(item["code"] == "mtf" for item in decision["operator_hard_reasons"])
