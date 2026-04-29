@@ -4,6 +4,7 @@ import pandas as pd
 
 from .db import query_df
 from .indicators import add_indicators
+from .market_data_quality import clean_market_frame
 
 
 from .feature_schema import FEATURE_COLUMNS
@@ -27,7 +28,11 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
     if df.empty:
         return df
     df["start_time"] = _to_utc(df["start_time"])
-    df = df.dropna(subset=["start_time"]).sort_values("start_time").reset_index(drop=True)
+    df = clean_market_frame(df.dropna(subset=["start_time"]).sort_values("start_time").reset_index(drop=True))
+    if df.empty:
+        return df
+    # Индикаторы и ML-признаки строятся только по физически валидным OHLCV-барам.
+    # Это предотвращает ложные ATR/SL/TP после ручного импорта или частично битого API-ответа.
     df = add_indicators(df)
 
     funding = query_df(

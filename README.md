@@ -253,3 +253,25 @@ python -S -m pytest -q tests/test_red_team_advisory_safety_v15.py
 Дополнительное принятое допущение V16: если источник фичей не получил liquidity snapshot, он обязан передать это явно как `liquidity_state=unknown`. Placeholder-значения `spread_pct=999`, `liquidity_score=0` сами по себе больше не являются достаточным доказательством unknown-состояния, если одновременно присутствует явный `is_eligible=false` без маркера неизвестности.
 
 Отчет аудита сохранен в `docs/RED_TEAM_AUDIT_2026-04-29.md`.
+
+## Ревизия V17 — market-data/backtest/UI consistency hardening от 2026-04-29
+
+Повторный аудит после V16 выявил дополнительные дефекты, влияющие на доказуемость рекомендаций и устойчивость интерфейса:
+
+- Добавлен единый модуль `app/market_data_quality.py` для строгой проверки OHLCV-свечей до записи в БД и до расчета индикаторов. Невалидные `open/high/low/close`, `NaN`-объемы, отрицательные объемы/turnover, `high < low`, `high` ниже тела свечи и `low` выше тела свечи отбрасываются.
+- `app/bybit_client.py` больше не пишет в `candles` незакрытые, malformed или физически невозможные Bybit kline-строки. Это защищает ATR, entry, stop-loss, take-profit, R/R и confidence от искажения одной битой свечой.
+- `app/features.py` очищает market frame перед `add_indicators()`, поэтому ручные импорты или ранее поврежденные строки БД не попадают в индикаторы, ML/features и рекомендации.
+- `app/backtest.py` теперь валидирует каждый торговый сигнал через тот же `validate_signal()`, что и live/advisory path. Бэктест больше не может открыть симулированную сделку по уровню, который боевой контур рекомендаций отверг бы как невалидный.
+- `app/recommendation.py` различает отсутствие backtest evidence и бэктест без убыточных сделок. `profit_factor=None` при `trades > 0` и `win_rate=100%` больше не маркируется как `backtest_missing`; оператор видит отдельное предупреждение `backtest_no_losses` о необходимости проверить размер выборки.
+- `frontend/app.js` стал устойчивее к отсутствующим DOM-узлам: обработчики кнопок и canvas-график теперь привязываются безопасно. Это снижает риск полного падения cockpit при частично измененной HTML-разметке.
+- Выбор кандидата во frontend больше не зависит только от числового `id`. Для строк rank/fallback без `id` используется стабильный ключ `symbol|interval`, поэтому operator queue не теряет выбранный рынок при обновлении данных.
+
+Дополнительные проверки V17:
+
+```bash
+python -S -m py_compile app/*.py run.py install.py sitecustomize.py
+node --check frontend/app.js
+pytest -q tests
+```
+
+В текущей sandbox-среде `pytest` один раз сообщил `113 passed`, но последующие процессы Python/pytest начали зависать на уровне импорта/завершения интерпретатора, что выглядит как ограничение окружения, а не как ошибка проекта. Поэтому для V17 дополнительно выполнены targeted/manual проверки нового модуля market-data quality и compile/static-проверки. Перед production/staging нужно повторить полный `pytest -q tests` в чистом virtualenv.

@@ -127,8 +127,14 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     trades = _finite(row.get("trades_count"), 0.0) or 0.0
     pf = _finite(row.get("profit_factor"))
     max_dd = _finite(row.get("max_drawdown"))
-    if trades <= 0 or pf is None:
+    win_rate = _finite(row.get("win_rate"))
+    no_loss_backtest = trades > 0 and pf is None and win_rate is not None and win_rate >= 0.999
+    if trades <= 0:
         _add_reason(evidence, "backtest_missing", "Бэктест еще не готов", "Отсутствие бэктеста снижает доказательность, но не блокирует сам рыночный сетап.")
+    elif no_loss_backtest:
+        _add_reason(evidence, "backtest_no_losses", "Бэктест без убыточных сделок", f"Сделок {int(trades)}, win rate {win_rate:.0%}; PF не конечен, поэтому оператор должен проверить размер выборки.")
+    elif pf is None:
+        _add_reason(evidence, "backtest_incomplete", "Бэктест неполный", f"Сделок {int(trades)}, но profit factor не рассчитан; требуется ручная проверка отчета.")
     elif trades >= 20 and pf < 1.0:
         _add_reason(hard, "backtest_negative", "Бэктест отрицательный", f"PF {pf:.2f} при {int(trades)} сделках — сетап нельзя выносить на вход.")
     elif trades < 20 or pf < 1.15:
@@ -152,7 +158,9 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     score += max(0.0, min(1.0, ((rr or 0.0) - 1.0) / 1.5)) * 18.0
     score += 10.0 if eligible is True else 0.0
     score += 8.0 if spread is not None and spread <= settings.max_spread_pct else 0.0
-    if pf is not None and trades > 0:
+    if no_loss_backtest:
+        score += 7.0 * max(0.25, min(1.0, trades / 40.0))
+    elif pf is not None and trades > 0:
         score += max(0.0, min(1.0, pf / 1.8)) * 7.0 * max(0.25, min(1.0, trades / 40.0))
     if roc_auc is not None:
         score += max(0.0, min(1.0, (roc_auc - 0.5) / 0.18)) * 5.0

@@ -88,3 +88,11 @@ def test_operator_action_does_not_treat_string_false_as_mtf_veto():
 
     assert decision["operator_action"] == "REVIEW_ENTRY"
     assert not any(item["code"] == "mtf" for item in decision["operator_hard_reasons"])
+
+
+def test_operator_action_treats_no_loss_backtest_as_evidence_not_missing():
+    decision = classify_operator_action(base_row(trades_count=12, profit_factor=None, win_rate=1.0))
+
+    assert decision["operator_action"] == "REVIEW_ENTRY"
+    assert any(item["code"] == "backtest_no_losses" for item in decision["operator_evidence_notes"])
+    assert not any(item["code"] == "backtest_missing" for item in decision["operator_evidence_notes"])

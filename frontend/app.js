@@ -1300,10 +1300,13 @@ function renderQueue() {
     return;
   }
   queue.className = 'candidate-queue';
-  const selectedId = selectedCandidate()?.id;
+  const selected = selectedCandidate();
+  const selectedId = selected?.id;
+  const selectedKey = candidateKey(selected);
   const rawTotal = state.rank.length ? state.rank.filter(isEntryRecommendation).length : state.signals.filter(isEntryRecommendation).length;
   queue.innerHTML = filtered.map((s) => {
-    const selected = Number(s.id) === Number(selectedId);
+    const isSelected = (selectedId !== undefined && selectedId !== null && Number(s.id) === Number(selectedId)) || candidateKey(s) === selectedKey;
+    const cardKey = candidateKey(s);
     const decisionLevel = cssToken(s.decision.level, 'reject');
     const label = escapeHtml(s.decision.label);
     const compactLabel = escapeHtml(compactDecisionLabel(s.decision));
@@ -1311,7 +1314,7 @@ function renderQueue() {
     const stabilityText = bool(s.direction_conflict) ? ' · конфликт LONG/SHORT' : hasNumber(s.operator_stability_score) ? ` · stable ${pct(s.operator_stability_score, 0)}` : '';
     const variants = variantsCount > 1 ? ` · ${variantsCount} вариантов${stabilityText}` : stabilityText;
     return `
-      <article class="candidate ${decisionLevel} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
+      <article class="candidate ${decisionLevel} ${isSelected ? 'selected' : ''}" data-id="${escapeHtml(s.id ?? '')}" data-key="${escapeHtml(cardKey)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
         <span class="candidate-star" aria-hidden="true">☆</span>
         <div class="candidate-copy">
           <span class="symbol">${escapeHtml(s.symbol)}</span>
@@ -1330,9 +1333,10 @@ function renderQueue() {
   queue.querySelectorAll('.candidate').forEach((card) => {
     const select = () => {
       const parsedId = Number(card.dataset.id);
+      const key = card.dataset.key || '';
       state.selectedId = Number.isFinite(parsedId) ? parsedId : null;
-      const chosen = filtered.find((item) => Number(item.id) === Number(state.selectedId));
-      state.selectedKey = candidateKey(chosen) || state.selectedKey;
+      const chosen = filtered.find((item) => (state.selectedId !== null && Number(item.id) === Number(state.selectedId)) || candidateKey(item) === key);
+      state.selectedKey = candidateKey(chosen) || key || state.selectedKey;
       renderQueue();
       renderDecision();
       refreshNews().catch((error) => log(`WARN refresh selected news: ${error.message}`));
@@ -1476,6 +1480,7 @@ async function refreshSignals() {
 
 function drawEquity(curve) {
   const canvas = $('equityCanvas');
+  if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1637,13 +1642,19 @@ function bindRawTableSorting() {
   updateRawTableSortHeaders();
 }
 
+function bindClick(id, handler) {
+  const node = $(id);
+  if (!node) return;
+  node.addEventListener('click', handler);
+}
+
 function bindControls() {
   bindRawTableSorting();
-  $('refreshAllBtn').onclick = async () => runOperation('Обновление экрана', refreshAll);
+  bindClick('refreshAllBtn', async () => runOperation('Обновление экрана', refreshAll));
   const refreshQueueBtn = $('refreshQueueBtn');
-  if (refreshQueueBtn) refreshQueueBtn.onclick = async () => runOperation('Обновление очереди', async () => { await refreshRank(); await refreshSignals(); return { ok: true }; });
+  if (refreshQueueBtn) refreshQueueBtn.addEventListener('click', async () => runOperation('Обновление очереди', async () => { await refreshRank(); await refreshSignals(); return { ok: true }; }));
 
-  $('syncUniverseBtn').onclick = async () => {
+  bindClick('syncUniverseBtn', async () => {
     await runOperation('Universe built', async () => {
       validateInputs();
       const data = await api('/api/symbols/universe/build', {
@@ -1654,9 +1665,9 @@ function bindControls() {
       await refreshUniverse();
       return data.result;
     });
-  };
+  });
 
-  $('syncMarketBtn').onclick = async () => {
+  bindClick('syncMarketBtn', async () => {
     await runOperation('Загрузка рынка', async () => {
       validateInputs({ requireSymbols: true });
       const timeoutMs = marketSyncTimeoutMs();
@@ -1668,9 +1679,9 @@ function bindControls() {
       await refreshStatus();
       return data.result;
     });
-  };
+  });
 
-  $('syncSentimentBtn').onclick = async () => {
+  bindClick('syncSentimentBtn', async () => {
     await runOperation('Sentiment synced', async () => {
       validateInputs({ requireSymbols: true });
       showOperationStatus('Выполняется: обновление sentiment. Источники ограничены короткими таймаутами.', 'busy');
@@ -1681,9 +1692,9 @@ function bindControls() {
       await refreshNews();
       return data.result;
     });
-  };
+  });
 
-  $('buildSignalsBtn').onclick = async () => {
+  bindClick('buildSignalsBtn', async () => {
     await runOperation('Signals built', async () => {
       validateInputs({ requireSymbols: true });
       const data = await api('/api/signals/build', {
@@ -1698,11 +1709,11 @@ function bindControls() {
       await refreshNews();
       return data.result;
     });
-  };
+  });
 
-  $('rankBtn').onclick = async () => runOperation('Rank refreshed', refreshRank);
+  bindClick('rankBtn', async () => runOperation('Rank refreshed', refreshRank));
 
-  $('backtestBtn').onclick = async () => {
+  bindClick('backtestBtn', async () => {
     await runOperation('Backtest', async () => {
       const s = selectedCandidate();
       const sym = s?.symbol || selectedSymbols()[0] || 'BTCUSDT';
@@ -1719,18 +1730,18 @@ function bindControls() {
       await refreshRank();
       return data.result;
     });
-  };
+  });
 
-  $('backtestAutoBtn').onclick = async () => {
+  bindClick('backtestAutoBtn', async () => {
     await runOperation('Background backtest refresh requested', async () => {
       const data = await api('/api/backtest/background/run-now', { method: 'POST' });
       await refreshBacktestStatus();
       await refreshRank();
       return data.status;
     });
-  };
+  });
 
-  $('signalsAutoBtn').onclick = async () => {
+  bindClick('signalsAutoBtn', async () => {
     await runOperation('Background signal refresh requested', async () => {
       const data = await api('/api/signals/background/run-now', { method: 'POST' });
       await refreshSignalStatus();
@@ -1738,13 +1749,13 @@ function bindControls() {
       await refreshLlmStatus();
       return data.status;
     });
-  };
+  });
 
   // ML training/prediction controls are intentionally not exposed in the main UI.
   // Models are maintained by signal-auto-refresher; /api/ml/* remains available
   // for API-level diagnostics and emergency one-off maintenance.
 
-  $('briefBtn').onclick = async () => {
+  bindClick('briefBtn', async () => {
     setContextTab('llm');
     await runOperation('LLM background refresh requested', async () => {
       const data = await api('/api/llm/background/run-now', { method: 'POST' });
@@ -1752,7 +1763,7 @@ function bindControls() {
       renderQueue();
       return data.status;
     });
-  };
+  });
 
   document.querySelector('.queue-more')?.addEventListener('click', () => {
     openTechnicalDetails();
@@ -1775,7 +1786,7 @@ function bindControls() {
     });
   });
 
-  $('opsToggleBtn').addEventListener('click', toggleOpsPanel);
+  $('opsToggleBtn')?.addEventListener('click', toggleOpsPanel);
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && $('opsPanel')?.classList.contains('open')) {

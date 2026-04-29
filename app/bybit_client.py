@@ -12,6 +12,7 @@ import requests
 
 from .config import settings
 from .db import execute_many_values
+from .market_data_quality import validate_ohlcv_values
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,56 @@ def _page_ranges(start: datetime, end: datetime, step: timedelta) -> list[tuple[
     return ranges
 
 
+def _parse_kline_item(category: str, symbol: str, interval: str, item: list[Any], now: datetime) -> tuple | None:
+    """Парсит и валидирует Bybit kline item перед записью в БД.
+
+    Public API может вернуть неполную строку, текущую незакрытую свечу или битые
+    числовые значения после сетевого/gateway сбоя. Такие бары нельзя использовать
+    для ATR, entry, SL/TP и R/R: безопаснее пропустить их и оставить оператору
+    последний доказуемо валидный закрытый рынок.
+    """
+    if not isinstance(item, list) or len(item) < 6:
+        logger.warning("skip malformed Bybit kline item for %s %s %s: %r", category, symbol, interval, item)
+        return None
+    try:
+        start_time = _ms_to_dt(item[0])
+    except Exception:
+        logger.warning("skip kline with invalid start_time for %s %s %s: %r", category, symbol, interval, item[:1])
+        return None
+    if not _is_closed_candle(start_time, interval, now):
+        return None
+    ok, reason, values = validate_ohlcv_values(
+        item[1],
+        item[2],
+        item[3],
+        item[4],
+        item[5],
+        item[6] if len(item) > 6 else None,
+    )
+    if not ok:
+        logger.warning(
+            "skip invalid Bybit candle for %s %s %s at %s: %s",
+            category,
+            symbol,
+            interval,
+            start_time.isoformat(),
+            reason,
+        )
+        return None
+    return (
+        category,
+        symbol.upper(),
+        interval,
+        start_time,
+        values["open"],
+        values["high"],
+        values["low"],
+        values["close"],
+        values["volume"],
+        values["turnover"],
+    )
+
+
 def sync_candles(category: str, symbol: str, interval: str, days: int) -> int:
     client = BybitClient()
     end = datetime.now(timezone.utc)
@@ -271,25 +322,9 @@ def sync_candles(category: str, symbol: str, interval: str, days: int) -> int:
         parsed = []
         now = datetime.now(timezone.utc)
         for item in rows:
-            if len(item) < 6:
-                continue
-            start_time = _ms_to_dt(item[0])
-            if not _is_closed_candle(start_time, interval, now):
-                continue
-            parsed.append(
-                (
-                    category,
-                    symbol.upper(),
-                    interval,
-                    start_time,
-                    item[1],
-                    item[2],
-                    item[3],
-                    item[4],
-                    item[5],
-                    item[6] if len(item) > 6 else None,
-                )
-            )
+            parsed_item = _parse_kline_item(category, symbol, interval, item, now)
+            if parsed_item is not None:
+                parsed.append(parsed_item)
         inserted += execute_many_values(
             """
             INSERT INTO candles(category, symbol, interval, start_time, open, high, low, close, volume, turnover)

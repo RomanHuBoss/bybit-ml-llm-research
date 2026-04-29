@@ -19,6 +19,7 @@ from .strategies import (
     regime_adaptive_combo,
     sentiment_filter,
     trend_continuation_setup,
+    validate_signal,
     volatility_squeeze,
 )
 
@@ -207,6 +208,12 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
         if open_trade is None and not halted_by_risk:
             sig = _build_signal(strategy, fn, signal_bar, df.iloc[:i])
             if sig and sig.strategy == strategy and sig.direction in {"long", "short"} and sig.confidence >= 0.54:
+                valid_signal, invalid_reason = validate_signal(sig)
+                if not valid_signal:
+                    # Backtest не должен открывать сделку по сигналу, который live-контур
+                    # отказался бы сохранять из-за перепутанных уровней или NaN-значений.
+                    equity_curve.append({"time": str(trade_bar["start_time"]), "equity": round(equity + _unrealized_pnl(open_trade, float(trade_bar["close"])), 6), "skipped_signal": invalid_reason})
+                    continue
                 raw_entry = _safe_float(trade_bar.get("open"))
                 if raw_entry is not None and raw_entry > 0:
                     entry = raw_entry * (1 + settings.slippage_rate if sig.direction == "long" else 1 - settings.slippage_rate)
