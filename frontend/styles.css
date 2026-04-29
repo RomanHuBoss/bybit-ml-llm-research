@@ -901,3 +901,9 @@ th[data-sort].sort-active::after { content: "↓"; color: var(--cyan); }
 th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .candidate .badge, .decision-badge { overflow-wrap: anywhere; hyphens: auto; }
 .raw-table-wrap:focus-within { border-color: rgba(84, 163, 255, 0.40); box-shadow: 0 0 0 3px rgba(84, 163, 255, 0.08); }
+
+/* v14 operator-queue stabilization: явный конфликт направлений вместо мигания рекомендаций */
+.conflict-row td:first-child,
+.candidate.reject .candidate-timeframe {
+  color: var(--amber);
+}

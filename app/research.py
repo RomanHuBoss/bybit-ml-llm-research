@@ -5,6 +5,7 @@ from typing import Any
 from .config import settings
 from .db import fetch_all
 from .mtf import apply_mtf_consensus
+from .operator_queue import consolidate_operator_queue
 from .recommendation import annotate_recommendations
 from .safety import annotate_and_filter_fresh_signals
 
@@ -136,4 +137,4 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
         if not requested_entry_queue:
             return []
         rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
-    return annotate_recommendations(rows[:limit])
+    return consolidate_operator_queue(annotate_recommendations(rows), limit=limit)

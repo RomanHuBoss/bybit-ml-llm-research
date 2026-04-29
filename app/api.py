@@ -64,6 +64,7 @@ from .config import settings
 from .db import fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
+from .operator_queue import consolidate_operator_queue
 from .recommendation import annotate_recommendations
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
@@ -473,7 +474,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
         )
         if entry_only:
             rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
-        rows = annotate_recommendations(rows[:limit])
+        rows = consolidate_operator_queue(annotate_recommendations(rows), limit=limit)
         return {"ok": True, "category": category, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
     rows = fetch_all(
@@ -487,7 +488,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
         """,
         (category, limit),
     )
-    rows = annotate_recommendations(annotate_and_filter_fresh_signals(rows))
+    rows = consolidate_operator_queue(annotate_recommendations(annotate_and_filter_fresh_signals(rows)), limit=limit)
     return {"ok": True, "category": category, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
 

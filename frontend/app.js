@@ -8,6 +8,7 @@ const state = {
   universe: [],
   news: [],
   selectedId: null,
+  selectedKey: null,
   filter: 'all',
   equityRun: null,
   llmStatus: null,
@@ -814,8 +815,14 @@ function baseChecklistFor(s) {
   const spreadStatus = !hasSpread ? 'warn' : spread <= 0.08 ? 'pass' : spread <= 0.15 ? 'warn' : 'fail';
   const liquidityStatus = !liquidityKnown ? 'warn' : eligible ? 'pass' : 'fail';
   const backtestStatus = backtestEvidenceStatus(s);
+  const directionConflict = bool(s.direction_conflict);
+  const stability = num(s.operator_stability_score, null);
+  const queueGuard = directionConflict
+    ? { key: 'queue_conflict', status: 'fail', title: 'Конфликт направлений в очереди', text: `LONG strength ${fmt(s.direction_strength_long, 1)}, SHORT strength ${fmt(s.direction_strength_short, 1)}. Сервер стабилизировал рынок как NO_TRADE.` }
+    : { key: 'queue_stability', status: stability === null || stability >= 0.72 ? 'pass' : stability >= 0.66 ? 'warn' : 'fail', title: stability === null ? 'Очередь стабильна' : `Стабильность ${pct(stability, 0)}`, text: `Вариантов по рынку: ${fmt(s.operator_variant_count || s.variant_count || 1, 0)}; gap направлений: ${fmt(s.direction_gap, 1)}.` };
 
   return [
+    queueGuard,
     { key: 'freshness', status: stale ? 'fail' : 'pass', title: freshnessTitle, text: freshnessText },
     { key: 'direction', status: s.direction === 'long' || s.direction === 'short' ? 'pass' : 'fail', title: s.direction === 'long' || s.direction === 'short' ? 'Направление задано' : 'Нет направления сделки', text: `Направление: ${String(s.direction || 'flat').toUpperCase()}. Flat не является сделкой.` },
     { key: 'mtf', status: mtfSeverity(s), title: mtfSeverity(s) === 'pass' ? 'MTF согласован' : mtfSeverity(s) === 'warn' ? 'MTF неполный' : 'MTF запрещает вход', text: `${mtfLabel(s)}. ${s.mtf_reason || '15m — вход; 60m и 240m — фильтры, а не отдельные триггеры.'}` },
@@ -926,6 +933,11 @@ function reasonItems(s) {
   const reason = REASON_LABELS[rationale.reason] || rationale.reason || 'причина не раскрыта в сигнале';
   const rr = riskReward(s);
   return [
+    {
+      level: bool(s.direction_conflict) ? 'bad' : num(s.operator_stability_score, 1) < 0.66 ? 'warn' : 'good',
+      title: bool(s.direction_conflict) ? 'Очередь: конфликт направлений' : `Очередь: стабильность ${s.operator_stability_score ? pct(s.operator_stability_score, 0) : '—'}`,
+      text: s.operator_queue_note || `Сервер вернул максимум одну строку на рынок. Вариантов: ${fmt(s.operator_variant_count || s.variant_count || 1, 0)}; gap: ${fmt(s.direction_gap, 1)}.`,
+    },
     {
       level: mtfSeverity(s) === 'pass' ? 'good' : mtfSeverity(s) === 'warn' ? 'warn' : 'bad',
       title: `MTF: ${mtfLabel(s)}`,
@@ -1087,13 +1099,28 @@ function candidates() {
   return unique;
 }
 
+function candidateKey(item) {
+  if (!item) return '';
+  return `${String(item.symbol || '').toUpperCase()}|${String(item.interval || item.mtf_entry_interval || '').toUpperCase()}`;
+}
+
 function selectedCandidate() {
   const list = candidates();
   if (state.selectedId !== null) {
     const found = list.find((s) => Number(s.id) === Number(state.selectedId));
     if (found) return found;
   }
-  return list[0] || null;
+  if (state.selectedKey) {
+    const foundByMarket = list.find((s) => candidateKey(s) === state.selectedKey);
+    if (foundByMarket) {
+      state.selectedId = Number.isFinite(Number(foundByMarket.id)) ? Number(foundByMarket.id) : null;
+      return foundByMarket;
+    }
+  }
+  const first = list[0] || null;
+  state.selectedKey = candidateKey(first) || null;
+  state.selectedId = first && Number.isFinite(Number(first.id)) ? Number(first.id) : null;
+  return first;
 }
 
 function renderDecision() {
@@ -1240,7 +1267,9 @@ function renderQueue() {
     const decisionLevel = cssToken(s.decision.level, 'reject');
     const label = escapeHtml(s.decision.label);
     const compactLabel = escapeHtml(compactDecisionLabel(s.decision));
-    const variants = num(s.variant_count, 1) > 1 ? ` · ${num(s.variant_count, 1)} вариантов` : '';
+    const variantsCount = num(s.operator_variant_count || s.variant_count, 1);
+    const stabilityText = bool(s.direction_conflict) ? ' · конфликт LONG/SHORT' : hasNumber(s.operator_stability_score) ? ` · stable ${pct(s.operator_stability_score, 0)}` : '';
+    const variants = variantsCount > 1 ? ` · ${variantsCount} вариантов${stabilityText}` : stabilityText;
     return `
       <article class="candidate ${decisionLevel} ${selected ? 'selected' : ''}" data-id="${escapeHtml(s.id)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
         <span class="candidate-star" aria-hidden="true">☆</span>
@@ -1262,6 +1291,8 @@ function renderQueue() {
     const select = () => {
       const parsedId = Number(card.dataset.id);
       state.selectedId = Number.isFinite(parsedId) ? parsedId : null;
+      const chosen = filtered.find((item) => Number(item.id) === Number(state.selectedId));
+      state.selectedKey = candidateKey(chosen) || state.selectedKey;
       renderQueue();
       renderDecision();
       refreshNews().catch((error) => log(`WARN refresh selected news: ${error.message}`));
@@ -1286,7 +1317,7 @@ function renderRawTable(list = candidates()) {
   updateRawTableSortHeaders();
   body.innerHTML = rows.map((s) => {
     const rr = riskReward(s);
-    return `<tr class="dir-${cssToken(s.direction, 'flat')}">
+    return `<tr class="dir-${cssToken(s.direction, 'flat')} ${bool(s.direction_conflict) ? 'conflict-row' : ''}">
       <td>${escapeHtml(s.decision.label)}</td>
       <td>${escapeHtml(s.decision.score)}</td>
       <td>${escapeHtml(mtfLabel(s))}</td>
@@ -1375,19 +1406,31 @@ async function refreshUniverse() {
   $('kpiUniverse').textContent = state.universe.length || '—';
 }
 
+function preserveSelectedCandidate() {
+  const current = selectedCandidate();
+  if (!current) {
+    state.selectedId = null;
+    state.selectedKey = null;
+    return;
+  }
+  state.selectedKey = candidateKey(current) || state.selectedKey;
+  state.selectedId = Number.isFinite(Number(current.id)) ? Number(current.id) : state.selectedId;
+}
+
 async function refreshRank() {
   const data = await api(`/api/research/rank?category=${encodeURIComponent($('category').value)}&interval=${encodeURIComponent($('interval').value)}&limit=40`);
   state.entryInterval = data.entry_interval || state.entryInterval || '15';
   state.recommendationIntervals = data.recommendation_intervals || [state.entryInterval];
   state.contextIntervals = data.context_intervals || state.contextIntervals;
   state.rank = data.items || [];
+  preserveSelectedCandidate();
   renderQueue();
 }
 
 async function refreshSignals() {
   const data = await api(`/api/signals/latest?category=${encodeURIComponent($('category').value)}&limit=80&entry_only=true`);
   state.signals = data.signals || [];
-  if (state.selectedId !== null && !state.signals.some((s) => Number(s.id) === Number(state.selectedId))) state.selectedId = null;
+  preserveSelectedCandidate();
   renderQueue();
 }
 
@@ -1696,7 +1739,7 @@ function bindControls() {
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && $('opsPanel')?.classList.contains('open')) {
-      setOpsPanelOpen(true);
+      setOpsPanelOpen(false);
     }
   });
 

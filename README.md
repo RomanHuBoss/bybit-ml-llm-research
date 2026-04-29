@@ -13,6 +13,7 @@ app/bybit_client.py       Bybit V5 public REST client, retry/backoff, ingestion
 app/strategies.py         Правила сигналов, validation, persist latest signals
 app/mtf.py                15m/60m/240m MTF consensus и veto
 app/recommendation.py     Каноническое операторское решение
+app/operator_queue.py      Стабилизация очереди: 1 рынок = 1 операторский вердикт
 app/safety.py             Freshness, stale-bar filtering, R/R diagnostics
 app/research.py           Ранжирование кандидатов с backtest/ML/liquidity/LLM joins
 app/backtest.py           Локальный backtest стратегий
@@ -111,6 +112,7 @@ node --check frontend/app.js
 В текущей ревизии добавлены regression-проверки для:
 
 - строковых `mtf_veto` / `higher_tf_conflict` на API/JSON границе;
+- стабилизации operator queue и блокировки близкого LONG/SHORT-конфликта;
 - безопасной обработки `is_eligible="false"` в генераторе стратегий;
 - directional validity SL/TP относительно LONG/SHORT;
 - сортируемой таблицы сырых сигналов во frontend;
@@ -128,6 +130,8 @@ node --check frontend/app.js
   - SHORT: `take_profit < entry < stop_loss`;
 - свежую закрытую свечу;
 - непротиворечивый MTF-контекст.
+
+`app/recommendation.py` возвращает канонический операторский контракт, а `app/operator_queue.py` дополнительно стабилизирует выдачу: по одному symbol/TF в очередь попадает максимум один операторский вердикт. Если на одной свежей свече есть близкие по силе LONG и SHORT, рынок переводится в `КОНФЛИКТ СИГНАЛОВ` / `NO_TRADE`, чтобы оператор не видел хаотично сменяющиеся рекомендации.
 
 `app/recommendation.py` возвращает канонический операторский контракт:
 
@@ -171,6 +175,8 @@ Hard-veto срабатывает при:
 - правая панель: MTF, LLM, risk evidence, новости, protocol/checklist;
 - нижняя зона: sortable raw table, technical log, debug details.
 
+Очередь слева намеренно показывает уникальные рынки, а не все технические стратегии подряд. Дубли стратегий агрегируются; если направления конфликтуют, карточка получает явный красный/желтый статус вместо смены одной рекомендации другой.
+
 UI реализует состояния loading, empty, error, stale data, API unavailable, veto, no signal, conflicting indicators. Таблица сигналов имеет sticky header, сортировку по ключевым колонкам и подсветку направления.
 
 ## Режимы
@@ -187,6 +193,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 - Если liquidity snapshot отсутствует и `REQUIRE_LIQUIDITY_FOR_SIGNALS=true`, вход должен требовать ручной проверки или блокироваться на уровне hard-veto downstream.
 - Optional evidence ML/LLM/backtest не заменяет hard risk controls.
 - Stale-сигнал определяется по `bar_time` рыночной свечи, а не только по времени пересчета `created_at`.
+- Для спорного рынка безопаснее показать `NO_TRADE` с причиной конфликта, чем выбирать между LONG/SHORT по случайному порядку обновления evidence.
 
 ## Известные ограничения
 
