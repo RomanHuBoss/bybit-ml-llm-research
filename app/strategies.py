@@ -124,14 +124,13 @@ def _market_quality(row: pd.Series) -> tuple[bool, dict[str, Any]]:
     spread = _finite(row.get("spread_pct"), 999.0) or 999.0
     liquidity = _finite(row.get("liquidity_score"), 0.0) or 0.0
     eligible_raw = _boolish(row.get("is_eligible"), None)
-    if liquidity == 0 and spread >= 999:
-        # Отсутствие liquidity snapshot не должно превращать СППР в "немую" систему:
-        # оператору полезнее увидеть entry/SL/TP с явным предупреждением, чем пустой
-        # экран. При этом известная плохая ликвидность ниже по-прежнему блокируется.
+    missing_snapshot = liquidity == 0 and spread >= 999 and eligible_raw is None
+    if missing_snapshot:
+        # Не создаем ложное чувство безопасности: неизвестная ликвидность допускает
+        # расчет кандидатного сетапа, но не автоматический перевод в REVIEW_ENTRY.
         return True, {"liquidity_state": "unknown", "is_eligible": None, "spread_pct": None, "liquidity_score": None}
-    # Нельзя использовать bool(value): строка "false" стала бы True и пропустила бы
-    # неликвидный рынок в генератор рекомендаций. Известная non-eligible ликвидность
-    # остается жестким фильтром, а unknown обрабатывается выше как ручная проверка.
+    # Явный is_eligible=false всегда блокирует генерацию сигнала; строковое false
+    # нельзя трактовать как truthy-значение.
     is_eligible = eligible_raw is True
     ok = spread <= settings.max_spread_pct and liquidity >= 0 and is_eligible
     return ok, {"spread_pct": spread, "liquidity_score": liquidity, "is_eligible": is_eligible}

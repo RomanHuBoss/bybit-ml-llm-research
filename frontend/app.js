@@ -341,9 +341,11 @@ function updateTopContext(s) {
 
 function renderDecisionMeters(s, d) {
   const rr = riskReward(s);
+  const levelIssue = levelsProblem(s);
   const confidence = num(s?.confidence, null);
   const riskValue = s ? Math.round(Math.min(100, Math.max(0,
-    (num(s.spread_pct, 0) > 0.15 ? 25 : num(s.spread_pct, 0) > 0.08 ? 12 : 4)
+    (levelIssue ? 35 : 0)
+    + (num(s.spread_pct, 0) > 0.15 ? 25 : num(s.spread_pct, 0) > 0.08 ? 12 : 4)
     + Math.min(35, Math.max(0, num(s.max_drawdown, 0) * 100))
     + (mtfSeverity(s) === 'fail' ? 30 : mtfSeverity(s) === 'warn' ? 14 : 0)
     + (decisionFor(s).level === 'reject' ? 18 : decisionFor(s).level === 'watch' ? 8 : 0)
@@ -366,13 +368,15 @@ function renderExecutionMap(s) {
     return;
   }
   const rr = riskReward(s);
+  const levelIssue = levelsProblem(s);
   const direction = String(s.direction || 'flat').toUpperCase();
-  box.className = `execution-map ${cssToken(s.direction, 'neutral')}`;
+  box.className = `execution-map ${cssToken(s.direction, 'neutral')} ${levelIssue ? 'invalid-levels' : ''}`;
   box.innerHTML = `
     <div class="execution-level entry"><span>Entry · ${escapeHtml(direction)}</span><strong>${priceFmt(s.entry)}</strong></div>
     <div class="execution-level stop"><span>Stop-loss</span><strong>${priceFmt(s.stop_loss)}</strong></div>
     <div class="execution-level take"><span>Take-profit</span><strong>${priceFmt(s.take_profit)}</strong></div>
-    <div class="execution-level rr"><span>Risk / Reward</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>`;
+    <div class="execution-level rr"><span>Risk / Reward</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>
+    ${levelIssue ? `<div class="execution-level invalid"><span>Проверка уровней</span><strong>${escapeHtml(levelsProblemText(levelIssue))}</strong></div>` : ''}`;
 }
 
 function showOperationStatus(message, tone = 'neutral') {
@@ -425,11 +429,24 @@ function enrichedSignal(signal) {
   return withLlmFields({ ...rank, ...signal, rank });
 }
 
-function riskReward(s) {
+function levelsProblem(s) {
   const entry = num(s?.entry);
   const stop = num(s?.stop_loss);
   const target = num(s?.take_profit);
-  if (entry === null || stop === null || target === null || entry <= 0) return null;
+  const direction = String(s?.direction || '').toLowerCase();
+  if (entry === null || stop === null || target === null || entry <= 0) return 'missing_levels';
+  if (direction === 'long' && !(stop < entry && entry < target)) return 'long_levels_not_ordered';
+  if (direction === 'short' && !(target < entry && entry < stop)) return 'short_levels_not_ordered';
+  if (!['long', 'short'].includes(direction)) return 'invalid_direction';
+  return null;
+}
+
+function riskReward(s) {
+  // UI не должен показывать красивый R/R, если SL/TP перепутаны относительно LONG/SHORT.
+  if (levelsProblem(s)) return null;
+  const entry = num(s?.entry);
+  const stop = num(s?.stop_loss);
+  const target = num(s?.take_profit);
   const risk = Math.abs(entry - stop);
   const reward = Math.abs(target - entry);
   if (risk <= 0 || reward <= 0) return null;
@@ -439,6 +456,16 @@ function riskReward(s) {
     rewardPct: reward / entry,
   };
 }
+
+function levelsProblemText(code) {
+  return {
+    missing_levels: 'нет полных entry / SL / TP',
+    long_levels_not_ordered: 'для LONG требуется SL < entry < TP',
+    short_levels_not_ordered: 'для SHORT требуется TP < entry < SL',
+    invalid_direction: 'направление не является LONG/SHORT',
+  }[code] || 'уровни не прошли проверку';
+}
+
 
 function bool(value) {
   return value === true || String(value).toLowerCase() === 'true';

@@ -456,14 +456,23 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 WHERE category=%s AND interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
                   AND bar_time IS NOT NULL
                 ORDER BY category, symbol, interval, strategy, direction, created_at DESC
+            ), latest_liq_time AS (
+                SELECT MAX(captured_at) AS captured_at FROM liquidity_snapshots WHERE category=%s
+            ), latest_liq AS (
+                SELECT l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
+                FROM liquidity_snapshots l
+                JOIN latest_liq_time t ON t.captured_at = l.captured_at
+                WHERE l.category=%s
             )
-            SELECT id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
-                   entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
-            FROM latest_signals
-            ORDER BY created_at DESC
+            SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
+                   s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
+                   l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
+            FROM latest_signals s
+            LEFT JOIN latest_liq l ON l.symbol=s.symbol
+            ORDER BY s.created_at DESC
             LIMIT %s
             """,
-            (category, context_intervals, settings.max_signal_age_hours, query_limit),
+            (category, context_intervals, settings.max_signal_age_hours, category, category, query_limit),
         )
         rows = annotate_and_filter_fresh_signals(rows)
         rows = _apply_mtf_consensus(
@@ -479,14 +488,24 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
 
     rows = fetch_all(
         """
-        SELECT id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit,
-               atr, ml_probability, sentiment_score, rationale
-        FROM signals
-        WHERE category=%s AND bar_time IS NOT NULL
-        ORDER BY created_at DESC
+        WITH latest_liq_time AS (
+            SELECT MAX(captured_at) AS captured_at FROM liquidity_snapshots WHERE category=%s
+        ), latest_liq AS (
+            SELECT l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
+            FROM liquidity_snapshots l
+            JOIN latest_liq_time t ON t.captured_at = l.captured_at
+            WHERE l.category=%s
+        )
+        SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit,
+               s.atr, s.ml_probability, s.sentiment_score, s.rationale,
+               l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
+        FROM signals s
+        LEFT JOIN latest_liq l ON l.symbol=s.symbol
+        WHERE s.category=%s AND s.bar_time IS NOT NULL
+        ORDER BY s.created_at DESC
         LIMIT %s
         """,
-        (category, limit),
+        (category, category, category, limit),
     )
     rows = consolidate_operator_queue(annotate_recommendations(annotate_and_filter_fresh_signals(rows)), limit=limit)
     return {"ok": True, "category": category, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}

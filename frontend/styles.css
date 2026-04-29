@@ -907,3 +907,17 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .candidate.reject .candidate-timeframe {
   color: var(--amber);
 }
+
+.execution-map.invalid-levels {
+  border-color: rgba(255, 77, 109, 0.45);
+  background: linear-gradient(180deg, rgba(255, 77, 109, 0.08), rgba(2, 6, 23, 0.30));
+}
+.execution-level.invalid {
+  border-color: rgba(255, 77, 109, 0.38);
+  background: var(--red-soft);
+}
+.execution-level.invalid strong {
+  color: var(--red);
+  font-size: 13px;
+  line-height: 1.35;
+}

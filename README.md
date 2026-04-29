@@ -215,3 +215,25 @@ UI реализует состояния loading, empty, error, stale data, API 
 ## Риск-дисклеймер
 
 Крипторынок высокорисковый. Проект предназначен для исследовательской и операторской поддержки принятия решений. Любые рекомендации должны проверяться человеком; ответственность за сделки и капитал остается на операторе.
+
+## Ревизия V15 — red-team safety hardening от 2026-04-29
+
+Дополнительная инженерная проверка подтвердила, что проект остается **advisory-only**: он не содержит private Bybit API, не подписывает запросы и не отправляет ордера. Основные усиления V15:
+
+- `/api/signals/latest` теперь подтягивает последний liquidity snapshot (`liquidity_score`, `spread_pct`, `turnover_24h`, `open_interest_value`, `is_eligible`) до серверной классификации операторского решения. Без этого API мог вернуть `REVIEW_ENTRY` по сигналу, где UI видел ликвидность только через отдельный research/rank join.
+- Unknown liquidity больше не считается достаточной для `REVIEW_ENTRY`, если включен `REQUIRE_LIQUIDITY_FOR_SIGNALS=true`. Такой сетап может попасть только в наблюдение/ручной разбор, пока не появится свежий snapshot.
+- Явный `is_eligible=false` больше не трактуется как отсутствие snapshot. Это hard filter на уровне генерации стратегии и на уровне операторской рекомендации.
+- Frontend перестал показывать абсолютный Risk/Reward для уровней, перепутанных относительно LONG/SHORT. Для LONG требуется `stop_loss < entry < take_profit`; для SHORT требуется `take_profit < entry < stop_loss`.
+- `.env.example` синхронизирован с безопасными дефолтами ML-auto-train в `app/config.py`: `ML_AUTO_TRAIN_HORIZON_BARS=12`, `ML_AUTO_TRAIN_MAX_MODELS_PER_CYCLE=2`, `ML_AUTO_TRAIN_FAILURE_COOLDOWN_HOURS=6`.
+
+Принятое допущение: при полностью отсутствующем liquidity snapshot стратегия может рассчитать кандидатный сетап, чтобы оператор видел рынок и причину неопределенности, но серверная рекомендация не переводит его в `REVIEW_ENTRY` до подтверждения ликвидности. Это безопаснее, чем молча скрывать рынок или, наоборот, разрешать вход без проверки стакана.
+
+Дополнительные проверки V15:
+
+```bash
+node --check frontend/app.js
+python -S -m py_compile app/*.py run.py install.py sitecustomize.py
+python -S -m pytest -q tests/test_red_team_advisory_safety_v15.py
+```
+
+В отдельных Linux sandbox-сессиях Python с тяжелыми scientific-зависимостями (`pandas`/BLAS) может зависать при завершении процесса. Это не связано с логикой проекта; при таком симптоме запускайте тесты в чистом virtualenv из `requirements.txt` либо с ограничением потоков BLAS, как описано в `sitecustomize.py`.

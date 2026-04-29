@@ -90,8 +90,9 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         _add_reason(warnings, "mtf_partial", "MTF подтвержден не полностью", str(row.get("mtf_reason") or "Есть только тактический сигнал без полного подтверждения старших TF."))
 
     eligible = _boolish(row.get("is_eligible"))
-    if settings.require_liquidity_for_signals and eligible is False:
-        _add_reason(hard, "liquidity", "Ликвидность не допущена", "Liquidity universe пометил инструмент как неeligible.")
+    liquidity_required = bool(settings.require_liquidity_for_signals)
+    if liquidity_required and eligible is False:
+        _add_reason(hard, "liquidity", "Ликвидность не допущена", "Liquidity universe пометил инструмент как non-eligible.")
     elif eligible is None:
         _add_reason(warnings, "liquidity_unknown", "Ликвидность не подтверждена", "Нет свежего liquidity snapshot; оператор должен проверить стакан вручную.")
 
@@ -164,7 +165,15 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     score = int(round(max(0.0, min(100.0, score))))
 
     confidence_band = "high" if confidence >= 0.70 else "normal" if confidence >= 0.58 else "low"
-    core_entry_ok = not hard and confidence >= 0.58 and rr is not None and rr >= 1.45 and mtf_status not in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}
+    liquidity_confirmed = (not liquidity_required) or eligible is True
+    core_entry_ok = (
+        not hard
+        and liquidity_confirmed
+        and confidence >= 0.58
+        and rr is not None
+        and rr >= 1.45
+        and mtf_status not in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}
+    )
     if hard:
         action = "NO_TRADE"
         label = "НЕТ ВХОДА"
