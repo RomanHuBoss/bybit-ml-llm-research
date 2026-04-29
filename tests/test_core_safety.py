@@ -34,7 +34,7 @@ def test_ml_dataset_drops_unlabeled_tail(monkeypatch):
     assert clean["future_ret"].notna().all()
 
 
-def test_strategy_blocks_unknown_liquidity_by_default():
+def test_strategy_allows_unknown_liquidity_snapshot_as_warning_candidate():
     from app.strategies import donchian_breakout
 
     row = pd.Series(
@@ -51,7 +51,13 @@ def test_strategy_blocks_unknown_liquidity_by_default():
             "is_eligible": False,
         }
     )
-    assert donchian_breakout(row) is None
+
+    signal = donchian_breakout(row)
+
+    assert signal is not None
+    assert signal.rationale["liquidity_state"] == "unknown"
+    assert signal.rationale["is_eligible"] is None
+    assert signal.rationale["spread_pct"] is None
 
 
 def test_position_qty_caps_notional():

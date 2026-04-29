@@ -26,13 +26,13 @@
         <section class="brand terminal-brand" aria-label="Система">
           <button type="button" id="navToggleBtn" class="menu-button" aria-label="Свернуть меню" aria-pressed="false">☰</button>
           <div class="brand-copy">
-            <p class="eyebrow">Bybit Research Lab</p>
+            <p class="eyebrow">Bybit Futures Advisory</p>
             <h1>Рабочее место оператора</h1>
           </div>
         </section>
 
         <section class="market-strip" aria-label="Торговый контекст">
-          <span class="market-chip exchange">Bybit</span>
+          <span class="market-chip exchange">Bybit futures</span>
           <span id="activePairChip" class="market-chip strong">Pair —</span>
           <span id="activeTimeframeChip" class="market-chip">TF —</span>
           <span id="lastUpdateChip" class="market-chip">Update —</span>
@@ -101,6 +101,7 @@
                 </label>
                 <label class="strategy-field strategy-mode-selector">Стратегия
                   <select id="strategy">
+                    <option>trend_continuation_setup</option>
                     <option>regime_adaptive_combo</option>
                     <option>donchian_atr_breakout</option>
                     <option>ema_pullback_trend</option>
@@ -294,8 +295,8 @@
         <li>Главная карточка показывает алгоритмическое решение: вход, наблюдение или запрет.</li>
         <li>LLM‑вердикт показывает отдельную рекомендацию: LONG / SHORT / NEUTRAL, confidence и время verdict.</li>
         <li>Красный пункт в Risk & evidence отменяет сетап независимо от визуальной привлекательности.</li>
-        <li>Система не создает бота автоматически: LIVE OFF означает только аналитический режим.</li>
-        <li>Перед созданием бота вручную проверьте Risk, Evidence, LLM, News и Protocol.</li>
+        <li>Система не отправляет ордера автоматически: LIVE OFF означает только советующий аналитический режим.</li>
+        <li>Перед ручным входом по фьючерсу проверьте Risk, Evidence, LLM, News и Protocol.</li>
       </ul>
     </form>
   </dialog>

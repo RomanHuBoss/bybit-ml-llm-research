@@ -18,6 +18,7 @@ from .strategies import (
     oi_confirmation,
     regime_adaptive_combo,
     sentiment_filter,
+    trend_continuation_setup,
     volatility_squeeze,
 )
 
@@ -31,6 +32,7 @@ STRATEGY_MAP: dict[str, StrategyFn] = {
     "oi_trend_confirmation": oi_confirmation,
     "sentiment_fear_reversal": sentiment_filter,
     "sentiment_greed_reversal": sentiment_filter,
+    "trend_continuation_setup": trend_continuation_setup,
     # Исторически эти стратегии требуют history; _build_signal передает его явно.
     "volatility_squeeze_breakout": volatility_squeeze,  # type: ignore[dict-item]
     "regime_adaptive_combo": regime_adaptive_combo,  # type: ignore[dict-item]

@@ -34,10 +34,13 @@ const STRATEGY_LABELS = {
   volatility_squeeze_breakout: 'выход из сжатия волатильности',
   sentiment_fear_reversal: 'разворот от страха',
   sentiment_greed_reversal: 'разворот от жадности',
+  trend_continuation_setup: 'трендовое продолжение фьючерса',
 };
 
 const REASON_LABELS = {
   price_breaks_20_bar_high_in_uptrend: 'пробой 20-свечного high в восходящем тренде',
+  trend_continuation_long: 'трендовое продолжение LONG без экстремальной перекупленности',
+  trend_continuation_short: 'трендовое продолжение SHORT без экстремальной перепроданности',
   price_breaks_20_bar_low_in_downtrend: 'пробой 20-свечного low в нисходящем тренде',
   pullback_inside_uptrend: 'откат внутри восходящего тренда',
   pullback_inside_downtrend: 'откат внутри нисходящего тренда',
@@ -827,7 +830,7 @@ function baseChecklistFor(s) {
     { key: 'direction', status: s.direction === 'long' || s.direction === 'short' ? 'pass' : 'fail', title: s.direction === 'long' || s.direction === 'short' ? 'Направление задано' : 'Нет направления сделки', text: `Направление: ${String(s.direction || 'flat').toUpperCase()}. Flat не является сделкой.` },
     { key: 'mtf', status: mtfSeverity(s), title: mtfSeverity(s) === 'pass' ? 'MTF согласован' : mtfSeverity(s) === 'warn' ? 'MTF неполный' : 'MTF запрещает вход', text: `${mtfLabel(s)}. ${s.mtf_reason || '15m — вход; 60m и 240m — фильтры, а не отдельные триггеры.'}` },
     { key: 'liquidity', status: liquidityStatus, title: liquidityStatus === 'pass' ? 'Ликвидность допущена' : liquidityStatus === 'warn' ? 'Ликвидность ожидает snapshot' : 'Ликвидность не допущена', text: `Liquidity score ${fmt(s.liquidity_score, 2)}, spread ${hasSpread ? pctRaw(spread, 4) : '—'}, turnover 24h ${fmt(s.turnover_24h, 1)} USDT.` },
-    { key: 'spread', status: spreadStatus, title: spreadStatus === 'pass' ? 'Spread нормальный' : spreadStatus === 'warn' ? 'Spread требует контроля' : 'Spread слишком широкий', text: `Текущий spread ${hasSpread ? pctRaw(spread, 4) : '—'}. Чем шире spread, тем хуже исполнимость grid/бота.` },
+    { key: 'spread', status: spreadStatus, title: spreadStatus === 'pass' ? 'Spread нормальный' : spreadStatus === 'warn' ? 'Spread требует контроля' : 'Spread слишком широкий', text: `Текущий spread ${hasSpread ? pctRaw(spread, 4) : '—'}. Чем шире spread, тем хуже исполнимость ручного входа по фьючерсу.` },
     { key: 'rr', status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail', title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны', text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.' },
     { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.52 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
     { key: 'backtest', status: backtestStatus, title: backtestEvidenceTitle(s), text: backtestStatus === 'fail' ? 'Негативный бэктест снижает приоритет сетапа; это evidence-veto, а не MTF-veto.' : 'Малое число сделок или отсутствие свежего бэктеста снижает доказательность, но не скрывает сетап из очереди.' },
@@ -902,7 +905,7 @@ function algorithmDecisionFor(s) {
   score = Math.round(Math.max(0, Math.min(100, score)));
 
   if (hardFails.length) {
-    return { level: 'reject', label: 'НЕТ ВХОДА', score, title: `${s.symbol}: вход запрещён`, subtitle: `Причина: ${hardFails[0].title}. Сетап можно только разобрать, но не передавать на создание бота.` };
+    return { level: 'reject', label: 'НЕТ ВХОДА', score, title: `${s.symbol}: вход запрещён`, subtitle: `Причина: ${hardFails[0].title}. Сетап можно только разобрать; ручной вход запрещен до снятия красного пункта.` };
   }
   if (num(s.confidence, 0) >= 0.58 && rr && rr.ratio >= 1.45 && score >= 56) {
     return { level: 'review', label: 'РУЧНАЯ ПРОВЕРКА ВХОДА', score, title: `${s.symbol}: можно вынести на ручную проверку`, subtitle: `Критических veto нет. ${warnings.length ? `Есть замечания: ${warnings.map((x) => x.title).slice(0, 2).join('; ')}.` : 'Дополнительные проверки ниже.'}` };
@@ -992,8 +995,8 @@ function operatorProtocol(s) {
       text: 'Не открывать сетап, если уже есть коррелированная позиция или дневной лимит риска исчерпан.',
     },
     {
-      title: '5. Создавать бота только вручную',
-      text: 'Система не создает бота автоматически. Entry, SL и TP копируются оператором только после проверки.',
+      title: '5. Ручной вход только после проверки',
+      text: 'Система не отправляет ордера автоматически. Entry, SL и TP используются оператором только после проверки стакана, цены и риска.',
     },
   ];
 }

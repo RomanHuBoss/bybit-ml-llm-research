@@ -125,10 +125,13 @@ def _market_quality(row: pd.Series) -> tuple[bool, dict[str, Any]]:
     liquidity = _finite(row.get("liquidity_score"), 0.0) or 0.0
     eligible_raw = _boolish(row.get("is_eligible"), None)
     if liquidity == 0 and spread >= 999:
-        return (not settings.require_liquidity_for_signals), {"liquidity_state": "unknown", "is_eligible": eligible_raw}
+        # Отсутствие liquidity snapshot не должно превращать СППР в "немую" систему:
+        # оператору полезнее увидеть entry/SL/TP с явным предупреждением, чем пустой
+        # экран. При этом известная плохая ликвидность ниже по-прежнему блокируется.
+        return True, {"liquidity_state": "unknown", "is_eligible": None, "spread_pct": None, "liquidity_score": None}
     # Нельзя использовать bool(value): строка "false" стала бы True и пропустила бы
-    # неликвидный рынок в генератор рекомендаций. Unknown трактуется безопасно как veto
-    # при REQUIRE_LIQUIDITY_FOR_SIGNALS=true.
+    # неликвидный рынок в генератор рекомендаций. Известная non-eligible ликвидность
+    # остается жестким фильтром, а unknown обрабатывается выше как ручная проверка.
     is_eligible = eligible_raw is True
     ok = spread <= settings.max_spread_pct and liquidity >= 0 and is_eligible
     return ok, {"spread_pct": spread, "liquidity_score": liquidity, "is_eligible": is_eligible}
@@ -319,6 +322,57 @@ def sentiment_filter(row: pd.Series) -> StrategySignal | None:
     return None
 
 
+def trend_continuation_setup(row: pd.Series) -> StrategySignal | None:
+    """Более частый, но все еще защитный фьючерсный сетап для ручной проверки оператором.
+
+    В ранней версии рекомендации появлялись только при редких экстремумах
+    (пробой Donchian, сжатие волатильности, экстремальный funding и т.п.). На широком наборе инструментов это
+    создавало пустую очередь по 1-2 дня, хотя оператору нужны уровни входа по
+    обычным сценариям продолжения тренда. Этот модуль не отменяет запреты: он
+    лишь создает проверяемый entry/SL/TP, а MTF/liquidity/spread/backtest/ML ниже
+    решают, можно ли выносить его на ручную проверку.
+    """
+    ok, quality = _market_quality(row)
+    if not ok:
+        return None
+    close = _finite(row.get("close"))
+    atr = _finite(row.get("atr_14"), (close or 0) * 0.01)
+    if not _valid_price_context(close, atr):
+        return None
+
+    rsi = _finite(row.get("rsi_14"), 50.0) or 50.0
+    ema20 = _finite(row.get("ema_20"), 0.0) or 0.0
+    ema50 = _finite(row.get("ema_50"), 0.0) or 0.0
+    ema200 = _finite(row.get("ema_200"), 0.0) or 0.0
+    ret_3 = _finite(row.get("ret_3"), 0.0) or 0.0
+    ret_12 = _finite(row.get("ret_12"), 0.0) or 0.0
+    vol_z = _finite(row.get("volume_z"), 0.0) or 0.0
+    funding = _finite(row.get("funding_rate"), 0.0) or 0.0
+    atr_pct = _finite(row.get("atr_pct"), atr / close) or (atr / close)
+    bb_position = _finite(row.get("bb_position"), 0.5) or 0.5
+
+    if not all(x > 0 for x in (ema20, ema50, ema200)):
+        return None
+    if atr_pct <= 0 or atr_pct > 0.12:
+        return None
+
+    trend_gap = abs((ema20 / ema50) - 1.0)
+    volume_bonus = max(0.0, min(0.08, (vol_z + 0.5) * 0.025))
+    trend_bonus = max(0.0, min(0.10, trend_gap * 5.0))
+
+    if ema20 > ema50 and close > ema20 and 48 <= rsi <= 68 and ret_3 > 0 and ret_12 > -0.01 and funding < 0.0012 and bb_position < 0.92:
+        sl, tp = _risk_levels("long", close, atr, 1.45, 2.6)
+        confidence = min(0.78, 0.56 + trend_bonus + volume_bonus + max(0.0, min(0.06, ret_3 * 2.0)))
+        return StrategySignal("trend_continuation_setup", "long", confidence, close, sl, tp, atr, {"reason": "trend_continuation_long", "rsi": rsi, "ret_3": ret_3, "ret_12": ret_12, "volume_z": vol_z, "funding_rate": funding, **quality})
+
+    if ema20 < ema50 and close < ema20 and 32 <= rsi <= 52 and ret_3 < 0 and ret_12 < 0.01 and funding > -0.0012 and bb_position > 0.08:
+        sl, tp = _risk_levels("short", close, atr, 1.45, 2.6)
+        confidence = min(0.78, 0.56 + trend_bonus + volume_bonus + max(0.0, min(0.06, abs(ret_3) * 2.0)))
+        return StrategySignal("trend_continuation_setup", "short", confidence, close, sl, tp, atr, {"reason": "trend_continuation_short", "rsi": rsi, "ret_3": ret_3, "ret_12": ret_12, "volume_z": vol_z, "funding_rate": funding, **quality})
+
+    return None
+
+
 def regime_adaptive_combo(latest: pd.Series, history: pd.DataFrame) -> StrategySignal | None:
     signals = [
         donchian_breakout(latest),
@@ -328,6 +382,7 @@ def regime_adaptive_combo(latest: pd.Series, history: pd.DataFrame) -> StrategyS
         funding_contrarian(latest),
         oi_confirmation(latest),
         sentiment_filter(latest),
+        trend_continuation_setup(latest),
     ]
     signals = [s for s in signals if s is not None]
     if not signals:
@@ -413,6 +468,7 @@ def build_latest_signals(category: str, symbol: str, interval: str, limit: int =
         funding_contrarian(latest),
         oi_confirmation(latest),
         sentiment_filter(latest),
+        trend_continuation_setup(latest),
         regime_adaptive_combo(latest, history),
     ]
     result: list[StrategySignal] = []

@@ -1,8 +1,8 @@
-# Bybit ML/LLM Research Lab
+# Bybit Futures Advisory Research Lab
 
 Советующая СППР для анализа крипторынка Bybit. Проект собирает публичные рыночные данные, строит технические/рыночные признаки, применяет стратегические правила, MTF-фильтрацию, backtest/ML/LLM evidence и показывает оператору рекомендации в формате `НЕТ ВХОДА` / `НАБЛЮДАТЬ` / `РУЧНАЯ ПРОВЕРКА ВХОДА`.
 
-> **Критичное ограничение:** система не является торговым ботом и не должна автоматически отправлять ордера. В проекте используется публичный Bybit REST для market data; live order execution отсутствует намеренно. Любые entry/SL/TP/TP значения являются аналитическими подсказками для ручной проверки оператором.
+> **Критичное ограничение:** система является советующей СППР и не должна автоматически отправлять ордера. В проекте используется публичный Bybit REST для market data; live order execution отсутствует намеренно. Любые entry/SL/TP значения являются аналитическими подсказками для ручной проверки оператором.
 
 ## Архитектура
 
@@ -113,7 +113,8 @@ node --check frontend/app.js
 
 - строковых `mtf_veto` / `higher_tf_conflict` на API/JSON границе;
 - стабилизации operator queue и блокировки близкого LONG/SHORT-конфликта;
-- безопасной обработки `is_eligible="false"` в генераторе стратегий;
+- безопасной обработки `is_eligible="false"` и отсутствующего liquidity snapshot в генераторе стратегий;
+- практичного фьючерсного `trend_continuation_setup` с entry/SL/TP без автоматической торговли;
 - directional validity SL/TP относительно LONG/SHORT;
 - сортируемой таблицы сырых сигналов во frontend;
 - сохранения advisory-only frontend-контракта.
@@ -190,7 +191,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 ## Принятые допущения
 
 - Bybit market data может быть временно недоступна; при ошибке API система должна показывать degraded/error state, а не скрыто строить рекомендации.
-- Если liquidity snapshot отсутствует и `REQUIRE_LIQUIDITY_FOR_SIGNALS=true`, вход должен требовать ручной проверки или блокироваться на уровне hard-veto downstream.
+- Если liquidity snapshot отсутствует и `REQUIRE_LIQUIDITY_FOR_SIGNALS=true`, генератор теперь не должен молча глушить все рынки: он может создать candidate с entry/SL/TP и явным предупреждением `liquidity_unknown`; известная плохая ликвидность по-прежнему блокирует вход.
 - Optional evidence ML/LLM/backtest не заменяет hard risk controls.
 - Stale-сигнал определяется по `bar_time` рыночной свечи, а не только по времени пересчета `created_at`.
 - Для спорного рынка безопаснее показать `NO_TRADE` с причиной конфликта, чем выбирать между LONG/SHORT по случайному порядку обновления evidence.
@@ -205,7 +206,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 
 ## Troubleshooting
 
-- Пустая очередь: проверьте свежесть свечей, MTF entry interval, liquidity filters и `MAX_SIGNAL_AGE_HOURS`.
+- Пустая очередь: проверьте свежесть свечей, MTF entry interval, liquidity filters, `MAX_SIGNAL_AGE_HOURS` и наличие хотя бы одного сетапа после `trend_continuation_setup`.
 - Все кандидаты `НЕТ ВХОДА`: откройте checklist/reasons; чаще всего причина в stale данных, MTF conflict, низком R/R или liquidity/spread.
 - Ошибка Bybit: уменьшите число symbols/intervals/days, проверьте rate limits и сеть.
 - Ошибка PostgreSQL: проверьте `.env`, доступность БД и примененную `sql/schema.sql`.

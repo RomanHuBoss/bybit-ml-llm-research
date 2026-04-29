@@ -191,7 +191,7 @@ class Settings:
     ml_auto_train_enabled: bool = _bool("ML_AUTO_TRAIN_ENABLED", True)
     ml_auto_train_ttl_hours: int = _int("ML_AUTO_TRAIN_TTL_HOURS", 168)
     ml_auto_train_horizon_bars: int = _int("ML_AUTO_TRAIN_HORIZON_BARS", 12)
-    ml_auto_train_max_models_per_cycle: int = _int("ML_AUTO_TRAIN_MAX_MODELS_PER_CYCLE", 1)
+    ml_auto_train_max_models_per_cycle: int = _int("ML_AUTO_TRAIN_MAX_MODELS_PER_CYCLE", 2)
     ml_auto_train_failure_cooldown_hours: int = _int("ML_AUTO_TRAIN_FAILURE_COOLDOWN_HOURS", 6)
     ml_probability_in_signals_enabled: bool = _bool("ML_PROBABILITY_IN_SIGNALS_ENABLED", True)
 

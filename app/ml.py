@@ -30,6 +30,24 @@ from .config import BASE_DIR
 from .db import execute_many_values, fetch_one
 from .feature_schema import FEATURE_COLUMNS
 
+def load_market_frame(*args, **kwargs):
+    """Ленивая прокси-загрузка market frame для prediction-path и тестовой подмены.
+
+    Импорт features оставлен отложенным, чтобы app.ml можно было импортировать
+    без ранней инициализации тяжелого стека подготовки признаков.
+    """
+    from .features import load_market_frame as _load_market_frame
+
+    return _load_market_frame(*args, **kwargs)
+
+
+def prepare_feature_matrix(*args, **kwargs):
+    """Ленивая прокси-подготовка признаков для prediction-path и regression-тестов."""
+    from .features import prepare_feature_matrix as _prepare_feature_matrix
+
+    return _prepare_feature_matrix(*args, **kwargs)
+
+
 MODELS_DIR = BASE_DIR / "models"
 
 # Process-local guard against hammering a weak VM with the same failing training
@@ -294,8 +312,6 @@ def train_due_models(
 
 
 def predict_latest(category: str, symbol: str, interval: str, horizon_bars: int = 12) -> dict[str, Any]:
-    from .features import load_market_frame, prepare_feature_matrix
-
     path = model_path(category, symbol, interval, horizon_bars)
     if not Path(path).exists():
         raise ValueError("Model file not found. Train ML model first.")

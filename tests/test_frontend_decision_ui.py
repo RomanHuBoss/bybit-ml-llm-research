@@ -59,7 +59,7 @@ def test_frontend_logic_contains_operator_trade_guards():
         "Красных пунктов",
         "НЕТ ВХОДА",
         "РУЧНАЯ ПРОВЕРКА ВХОДА",
-        "не создает бота автоматически",
+        "не отправляет ордера автоматически",
         "refreshLlmStatus",
         "/api/llm/background/status",
         "/api/llm/background/run-now",
