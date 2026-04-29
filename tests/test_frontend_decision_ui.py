@@ -311,3 +311,12 @@ def test_frontend_raw_signal_table_is_sortable():
     assert "function bindRawTableSorting" in js
     assert "aria-sort" in js
     assert "th[data-sort]" in css
+
+def test_frontend_unknown_spread_is_not_rendered_as_zero_risk():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "function riskFromSpread" in js
+    assert "if (spread === null) return 18" in js
+    assert "+ riskFromSpread(s)" in js
+    assert "num(s.spread_pct, 0) > 0.15" not in js
+

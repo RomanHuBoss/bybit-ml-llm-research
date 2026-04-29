@@ -125,15 +125,19 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
         liquidity["spread_pct"] = pd.to_numeric(liquidity["spread_pct"], errors="coerce")
         liquidity = liquidity.dropna(subset=["start_time"]).sort_values("start_time")
         df = pd.merge_asof(df.sort_values("start_time"), liquidity, on="start_time", direction="backward")
+        liquidity_known = df["liquidity_score"].notna() & df["spread_pct"].notna() & df["is_eligible"].notna()
+        df["liquidity_state"] = liquidity_known.map({True: "known", False: "unknown"})
         df["liquidity_score"] = df["liquidity_score"].ffill().fillna(0.0)
         df["spread_pct"] = df["spread_pct"].ffill().fillna(999.0)
-        # Nullable BooleanDtype убирает FutureWarning pandas о silent downcasting
-        # и сохраняет безопасное правило: неизвестная ликвидность не дает eligibility.
+        # Nullable BooleanDtype убирает FutureWarning pandas о silent downcasting.
+        # Неизвестность отдельно фиксируется в liquidity_state, чтобы strategy-layer
+        # не путал отсутствие snapshot с доказанным is_eligible=false.
         df["is_eligible"] = df["is_eligible"].astype("boolean").ffill().fillna(False).astype(bool)
     else:
         df["liquidity_score"] = 0.0
         df["spread_pct"] = 999.0
         df["is_eligible"] = False
+        df["liquidity_state"] = "unknown"
 
     df["ema20_gap"] = df["close"] / df["ema_20"] - 1
     df["ema50_gap"] = df["close"] / df["ema_50"] - 1

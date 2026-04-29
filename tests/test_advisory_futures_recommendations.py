@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from app.recommendation import classify_operator_action
-from app.strategies import trend_continuation_setup, validate_signal
+from app.strategies import bollinger_rsi_reversion, trend_continuation_setup, validate_signal
 
 
 def _trend_row(**overrides):
@@ -30,7 +30,7 @@ def _trend_row(**overrides):
 
 def test_trend_continuation_builds_futures_entry_levels_with_unknown_liquidity_snapshot():
     signal = trend_continuation_setup(
-        _trend_row(spread_pct=999.0, liquidity_score=0.0, is_eligible=False)
+        _trend_row(spread_pct=999.0, liquidity_score=0.0, is_eligible=False, liquidity_state="unknown")
     )
 
     assert signal is not None
@@ -48,7 +48,7 @@ def test_trend_continuation_blocks_known_non_eligible_liquidity():
     assert signal is None
 
 
-def test_operator_action_keeps_entry_levels_with_unknown_liquidity_as_manual_warning():
+def test_operator_action_keeps_unknown_liquidity_in_wait_with_manual_warning():
     decision = classify_operator_action(
         {
             "symbol": "BTCUSDT",
@@ -74,7 +74,33 @@ def test_operator_action_keeps_entry_levels_with_unknown_liquidity_as_manual_war
         }
     )
 
-    assert decision["operator_action"] == "REVIEW_ENTRY"
+    assert decision["operator_action"] == "WAIT"
     assert any(item["code"] == "liquidity_unknown" for item in decision["operator_warnings"])
     assert any(item["code"] == "spread_unknown" for item in decision["operator_warnings"])
     assert decision["operator_hard_reasons"] == []
+
+
+def test_bollinger_reversion_respects_zero_bb_position():
+    signal = bollinger_rsi_reversion(
+        _trend_row(
+            close=100.0,
+            atr_14=1.0,
+            atr_pct=0.01,
+            ema_20=100.0,
+            ema_50=100.0,
+            ema_200=99.5,
+            rsi_14=25.0,
+            bb_position=0.0,
+            ema20_50_gap=0.0,
+            is_eligible=True,
+            liquidity_score=8.0,
+            spread_pct=0.01,
+        )
+    )
+
+    assert signal is not None
+    assert signal.strategy == "bollinger_rsi_reversion"
+    assert signal.direction == "long"
+    assert signal.rationale["bb_position"] == 0.0
+    assert signal.stop_loss < signal.entry < signal.take_profit
+

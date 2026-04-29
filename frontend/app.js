@@ -283,6 +283,16 @@ function hasNumber(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 }
 
+function riskFromSpread(s) {
+  const spread = num(s?.spread_pct, null);
+  // Неизвестный spread нельзя считать нулевым риском: стакан мог не загрузиться,
+  // а рекомендация без подтвержденного spread должна визуально оставаться осторожной.
+  if (spread === null) return 18;
+  if (spread > 0.15) return 25;
+  if (spread > 0.08) return 12;
+  return 4;
+}
+
 function mlEvidenceStatus(s) {
   if (!hasNumber(s?.roc_auc)) return 'warn';
   const rocAuc = num(s?.roc_auc, 0.5);
@@ -345,7 +355,7 @@ function renderDecisionMeters(s, d) {
   const confidence = num(s?.confidence, null);
   const riskValue = s ? Math.round(Math.min(100, Math.max(0,
     (levelIssue ? 35 : 0)
-    + (num(s.spread_pct, 0) > 0.15 ? 25 : num(s.spread_pct, 0) > 0.08 ? 12 : 4)
+    + riskFromSpread(s)
     + Math.min(35, Math.max(0, num(s.max_drawdown, 0) * 100))
     + (mtfSeverity(s) === 'fail' ? 30 : mtfSeverity(s) === 'warn' ? 14 : 0)
     + (decisionFor(s).level === 'reject' ? 18 : decisionFor(s).level === 'watch' ? 8 : 0)

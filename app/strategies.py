@@ -37,6 +37,17 @@ def _finite(value: Any, default: float | None = None) -> float | None:
     return out
 
 
+def _finite_or(value: Any, default: float) -> float:
+    """Возвращает числовое значение, не подменяя валидный ноль дефолтом.
+
+    В торговых признаках ноль часто является осмысленным значением: funding=0,
+    bb_position=0 у нижней полосы, spread=0 для идеального snapshot. Конструкция
+    `x or default` ломает такие случаи и может скрыть настоящий торговый сигнал.
+    """
+    parsed = _finite(value)
+    return default if parsed is None else parsed
+
+
 def _boolish(value: Any, default: bool | None = None) -> bool | None:
     if value is None:
         return default
@@ -121,16 +132,27 @@ def _risk_levels(direction: str, close: float, atr: float, sl_atr: float = 1.8, 
 
 
 def _market_quality(row: pd.Series) -> tuple[bool, dict[str, Any]]:
-    spread = _finite(row.get("spread_pct"), 999.0) or 999.0
-    liquidity = _finite(row.get("liquidity_score"), 0.0) or 0.0
+    spread_raw = _finite(row.get("spread_pct"))
+    liquidity_raw = _finite(row.get("liquidity_score"))
     eligible_raw = _boolish(row.get("is_eligible"), None)
-    missing_snapshot = liquidity == 0 and spread >= 999 and eligible_raw is None
+
+    # В feature-join отсутствующий liquidity snapshot может приходить с явным
+    # liquidity_state=unknown и защитными placeholder-значениями. Без такого
+    # признака is_eligible=false считается доказанным hard filter, а не пропуском.
+    liquidity_state = str(row.get("liquidity_state", "") or "").lower()
+    missing_snapshot = (
+        liquidity_state == "unknown"
+        or (spread_raw is None and liquidity_raw is None and eligible_raw is None)
+        or (eligible_raw is None and (spread_raw is None or spread_raw >= 900.0) and (liquidity_raw is None or liquidity_raw <= 0.0))
+    )
     if missing_snapshot:
-        # Не создаем ложное чувство безопасности: неизвестная ликвидность допускает
-        # расчет кандидатного сетапа, но не автоматический перевод в REVIEW_ENTRY.
         return True, {"liquidity_state": "unknown", "is_eligible": None, "spread_pct": None, "liquidity_score": None}
-    # Явный is_eligible=false всегда блокирует генерацию сигнала; строковое false
-    # нельзя трактовать как truthy-значение.
+
+    spread = 999.0 if spread_raw is None else spread_raw
+    liquidity = 0.0 if liquidity_raw is None else liquidity_raw
+
+    # Явный is_eligible=false при нормальном snapshot — hard filter генерации
+    # сигнала. Строковое "false" нельзя трактовать как truthy-значение.
     is_eligible = eligible_raw is True
     ok = spread <= settings.max_spread_pct and liquidity >= 0 and is_eligible
     return ok, {"spread_pct": spread, "liquidity_score": liquidity, "is_eligible": is_eligible}
@@ -174,16 +196,16 @@ def donchian_breakout(row: pd.Series) -> StrategySignal | None:
     atr = _finite(row.get("atr_14"), (close or 0) * 0.01)
     if not _valid_price_context(close, atr):
         return None
-    vol_z = _finite(row.get("volume_z"), 0.0) or 0.0
-    micro = _finite(row.get("micro_sentiment_score"), 0.0) or 0.0
-    ema20 = _finite(row.get("ema_20"), 0.0) or 0.0
-    ema50 = _finite(row.get("ema_50"), 0.0) or 0.0
+    vol_z = _finite_or(row.get("volume_z"), 0.0)
+    micro = _finite_or(row.get("micro_sentiment_score"), 0.0)
+    ema20 = _finite_or(row.get("ema_20"), 0.0)
+    ema50 = _finite_or(row.get("ema_50"), 0.0)
     if close > float(row.get("donchian_high", np.inf)) and ema20 > ema50:
-        conf = min(0.95, 0.55 + max(vol_z, 0) * 0.05 + max(_finite(row.get("ema20_50_gap"), 0) or 0, 0) * 7 + max(micro, 0) * 0.05)
+        conf = min(0.95, 0.55 + max(vol_z, 0) * 0.05 + max(_finite_or(row.get("ema20_50_gap"), 0.0), 0) * 7 + max(micro, 0) * 0.05)
         sl, tp = _risk_levels("long", close, atr)
         return StrategySignal("donchian_atr_breakout", "long", conf, close, sl, tp, atr, {"reason": "price_breaks_20_bar_high_in_uptrend", "volume_z": vol_z, "micro_sentiment": micro, **quality})
     if close < float(row.get("donchian_low", -np.inf)) and ema20 < ema50:
-        conf = min(0.95, 0.55 + max(vol_z, 0) * 0.05 + max(-(_finite(row.get("ema20_50_gap"), 0) or 0), 0) * 7 + max(-micro, 0) * 0.05)
+        conf = min(0.95, 0.55 + max(vol_z, 0) * 0.05 + max(-(_finite_or(row.get("ema20_50_gap"), 0.0)), 0) * 7 + max(-micro, 0) * 0.05)
         sl, tp = _risk_levels("short", close, atr)
         return StrategySignal("donchian_atr_breakout", "short", conf, close, sl, tp, atr, {"reason": "price_breaks_20_bar_low_in_downtrend", "volume_z": vol_z, "micro_sentiment": micro, **quality})
     return None
@@ -197,12 +219,12 @@ def ema_pullback(row: pd.Series) -> StrategySignal | None:
     atr = _finite(row.get("atr_14"), (close or 0) * 0.01)
     if not _valid_price_context(close, atr):
         return None
-    rsi = _finite(row.get("rsi_14"), 50.0) or 50.0
-    sentiment = _finite(row.get("sentiment_score"), 0.0) or 0.0
-    micro = _finite(row.get("micro_sentiment_score"), 0.0) or 0.0
-    ema20 = _finite(row.get("ema_20"), 0.0) or 0.0
-    ema50 = _finite(row.get("ema_50"), 0.0) or 0.0
-    ema200 = _finite(row.get("ema_200"), 0.0) or 0.0
+    rsi = _finite_or(row.get("rsi_14"), 50.0)
+    sentiment = _finite_or(row.get("sentiment_score"), 0.0)
+    micro = _finite_or(row.get("micro_sentiment_score"), 0.0)
+    ema20 = _finite_or(row.get("ema_20"), 0.0)
+    ema50 = _finite_or(row.get("ema_50"), 0.0)
+    ema200 = _finite_or(row.get("ema_200"), 0.0)
     if ema20 > ema50 > ema200 and 38 <= rsi <= 55 and close >= ema50:
         conf = min(0.9, 0.52 + (55 - rsi) * 0.01 + max(sentiment, 0) * 0.05 + max(micro, 0) * 0.05)
         sl, tp = _risk_levels("long", close, atr, 1.5, 2.7)
@@ -222,9 +244,9 @@ def bollinger_rsi_reversion(row: pd.Series) -> StrategySignal | None:
     atr = _finite(row.get("atr_14"), (close or 0) * 0.01)
     if not _valid_price_context(close, atr):
         return None
-    rsi = _finite(row.get("rsi_14"), 50.0) or 50.0
-    bb_pos = _finite(row.get("bb_position"), 0.5) or 0.5
-    trend_strength = abs(_finite(row.get("ema20_50_gap"), 0.0) or 0.0)
+    rsi = _finite_or(row.get("rsi_14"), 50.0)
+    bb_pos = _finite_or(row.get("bb_position"), 0.5)
+    trend_strength = abs(_finite_or(row.get("ema20_50_gap"), 0.0))
     if bb_pos < 0.08 and rsi < 32 and trend_strength < 0.025:
         conf = min(0.88, 0.54 + (32 - rsi) * 0.012)
         sl, tp = _risk_levels("long", close, atr, 1.2, 2.0)
@@ -244,11 +266,11 @@ def volatility_squeeze(row: pd.Series, history: pd.DataFrame) -> StrategySignal 
     atr = _finite(row.get("atr_14"), (close or 0) * 0.01)
     if not _valid_price_context(close, atr):
         return None
-    width = _finite(row.get("bb_width"), 0.0) or 0.0
+    width = _finite_or(row.get("bb_width"), 0.0)
     width_q20 = float(history["bb_width"].tail(120).quantile(0.2))
-    vol_z = _finite(row.get("volume_z"), 0.0) or 0.0
-    micro = _finite(row.get("micro_sentiment_score"), 0.0) or 0.0
-    ema20 = _finite(row.get("ema_20"), close) or close
+    vol_z = _finite_or(row.get("volume_z"), 0.0)
+    micro = _finite_or(row.get("micro_sentiment_score"), 0.0)
+    ema20 = _finite_or(row.get("ema_20"), close)
     if width <= width_q20 and vol_z > 0.5:
         if close > ema20 and micro > -0.35:
             sl, tp = _risk_levels("long", close, atr, 1.6, 3.2)
@@ -267,8 +289,8 @@ def funding_contrarian(row: pd.Series) -> StrategySignal | None:
     atr = _finite(row.get("atr_14"), (close or 0) * 0.01)
     if not _valid_price_context(close, atr):
         return None
-    funding = _finite(row.get("funding_rate"), 0.0) or 0.0
-    rsi = _finite(row.get("rsi_14"), 50.0) or 50.0
+    funding = _finite_or(row.get("funding_rate"), 0.0)
+    rsi = _finite_or(row.get("rsi_14"), 50.0)
     if funding > 0.0008 and rsi > 64:
         sl, tp = _risk_levels("short", close, atr, 1.4, 2.2)
         return StrategySignal("funding_extreme_contrarian", "short", min(0.84, 0.53 + funding * 250 + (rsi - 64) * 0.01), close, sl, tp, atr, {"reason": "crowded_longs_high_funding", "funding_rate": funding, **quality})
@@ -286,10 +308,10 @@ def oi_confirmation(row: pd.Series) -> StrategySignal | None:
     atr = _finite(row.get("atr_14"), (close or 0) * 0.01)
     if not _valid_price_context(close, atr):
         return None
-    oi_chg = _finite(row.get("oi_change_24"), 0.0) or 0.0
-    ret_12 = _finite(row.get("ret_12"), 0.0) or 0.0
-    ema20 = _finite(row.get("ema_20"), 0.0) or 0.0
-    ema50 = _finite(row.get("ema_50"), 0.0) or 0.0
+    oi_chg = _finite_or(row.get("oi_change_24"), 0.0)
+    ret_12 = _finite_or(row.get("ret_12"), 0.0)
+    ema20 = _finite_or(row.get("ema_20"), 0.0)
+    ema50 = _finite_or(row.get("ema_50"), 0.0)
     if oi_chg > 0.025 and ret_12 > 0.015 and ema20 > ema50:
         sl, tp = _risk_levels("long", close, atr, 1.7, 3.0)
         return StrategySignal("oi_trend_confirmation", "long", min(0.82, 0.54 + oi_chg * 3 + ret_12 * 4), close, sl, tp, atr, {"reason": "price_and_oi_expand_together", "oi_change_24": oi_chg, **quality})
@@ -307,11 +329,11 @@ def sentiment_filter(row: pd.Series) -> StrategySignal | None:
     atr = _finite(row.get("atr_14"), (close or 0) * 0.01)
     if not _valid_price_context(close, atr):
         return None
-    sentiment = _finite(row.get("sentiment_score"), 0.0) or 0.0
-    news = _finite(row.get("news_sentiment_score"), 0.0) or 0.0
-    rsi = _finite(row.get("rsi_14"), 50.0) or 50.0
-    ema20 = _finite(row.get("ema_20"), close) or close
-    ema50 = _finite(row.get("ema_50"), close) or close
+    sentiment = _finite_or(row.get("sentiment_score"), 0.0)
+    news = _finite_or(row.get("news_sentiment_score"), 0.0)
+    rsi = _finite_or(row.get("rsi_14"), 50.0)
+    ema20 = _finite_or(row.get("ema_20"), close)
+    ema50 = _finite_or(row.get("ema_50"), close)
     if sentiment < -0.55 and rsi < 35 and ema20 >= ema50 * 0.985:
         sl, tp = _risk_levels("long", close, atr, 1.3, 2.2)
         return StrategySignal("sentiment_fear_reversal", "long", min(0.78, 0.52 + abs(sentiment) * 0.18 + (35 - rsi) * 0.008), close, sl, tp, atr, {"reason": "extreme_fear_plus_technical_exhaustion", "sentiment": sentiment, "news_sentiment": news, **quality})
@@ -339,16 +361,16 @@ def trend_continuation_setup(row: pd.Series) -> StrategySignal | None:
     if not _valid_price_context(close, atr):
         return None
 
-    rsi = _finite(row.get("rsi_14"), 50.0) or 50.0
-    ema20 = _finite(row.get("ema_20"), 0.0) or 0.0
-    ema50 = _finite(row.get("ema_50"), 0.0) or 0.0
-    ema200 = _finite(row.get("ema_200"), 0.0) or 0.0
-    ret_3 = _finite(row.get("ret_3"), 0.0) or 0.0
-    ret_12 = _finite(row.get("ret_12"), 0.0) or 0.0
-    vol_z = _finite(row.get("volume_z"), 0.0) or 0.0
-    funding = _finite(row.get("funding_rate"), 0.0) or 0.0
-    atr_pct = _finite(row.get("atr_pct"), atr / close) or (atr / close)
-    bb_position = _finite(row.get("bb_position"), 0.5) or 0.5
+    rsi = _finite_or(row.get("rsi_14"), 50.0)
+    ema20 = _finite_or(row.get("ema_20"), 0.0)
+    ema50 = _finite_or(row.get("ema_50"), 0.0)
+    ema200 = _finite_or(row.get("ema_200"), 0.0)
+    ret_3 = _finite_or(row.get("ret_3"), 0.0)
+    ret_12 = _finite_or(row.get("ret_12"), 0.0)
+    vol_z = _finite_or(row.get("volume_z"), 0.0)
+    funding = _finite_or(row.get("funding_rate"), 0.0)
+    atr_pct = _finite_or(row.get("atr_pct"), atr / close)
+    bb_position = _finite_or(row.get("bb_position"), 0.5)
 
     if not all(x > 0 for x in (ema20, ema50, ema200)):
         return None

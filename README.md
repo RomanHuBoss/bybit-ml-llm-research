@@ -237,3 +237,19 @@ python -S -m pytest -q tests/test_red_team_advisory_safety_v15.py
 ```
 
 В отдельных Linux sandbox-сессиях Python с тяжелыми scientific-зависимостями (`pandas`/BLAS) может зависать при завершении процесса. Это не связано с логикой проекта; при таком симптоме запускайте тесты в чистом virtualenv из `requirements.txt` либо с ограничением потоков BLAS, как описано в `sitecustomize.py`.
+
+## Ревизия V16 — жесткая инженерная верификация от 2026-04-29
+
+Эта ревизия закрывает дополнительные дефекты, обнаруженные при повторном red-team аудите торгово-советующего контура:
+
+- Feature-layer теперь явно маркирует отсутствие liquidity snapshot через `liquidity_state=unknown`. Это отделяет неизвестность от доказанного `is_eligible=false`.
+- Strategy-layer трактует `liquidity_state=unknown` как warning-candidate: сетап можно рассчитать для очереди и объяснимости, но серверная рекомендация остается `WAIT`, пока ликвидность и spread не подтверждены.
+- Явный `is_eligible=false` без `liquidity_state=unknown` остается hard filter и блокирует генерацию торгового сигнала.
+- Исправлена обработка нулевых торговых признаков. Валидные значения `0.0` больше не подменяются дефолтами через `or default`; это критично для `bb_position=0.0`, `funding_rate=0.0`, `volume_z=0.0`, `ema20_50_gap=0.0`.
+- Frontend risk meter больше не считает отсутствующий `spread_pct` нулевым риском. Unknown spread получает отдельный warning-вес.
+- Добавлен static safety-test, подтверждающий отсутствие private Bybit order-execution markers в backend/frontend.
+- Полный тестовый контур после правок: `109 passed`.
+
+Дополнительное принятое допущение V16: если источник фичей не получил liquidity snapshot, он обязан передать это явно как `liquidity_state=unknown`. Placeholder-значения `spread_pct=999`, `liquidity_score=0` сами по себе больше не являются достаточным доказательством unknown-состояния, если одновременно присутствует явный `is_eligible=false` без маркера неизвестности.
+
+Отчет аудита сохранен в `docs/RED_TEAM_AUDIT_2026-04-29.md`.
