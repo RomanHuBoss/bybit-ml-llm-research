@@ -134,6 +134,7 @@ class Settings:
     min_turnover_24h: float = _float("MIN_TURNOVER_24H", 20_000_000.0)
     min_open_interest_value: float = _float("MIN_OPEN_INTEREST_VALUE", 15_000_000.0)
     max_spread_pct: float = _float("MAX_SPREAD_PCT", 0.05)
+    liquidity_snapshot_max_age_minutes: int = _int("LIQUIDITY_SNAPSHOT_MAX_AGE_MINUTES", 120)
     min_listing_age_days: int = _int("MIN_LISTING_AGE_DAYS", 45)
     allow_unverified_core_symbols: bool = _bool("ALLOW_UNVERIFIED_CORE_SYMBOLS", False)
 
@@ -295,6 +296,8 @@ def _validate_settings(s: Settings) -> None:
         problems.append("ML_AUTO_TRAIN_FAILURE_COOLDOWN_HOURS должен быть >= 1")
     if s.universe_limit <= 0 or s.dynamic_symbol_limit <= 0:
         problems.append("UNIVERSE_LIMIT и DYNAMIC_SYMBOL_LIMIT должны быть > 0")
+    if not (1 <= s.liquidity_snapshot_max_age_minutes <= 24 * 60):
+        problems.append("LIQUIDITY_SNAPSHOT_MAX_AGE_MINUTES должен быть в диапазоне [1; 1440]")
     if s.bybit_max_retries < 0:
         problems.append("BYBIT_MAX_RETRIES не может быть отрицательным")
     if not (1 <= s.bybit_max_concurrent_requests <= 16):

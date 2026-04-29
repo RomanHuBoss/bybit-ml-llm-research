@@ -82,6 +82,7 @@ STRATEGY_NAMES = (
     "funding_extreme_contrarian",
     "oi_trend_confirmation",
     "volatility_squeeze_breakout",
+    "trend_continuation_setup",
     "sentiment_fear_reversal",
     "sentiment_greed_reversal",
 )
@@ -246,6 +247,7 @@ def status() -> dict[str, Any]:
             "max_position_notional_usdt": settings.max_position_notional_usdt,
             "max_leverage": settings.max_leverage,
             "require_liquidity_for_signals": settings.require_liquidity_for_signals,
+            "liquidity_snapshot_max_age_minutes": settings.liquidity_snapshot_max_age_minutes,
         },
         "max_signal_age_hours": settings.max_signal_age_hours,
         "backtest_auto": {
@@ -456,23 +458,35 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 WHERE category=%s AND interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
                   AND bar_time IS NOT NULL
                 ORDER BY category, symbol, interval, strategy, direction, created_at DESC
-            ), latest_liq_time AS (
-                SELECT MAX(captured_at) AS captured_at FROM liquidity_snapshots WHERE category=%s
-            ), latest_liq AS (
-                SELECT l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
+            ), latest_liq_raw AS (
+                SELECT DISTINCT ON (l.symbol) l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h,
+                       l.open_interest_value, l.is_eligible, l.captured_at AS liquidity_captured_at,
+                       (l.captured_at >= NOW() - (%s::text || ' minutes')::interval) AS liquidity_is_fresh
                 FROM liquidity_snapshots l
-                JOIN latest_liq_time t ON t.captured_at = l.captured_at
                 WHERE l.category=%s
+                ORDER BY l.symbol, l.captured_at DESC
+            ), latest_liq AS (
+                SELECT symbol,
+                       CASE WHEN liquidity_is_fresh THEN liquidity_score ELSE NULL END AS liquidity_score,
+                       CASE WHEN liquidity_is_fresh THEN spread_pct ELSE NULL END AS spread_pct,
+                       CASE WHEN liquidity_is_fresh THEN turnover_24h ELSE NULL END AS turnover_24h,
+                       CASE WHEN liquidity_is_fresh THEN open_interest_value ELSE NULL END AS open_interest_value,
+                       CASE WHEN liquidity_is_fresh THEN is_eligible ELSE NULL END AS is_eligible,
+                       liquidity_captured_at,
+                       CASE WHEN liquidity_captured_at IS NULL THEN 'missing'
+                            WHEN liquidity_is_fresh THEN 'fresh' ELSE 'stale' END AS liquidity_status
+                FROM latest_liq_raw
             )
             SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
                    s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
-                   l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
+                   l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
+                   l.liquidity_captured_at, l.liquidity_status
             FROM latest_signals s
             LEFT JOIN latest_liq l ON l.symbol=s.symbol
             ORDER BY s.created_at DESC
             LIMIT %s
             """,
-            (category, context_intervals, settings.max_signal_age_hours, category, category, query_limit),
+            (category, context_intervals, settings.max_signal_age_hours, settings.liquidity_snapshot_max_age_minutes, category, query_limit),
         )
         rows = annotate_and_filter_fresh_signals(rows)
         rows = _apply_mtf_consensus(
@@ -488,24 +502,43 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
 
     rows = fetch_all(
         """
-        WITH latest_liq_time AS (
-            SELECT MAX(captured_at) AS captured_at FROM liquidity_snapshots WHERE category=%s
-        ), latest_liq AS (
-            SELECT l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
+        WITH latest_signals AS (
+            SELECT DISTINCT ON (category, symbol, interval, strategy, direction)
+                   id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
+                   entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
+            FROM signals
+            WHERE category=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
+              AND bar_time IS NOT NULL
+            ORDER BY category, symbol, interval, strategy, direction, created_at DESC
+        ), latest_liq_raw AS (
+            SELECT DISTINCT ON (l.symbol) l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h,
+                   l.open_interest_value, l.is_eligible, l.captured_at AS liquidity_captured_at,
+                   (l.captured_at >= NOW() - (%s::text || ' minutes')::interval) AS liquidity_is_fresh
             FROM liquidity_snapshots l
-            JOIN latest_liq_time t ON t.captured_at = l.captured_at
             WHERE l.category=%s
+            ORDER BY l.symbol, l.captured_at DESC
+        ), latest_liq AS (
+            SELECT symbol,
+                   CASE WHEN liquidity_is_fresh THEN liquidity_score ELSE NULL END AS liquidity_score,
+                   CASE WHEN liquidity_is_fresh THEN spread_pct ELSE NULL END AS spread_pct,
+                   CASE WHEN liquidity_is_fresh THEN turnover_24h ELSE NULL END AS turnover_24h,
+                   CASE WHEN liquidity_is_fresh THEN open_interest_value ELSE NULL END AS open_interest_value,
+                   CASE WHEN liquidity_is_fresh THEN is_eligible ELSE NULL END AS is_eligible,
+                   liquidity_captured_at,
+                   CASE WHEN liquidity_captured_at IS NULL THEN 'missing'
+                        WHEN liquidity_is_fresh THEN 'fresh' ELSE 'stale' END AS liquidity_status
+            FROM latest_liq_raw
         )
         SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit,
                s.atr, s.ml_probability, s.sentiment_score, s.rationale,
-               l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
-        FROM signals s
+               l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
+               l.liquidity_captured_at, l.liquidity_status
+        FROM latest_signals s
         LEFT JOIN latest_liq l ON l.symbol=s.symbol
-        WHERE s.category=%s AND s.bar_time IS NOT NULL
         ORDER BY s.created_at DESC
         LIMIT %s
         """,
-        (category, category, category, limit),
+        (category, settings.max_signal_age_hours, settings.liquidity_snapshot_max_age_minutes, category, limit),
     )
     rows = consolidate_operator_queue(annotate_recommendations(annotate_and_filter_fresh_signals(rows)), limit=limit)
     return {"ok": True, "category": category, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}

@@ -839,7 +839,8 @@ function baseChecklistFor(s) {
   const hasSpread = hasNumber(s.spread_pct);
   const spread = num(s.spread_pct, null);
   const confidence = num(s.confidence, 0);
-  const liquidityKnown = s.is_eligible !== null && s.is_eligible !== undefined;
+  const liquidityApiStatus = String(s.liquidity_status || '').toLowerCase();
+  const liquidityKnown = s.is_eligible !== null && s.is_eligible !== undefined && liquidityApiStatus !== 'stale' && liquidityApiStatus !== 'missing';
   const eligible = bool(s.is_eligible);
   const maxAgeHours = num(state.status?.max_signal_age_hours, 24) || 24;
   const serverFreshnessKnown = typeof s.fresh === 'boolean' || Boolean(s.data_status);
@@ -854,6 +855,15 @@ function baseChecklistFor(s) {
     : `Создан ${ageText(s.created_at)}. Максимальный возраст: ${maxAgeHours} ч.`;
   const spreadStatus = !hasSpread ? 'warn' : spread <= 0.08 ? 'pass' : spread <= 0.15 ? 'warn' : 'fail';
   const liquidityStatus = !liquidityKnown ? 'warn' : eligible ? 'pass' : 'fail';
+  const liquidityTitle = liquidityStatus === 'pass'
+    ? 'Ликвидность допущена'
+    : liquidityApiStatus === 'stale'
+      ? 'Liquidity snapshot устарел'
+      : liquidityApiStatus === 'missing'
+        ? 'Liquidity snapshot отсутствует'
+        : liquidityStatus === 'warn'
+          ? 'Ликвидность ожидает snapshot'
+          : 'Ликвидность не допущена';
   const backtestStatus = backtestEvidenceStatus(s);
   const directionConflict = bool(s.direction_conflict);
   const stability = num(s.operator_stability_score, null);
@@ -866,7 +876,7 @@ function baseChecklistFor(s) {
     { key: 'freshness', status: stale ? 'fail' : 'pass', title: freshnessTitle, text: freshnessText },
     { key: 'direction', status: s.direction === 'long' || s.direction === 'short' ? 'pass' : 'fail', title: s.direction === 'long' || s.direction === 'short' ? 'Направление задано' : 'Нет направления сделки', text: `Направление: ${String(s.direction || 'flat').toUpperCase()}. Flat не является сделкой.` },
     { key: 'mtf', status: mtfSeverity(s), title: mtfSeverity(s) === 'pass' ? 'MTF согласован' : mtfSeverity(s) === 'warn' ? 'MTF неполный' : 'MTF запрещает вход', text: `${mtfLabel(s)}. ${s.mtf_reason || '15m — вход; 60m и 240m — фильтры, а не отдельные триггеры.'}` },
-    { key: 'liquidity', status: liquidityStatus, title: liquidityStatus === 'pass' ? 'Ликвидность допущена' : liquidityStatus === 'warn' ? 'Ликвидность ожидает snapshot' : 'Ликвидность не допущена', text: `Liquidity score ${fmt(s.liquidity_score, 2)}, spread ${hasSpread ? pctRaw(spread, 4) : '—'}, turnover 24h ${fmt(s.turnover_24h, 1)} USDT.` },
+    { key: 'liquidity', status: liquidityStatus, title: liquidityTitle, text: `Liquidity score ${fmt(s.liquidity_score, 2)}, spread ${hasSpread ? pctRaw(spread, 4) : '—'}, turnover 24h ${fmt(s.turnover_24h, 1)} USDT. Status: ${escapeHtml(s.liquidity_status || (liquidityKnown ? 'fresh' : 'unknown'))}.` },
     { key: 'spread', status: spreadStatus, title: spreadStatus === 'pass' ? 'Spread нормальный' : spreadStatus === 'warn' ? 'Spread требует контроля' : 'Spread слишком широкий', text: `Текущий spread ${hasSpread ? pctRaw(spread, 4) : '—'}. Чем шире spread, тем хуже исполнимость ручного входа по фьючерсу.` },
     { key: 'rr', status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail', title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны', text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.' },
     { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.52 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
@@ -1703,7 +1713,12 @@ function bindControls() {
       });
       await refreshRank();
       await refreshSignals();
-      await api('/api/llm/background/run-now', { method: 'POST' });
+      try {
+        await api('/api/llm/background/run-now', { method: 'POST' });
+      } catch (err) {
+        console.warn('LLM background evaluation was skipped after signal build:', err);
+        showOperationStatus(`Сигналы построены; LLM-оценка временно недоступна: ${err.message || err}`, 'warning');
+      }
       await refreshBacktestStatus();
       await refreshLlmStatus();
       await refreshNews();

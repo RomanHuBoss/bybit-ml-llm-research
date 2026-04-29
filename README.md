@@ -275,3 +275,31 @@ pytest -q tests
 ```
 
 В текущей sandbox-среде `pytest` один раз сообщил `113 passed`, но последующие процессы Python/pytest начали зависать на уровне импорта/завершения интерпретатора, что выглядит как ограничение окружения, а не как ошибка проекта. Поэтому для V17 дополнительно выполнены targeted/manual проверки нового модуля market-data quality и compile/static-проверки. Перед production/staging нужно повторить полный `pytest -q tests` в чистом virtualenv.
+
+
+## Ревизия V18 — symbol-scoped liquidity, Bybit pagination и UI resilience от 2026-04-29
+
+Дополнительная жесткая проверка после замечаний экспертов закрыла несколько дефектов, которые могли приводить к неверной операторской оценке сделки:
+
+- `/api/signals/latest` и `app/research.py` больше не используют глобальный `MAX(captured_at)` по всей категории. Последний liquidity snapshot выбирается отдельно по каждому `symbol`, иначе частичный sync одного инструмента мог сделать ликвидность остальных рынков неизвестной или неверной.
+- `app/symbols.py` также переведен на per-symbol latest liquidity: dynamic universe больше не строится по единственному глобальному timestamp и не допускает stale-symbols в выборку.
+- Введен параметр `LIQUIDITY_SNAPSHOT_MAX_AGE_MINUTES=120`. Устаревший snapshot не считается доказательством свежего spread/eligibility: в API он возвращается как `liquidity_status=stale`, а числовые liquidity-поля не используются для положительного решения.
+- `app/features.py` больше не переносит старый spread/eligibility вперед через `ffill` без ограничения возраста. Это защищает veto и confidence от устаревшего стакана.
+- `app/bybit_client.py` добавил cursor-pagination для `/v5/market/open-interest`, включая защиту от зацикленного cursor.
+- `app/api.py` синхронизирован со всеми стратегиями: `trend_continuation_setup` теперь присутствует в публичном статусе стратегий.
+- `frontend/app.js` отображает `fresh/stale/missing` состояние liquidity snapshot в operator checklist и не считает ошибку фоновой LLM-оценки фатальной ошибкой построения сигналов.
+- Добавлены regression-тесты для stale/fresh liquidity, per-symbol liquidity SQL contract, Bybit open-interest pagination и frontend liquidity degradation.
+
+Принятое допущение V18: если liquidity snapshot старше `LIQUIDITY_SNAPSHOT_MAX_AGE_MINUTES`, он может отображаться как техническая диагностическая информация, но не должен использоваться как подтверждение допустимости ручного входа. Оператор обязан проверить стакан/спред вручную либо дождаться свежего sync.
+
+Проверки V18:
+
+```bash
+python -S -m py_compile app/config.py app/features.py app/api.py app/research.py app/bybit_client.py
+node --check frontend/app.js
+pytest -q --import-mode=importlib -p no:cacheprovider
+```
+
+В текущей среде полный pytest-прогон выполнен из активного Python runtime, потому что обычный shell-процесс Python в этой sandbox-сессии зависал на platform `sitecustomize`/scientific-stack teardown. Результат полного прогона: `119 passed`.
+
+Отчет аудита V18 сохранен в `docs/RED_TEAM_AUDIT_2026-04-29_V18.md`.

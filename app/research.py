@@ -68,13 +68,24 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
             WHERE category=%s AND interval = ANY(%s)
               AND created_at >= NOW() - (%s::text || ' hours')::interval
             ORDER BY symbol, interval, created_at DESC
-        ), latest_liq_time AS (
-            SELECT MAX(captured_at) AS captured_at FROM liquidity_snapshots WHERE category=%s
-        ), latest_liq AS (
-            SELECT l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible
+        ), latest_liq_raw AS (
+            SELECT DISTINCT ON (l.symbol) l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h,
+                   l.open_interest_value, l.is_eligible, l.captured_at AS liquidity_captured_at,
+                   (l.captured_at >= NOW() - (%s::text || ' minutes')::interval) AS liquidity_is_fresh
             FROM liquidity_snapshots l
-            JOIN latest_liq_time t ON t.captured_at = l.captured_at
             WHERE l.category=%s
+            ORDER BY l.symbol, l.captured_at DESC
+        ), latest_liq AS (
+            SELECT symbol,
+                   CASE WHEN liquidity_is_fresh THEN liquidity_score ELSE NULL END AS liquidity_score,
+                   CASE WHEN liquidity_is_fresh THEN spread_pct ELSE NULL END AS spread_pct,
+                   CASE WHEN liquidity_is_fresh THEN turnover_24h ELSE NULL END AS turnover_24h,
+                   CASE WHEN liquidity_is_fresh THEN open_interest_value ELSE NULL END AS open_interest_value,
+                   CASE WHEN liquidity_is_fresh THEN is_eligible ELSE NULL END AS is_eligible,
+                   liquidity_captured_at,
+                   CASE WHEN liquidity_captured_at IS NULL THEN 'missing'
+                        WHEN liquidity_is_fresh THEN 'fresh' ELSE 'stale' END AS liquidity_status
+            FROM latest_liq_raw
         ), latest_llm AS (
             SELECT DISTINCT ON (signal_id)
                    signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
@@ -83,11 +94,12 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
             FROM llm_evaluations
             ORDER BY signal_id, updated_at DESC
         )
-        SELECT s.id, s.created_at, s.bar_time, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
+        SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
                s.entry, s.stop_loss, s.take_profit, s.ml_probability, s.sentiment_score, s.rationale,
                b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
                m.roc_auc, m.precision_score, m.recall_score,
                l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
+               l.liquidity_captured_at, l.liquidity_status,
                e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
                (
                    COALESCE(s.confidence::float, 0) * 0.30
@@ -117,7 +129,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
             category,
             query_intervals,
             settings.ml_auto_train_ttl_hours,
-            category,
+            settings.liquidity_snapshot_max_age_minutes,
             category,
             settings.max_spread_pct,
             query_limit,

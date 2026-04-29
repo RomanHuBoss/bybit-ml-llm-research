@@ -68,7 +68,7 @@ def test_market_frame_liquidity_eligibility_no_future_warning(monkeypatch):
     )
     liquidity = pd.DataFrame(
         {
-            "start_time": [start + timedelta(hours=10), start + timedelta(hours=40)],
+            "start_time": [start + timedelta(hours=10), start + timedelta(hours=78)],
             "liquidity_score": [7.5, 8.0],
             "spread_pct": [0.02, 0.01],
             "is_eligible": pd.Series([None, True], dtype=object),

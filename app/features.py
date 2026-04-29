@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .config import settings
 from .db import query_df
 from .indicators import add_indicators
 from .market_data_quality import clean_market_frame
@@ -117,7 +118,7 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
 
     liquidity = query_df(
         """
-        SELECT captured_at AS start_time, liquidity_score, spread_pct, is_eligible
+        SELECT captured_at AS liquidity_captured_at, liquidity_score, spread_pct, is_eligible
         FROM liquidity_snapshots
         WHERE category=%s AND symbol=%s
         ORDER BY captured_at
@@ -125,24 +126,42 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
         (category, symbol.upper()),
     )
     if not liquidity.empty:
-        liquidity["start_time"] = _to_utc(liquidity["start_time"])
+        if "liquidity_captured_at" not in liquidity.columns and "start_time" in liquidity.columns:
+            liquidity = liquidity.rename(columns={"start_time": "liquidity_captured_at"})
+        if "liquidity_captured_at" not in liquidity.columns:
+            liquidity = pd.DataFrame()
+    if not liquidity.empty:
+        liquidity["liquidity_captured_at"] = _to_utc(liquidity["liquidity_captured_at"])
         liquidity["liquidity_score"] = pd.to_numeric(liquidity["liquidity_score"], errors="coerce")
         liquidity["spread_pct"] = pd.to_numeric(liquidity["spread_pct"], errors="coerce")
-        liquidity = liquidity.dropna(subset=["start_time"]).sort_values("start_time")
-        df = pd.merge_asof(df.sort_values("start_time"), liquidity, on="start_time", direction="backward")
-        liquidity_known = df["liquidity_score"].notna() & df["spread_pct"].notna() & df["is_eligible"].notna()
+        liquidity = liquidity.dropna(subset=["liquidity_captured_at"]).sort_values("liquidity_captured_at")
+        df = pd.merge_asof(
+            df.sort_values("start_time"),
+            liquidity,
+            left_on="start_time",
+            right_on="liquidity_captured_at",
+            direction="backward",
+        )
+        age_minutes = (df["start_time"] - df["liquidity_captured_at"]).dt.total_seconds() / 60.0
+        freshness_ok = age_minutes.ge(0) & age_minutes.le(settings.liquidity_snapshot_max_age_minutes)
+        completeness_ok = df["liquidity_score"].notna() & df["spread_pct"].notna() & df["is_eligible"].notna()
+        liquidity_known = freshness_ok & completeness_ok
         df["liquidity_state"] = liquidity_known.map({True: "known", False: "unknown"})
-        df["liquidity_score"] = df["liquidity_score"].ffill().fillna(0.0)
-        df["spread_pct"] = df["spread_pct"].ffill().fillna(999.0)
+        df["liquidity_age_minutes"] = age_minutes.where(age_minutes.notna())
+        # Устаревшая ликвидность не должна тихо переноситься вперед через ffill:
+        # спред и eligibility быстро меняются и напрямую влияют на торговый veto.
+        df["liquidity_score"] = df["liquidity_score"].where(liquidity_known).fillna(0.0)
+        df["spread_pct"] = df["spread_pct"].where(liquidity_known).fillna(999.0)
         # Nullable BooleanDtype убирает FutureWarning pandas о silent downcasting.
         # Неизвестность отдельно фиксируется в liquidity_state, чтобы strategy-layer
         # не путал отсутствие snapshot с доказанным is_eligible=false.
-        df["is_eligible"] = df["is_eligible"].astype("boolean").ffill().fillna(False).astype(bool)
+        df["is_eligible"] = df["is_eligible"].astype("boolean").where(liquidity_known).fillna(False).astype(bool)
     else:
         df["liquidity_score"] = 0.0
         df["spread_pct"] = 999.0
         df["is_eligible"] = False
         df["liquidity_state"] = "unknown"
+        df["liquidity_age_minutes"] = pd.NA
 
     df["ema20_gap"] = df["close"] / df["ema_20"] - 1
     df["ema50_gap"] = df["close"] / df["ema_50"] - 1

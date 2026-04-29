@@ -24,17 +24,32 @@ def _jsonable(value: Any) -> Any:
 def latest_liquidity(category: str = "linear", limit: int = 100) -> list[dict[str, Any]]:
     rows = fetch_all(
         """
-        WITH latest AS (SELECT MAX(captured_at) AS captured_at FROM liquidity_snapshots WHERE category=%s)
-        SELECT l.symbol, l.captured_at, l.turnover_24h, l.volume_24h, l.open_interest_value,
-               l.spread_pct, l.funding_rate, l.listing_age_days, l.liquidity_score, l.is_eligible,
-               l.last_price
-        FROM liquidity_snapshots l
-        JOIN latest x ON x.captured_at = l.captured_at
-        WHERE l.category=%s
-        ORDER BY l.is_eligible DESC, l.liquidity_score DESC
+        WITH latest AS (
+            SELECT DISTINCT ON (l.symbol)
+                   l.symbol, l.captured_at, l.turnover_24h, l.volume_24h, l.open_interest_value,
+                   l.spread_pct, l.funding_rate, l.listing_age_days, l.liquidity_score, l.is_eligible,
+                   l.last_price,
+                   (l.captured_at >= NOW() - (%s::text || ' minutes')::interval) AS liquidity_is_fresh
+            FROM liquidity_snapshots l
+            WHERE l.category=%s
+            ORDER BY l.symbol, l.captured_at DESC
+        )
+        SELECT symbol, captured_at,
+               CASE WHEN liquidity_is_fresh THEN turnover_24h ELSE NULL END AS turnover_24h,
+               CASE WHEN liquidity_is_fresh THEN volume_24h ELSE NULL END AS volume_24h,
+               CASE WHEN liquidity_is_fresh THEN open_interest_value ELSE NULL END AS open_interest_value,
+               CASE WHEN liquidity_is_fresh THEN spread_pct ELSE NULL END AS spread_pct,
+               CASE WHEN liquidity_is_fresh THEN funding_rate ELSE NULL END AS funding_rate,
+               listing_age_days,
+               CASE WHEN liquidity_is_fresh THEN liquidity_score ELSE 0 END AS liquidity_score,
+               CASE WHEN liquidity_is_fresh THEN is_eligible ELSE FALSE END AS is_eligible,
+               last_price,
+               CASE WHEN liquidity_is_fresh THEN 'fresh' ELSE 'stale' END AS liquidity_status
+        FROM latest
+        ORDER BY is_eligible DESC, liquidity_score DESC
         LIMIT %s
         """,
-        (category, category, limit),
+        (settings.liquidity_snapshot_max_age_minutes, category, limit),
     )
     return rows
 

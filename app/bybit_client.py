@@ -167,13 +167,32 @@ class BybitClient:
         end_ms: int | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"category": category, "symbol": symbol.upper(), "intervalTime": interval_time, "limit": limit}
+        base_params: dict[str, Any] = {"category": category, "symbol": symbol.upper(), "intervalTime": interval_time, "limit": limit}
         if start_ms is not None:
-            params["startTime"] = start_ms
+            base_params["startTime"] = start_ms
         if end_ms is not None:
-            params["endTime"] = end_ms
-        result = self._get("/v5/market/open-interest", params)
-        return _result_list(result, "/v5/market/open-interest")
+            base_params["endTime"] = end_ms
+
+        all_items: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        for _page_no in range(MAX_BYBIT_CURSOR_PAGES):
+            params = dict(base_params)
+            if cursor:
+                params["cursor"] = cursor
+            result = self._get("/v5/market/open-interest", params)
+            all_items.extend(_result_list(result, "/v5/market/open-interest"))
+            next_cursor = result.get("nextPageCursor") or None
+            if not next_cursor:
+                break
+            next_cursor = str(next_cursor)
+            if next_cursor in seen_cursors:
+                raise BybitAPIError(f"Bybit open-interest cursor loop detected: {next_cursor!r}")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise BybitAPIError(f"Bybit open-interest exceeded {MAX_BYBIT_CURSOR_PAGES} cursor pages")
+        return all_items
 
     def get_tickers(self, category: str = "linear") -> list[dict[str, Any]]:
         result = self._get("/v5/market/tickers", {"category": category})

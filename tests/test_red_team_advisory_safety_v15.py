@@ -52,9 +52,12 @@ def test_confirmed_liquidity_can_still_reach_review_entry():
 def test_latest_signals_api_contract_includes_liquidity_join_for_operator_decision():
     source = Path("app/api.py").read_text(encoding="utf-8")
 
-    assert "latest_liq_time" in source
+    assert "latest_liq_raw" in source
+    assert "SELECT DISTINCT ON (l.symbol)" in source
+    assert "liquidity_snapshot_max_age_minutes" in source
     assert "l.liquidity_score, l.spread_pct" in source
     assert "l.turnover_24h, l.open_interest_value, l.is_eligible" in source
+    assert "l.liquidity_captured_at, l.liquidity_status" in source
 
 
 def test_frontend_directional_risk_reward_does_not_show_absolute_rr_for_bad_levels():

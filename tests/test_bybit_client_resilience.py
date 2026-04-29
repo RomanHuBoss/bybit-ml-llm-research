@@ -69,3 +69,54 @@ def test_bybit_market_list_endpoints_reject_non_list_payload(monkeypatch):
         assert "result.list has unexpected type" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("ожидалась BybitAPIError для не-list payload")
+
+
+def test_bybit_open_interest_paginates_cursor_and_preserves_params():
+    from app.bybit_client import BybitClient
+
+    class PagedOpenInterestClient(BybitClient):
+        def __init__(self):
+            super().__init__(sleep_sec=0)
+            self.calls = []
+
+        def _get(self, path, params):
+            self.calls.append((path, dict(params)))
+            if len(self.calls) == 1:
+                return {"list": [{"timestamp": "1000", "openInterest": "1"}], "nextPageCursor": "page-2"}
+            return {"list": [{"timestamp": "2000", "openInterest": "2"}], "nextPageCursor": ""}
+
+    client = PagedOpenInterestClient()
+    rows = client.get_open_interest("linear", "btcusdt", "15min", start_ms=1000, end_ms=2000, limit=200)
+
+    assert rows == [
+        {"timestamp": "1000", "openInterest": "1"},
+        {"timestamp": "2000", "openInterest": "2"},
+    ]
+    assert client.calls[0][0] == "/v5/market/open-interest"
+    assert client.calls[0][1]["symbol"] == "BTCUSDT"
+    assert "cursor" not in client.calls[0][1]
+    assert client.calls[1][1]["cursor"] == "page-2"
+    assert client.calls[1][1]["startTime"] == 1000
+    assert client.calls[1][1]["endTime"] == 2000
+
+
+def test_bybit_open_interest_detects_cursor_loop():
+    from app.bybit_client import BybitAPIError, BybitClient
+
+    class LoopingOpenInterestClient(BybitClient):
+        def __init__(self):
+            super().__init__(sleep_sec=0)
+            self.calls = 0
+
+        def _get(self, path, params):
+            self.calls += 1
+            return {"list": [{"timestamp": str(self.calls), "openInterest": "1"}], "nextPageCursor": "same-cursor"}
+
+    client = LoopingOpenInterestClient()
+    try:
+        client.get_open_interest("linear", "BTCUSDT", "15min")
+    except BybitAPIError as exc:
+        assert "open-interest cursor loop" in str(exc)
+        assert client.calls == 2
+    else:  # pragma: no cover
+        raise AssertionError("ожидалась BybitAPIError при повторяющемся курсоре open-interest")
