@@ -282,3 +282,19 @@ def test_safety_annotations_include_directional_level_validity():
     assert annotated["risk_reward"] == 1.0
     assert annotated["directional_risk_reward"] is None
     assert directional_risk_reward("short", 100.0, 104.0, 96.0) == 1.0
+
+
+def test_backtest_trade_storage_migration_failure_is_non_fatal(monkeypatch):
+    import app.backtest as backtest
+    from app.db import DatabaseConnectionError
+
+    def fail_storage():
+        raise DatabaseConnectionError("driver unavailable")
+
+    monkeypatch.setattr(backtest, "ensure_backtest_trades_storage", fail_storage)
+
+    warning = backtest._try_ensure_backtest_trades_storage()
+
+    assert warning is not None
+    assert "backtest_trades_storage_unverified" in warning
+    assert "driver unavailable" in warning

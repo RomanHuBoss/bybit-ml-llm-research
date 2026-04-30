@@ -384,3 +384,31 @@ psql -h <host> -p <port> -U <user> -d <db> -f sql/migrations/20260430_v20_strate
 ```
 
 This migration is idempotent. It creates `backtest_trades`, extends `strategy_quality`, and adds the indexes required by Strategy Lab.
+
+## Ревизия V21 — institutional decision cockpit и backtest persistence guard от 2026-04-30
+
+Эта ревизия закрывает UI/UX-проблему главного операторского экрана и один инфраструктурный дефект backtest persistence path.
+
+Ключевые изменения:
+
+- Главная decision-zone переработана в сторону **decision-first trading cockpit**: цена, expected move, entry, stop-loss, take-profit, freshness, data status, veto и причина veto теперь собраны в одном компактном блоке `decisionTelemetry`.
+- Добавлены JS-formatter/helper-функции для безопасного отображения price/volume/PnL/score/R/R и degraded-значений без ложных нулей.
+- Исправлен frontend warning-state для LLM/background errors: `warning` заменен на используемый UI-тон `warn`.
+- Убран дублирующий `refreshStatus()` после market sync.
+- В `styles.css` добавлен V21 institutional cockpit layer: более строгая dark-mode сетка, плотные KPI, telemetry grid, hover/micro-interactions, table highlights, skeleton loading, адаптивность и `prefers-reduced-motion`.
+- `run_backtest()` теперь не ломает уже рассчитанный результат на idempotent-проверке `backtest_trades`, если storage migration недоступна в тестовой/maintenance-среде. Такое состояние возвращается как `persistence_warnings`, а не скрывается.
+- Добавлены regression-тесты для V21 UI-contract и non-fatal backtest storage migration failure.
+
+Проверки V21:
+
+```bash
+python -S -c "import sys; sys.path.insert(0, '/opt/pyvenv/lib/python3.13/site-packages'); sys.path.insert(0,'.'); import pytest; raise SystemExit(pytest.main(['-q','tests','--maxfail=10']))"
+node --check frontend/app.js
+python -S -c "import sys, compileall; sys.path.insert(0, '/opt/pyvenv/lib/python3.13/site-packages'); sys.path.insert(0,'.'); ok = compileall.compile_dir('app', quiet=1) and compileall.compile_dir('tests', quiet=1); raise SystemExit(0 if ok else 1)"
+```
+
+Результат полного regression-прогона: `127 passed`.
+
+Принятое допущение V21: backtest storage migration warning не является торговым evidence и не повышает статус стратегии. Он нужен только для прозрачной диагностики persistence layer. Для production/staging все равно требуется применить миграции к PostgreSQL и отдельно проверить запись `backtest_trades` на реальной БД.
+
+Отчет аудита V21 сохранен в `docs/RED_TEAM_AUDIT_2026-04-30_V21.md`.

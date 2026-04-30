@@ -345,6 +345,79 @@ function priceFmt(value) {
   return n.toLocaleString([], { maximumSignificantDigits: 6 });
 }
 
+function volumeFmt(value) {
+  return fmt(value, 2);
+}
+
+function pnlFmt(value) {
+  const n = num(value);
+  if (n === null) return '—';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${fmt(n, 2)} USDT`;
+}
+
+function scoreFmt(value) {
+  const n = num(value);
+  return n === null ? '—' : `${Math.round(Math.max(0, Math.min(100, n)))}/100`;
+}
+
+function riskRewardFmt(rr) {
+  return rr && Number.isFinite(rr.ratio) ? rr.ratio.toFixed(2) : '—';
+}
+
+function currentPrice(s) {
+  // API не всегда отдаёт отдельный last_price. Для decision-панели безопаснее
+  // показать известный reference price, чем подставлять ноль и создавать ложную точность.
+  return num(s?.last_price, null)
+    ?? num(s?.mark_price, null)
+    ?? num(s?.close, null)
+    ?? num(s?.entry, null);
+}
+
+function expectedMoveText(s) {
+  const entry = num(s?.entry, null);
+  const target = num(s?.take_profit, null);
+  const direction = String(s?.direction || '').toLowerCase();
+  if (!entry || !target || !['long', 'short'].includes(direction)) return 'move —';
+  const move = direction === 'long' ? (target - entry) / entry : (entry - target) / entry;
+  return `до TP ${pct(move, 2)}`;
+}
+
+function hardVetoSummary(s) {
+  const checks = checklistFor(s, { includeLlm: false });
+  const hard = checks.find((item) => item.status === 'fail');
+  if (!hard) return { label: 'нет hard veto', reason: 'проверить желтые пункты', tone: 'ok' };
+  return { label: 'hard veto', reason: hard.title, tone: 'error' };
+}
+
+function renderDecisionTelemetry(s, d) {
+  const panel = $('decisionTelemetry');
+  if (!panel) return;
+  if (!s) {
+    panel.className = 'decision-telemetry empty-state';
+    [
+      ['telemetryPrice', '—'], ['telemetryMove', 'ожидание данных'],
+      ['telemetryEntry', '—'], ['telemetryStop', '—'], ['telemetryTake', '—'],
+      ['telemetryFreshness', '—'], ['telemetryDataStatus', 'нет свечи'],
+      ['telemetryVeto', 'по умолчанию'], ['telemetryVetoReason', 'вход запрещён'],
+    ].forEach(([id, value]) => setText(id, value));
+    return;
+  }
+  const veto = hardVetoSummary(s);
+  const rr = riskReward(s);
+  const fresh = s.fresh === true ? 'fresh' : s.fresh === false ? 'stale' : (s.data_status || 'unknown');
+  panel.className = `decision-telemetry ${cssToken(d?.level, 'reject')} ${cssToken(veto.tone, 'neutral')}`;
+  setText('telemetryPrice', priceFmt(currentPrice(s)));
+  setText('telemetryMove', `${expectedMoveText(s)} · ATR ${priceFmt(s.atr)}`);
+  setText('telemetryEntry', priceFmt(s.entry));
+  setText('telemetryStop', priceFmt(s.stop_loss));
+  setText('telemetryTake', priceFmt(s.take_profit));
+  setText('telemetryFreshness', fresh === 'fresh' ? 'fresh' : fresh === 'stale' ? 'stale' : String(fresh));
+  setText('telemetryDataStatus', `${ageText(s.bar_closed_at || s.created_at)} · liq ${s.liquidity_status || 'unknown'}`);
+  setText('telemetryVeto', d?.level === 'review' && veto.tone !== 'error' ? 'clear' : veto.label);
+  setText('telemetryVetoReason', `${veto.reason} · R/R ${riskRewardFmt(rr)}`);
+}
+
 function updateTopContext(s) {
   setText('activePairChip', `Pair ${s?.symbol || selectedSymbols()[0] || '—'}`);
   setText('activeTimeframeChip', `TF ${s?.interval || primaryInterval() || '—'}`);
@@ -1331,6 +1404,7 @@ function renderDecision() {
   setText('decisionScore', d.score);
   updateTopContext(s);
   renderDecisionMeters(s, d);
+  renderDecisionTelemetry(s, d);
   renderExecutionMap(s);
 
   renderTicket(s);
@@ -1863,7 +1937,7 @@ function bindControls() {
         await api('/api/llm/background/run-now', { method: 'POST' });
       } catch (err) {
         console.warn('LLM background evaluation was skipped after signal build:', err);
-        showOperationStatus(`Сигналы построены; LLM-оценка временно недоступна: ${err.message || err}`, 'warning');
+        showOperationStatus(`Сигналы построены; LLM-оценка временно недоступна: ${err.message || err}`, 'warn');
       }
       await refreshBacktestStatus();
       await refreshLlmStatus();

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .config import settings
-from .db import execute, execute_many_values, execute_many_values_returning
+from .db import DatabaseConnectionError, execute, execute_many_values, execute_many_values_returning
 from .features import load_market_frame
 from .strategies import (
     StrategySignal,
@@ -41,7 +41,7 @@ STRATEGY_MAP: dict[str, StrategyFn] = {
 
 
 def ensure_backtest_trades_storage() -> None:
-    """Create V20 persisted-trades storage when an existing DB was not migrated yet."""
+    """Создает хранилище сделок бэктеста для старых БД без V20-миграции."""
     execute(
         """
         CREATE TABLE IF NOT EXISTS backtest_trades (
@@ -62,6 +62,24 @@ def ensure_backtest_trades_storage() -> None:
     )
     execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_run ON backtest_trades(run_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_run_exit ON backtest_trades(run_id, exit_time)")
+
+
+def _try_ensure_backtest_trades_storage() -> str | None:
+    """Пытается выполнить idempotent-миграцию, не ломая уже рассчитанный backtest.
+
+    В штатном production-запуске PostgreSQL и psycopg2 обязательны: если их нет,
+    INSERT backtest_runs упадет раньше. Но в тестах и в аварийной maintenance-среде
+    DB-writer может быть заменен стабом, а проверка структуры таблицы не должна
+    превращаться в ложный отказ бэктеста. Поэтому ошибку миграции возвращаем как
+    предупреждение, а запись самих сделок всё равно пытаемся выполнить далее.
+    """
+    try:
+        ensure_backtest_trades_storage()
+        return None
+    except DatabaseConnectionError as exc:
+        return f"backtest_trades_storage_unverified: {exc}"
+    except Exception as exc:
+        return f"backtest_trades_storage_unverified: {exc}"
 
 
 def _interval_to_minutes(interval: str) -> int:
@@ -322,8 +340,11 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
     # создает race condition и может привязать сделки к чужому run_id.
     run_id = int(returned[0]["id"]) if returned else None
     quality = None
+    persistence_warnings: list[str] = []
     if run_id and trades:
-        ensure_backtest_trades_storage()
+        storage_warning = _try_ensure_backtest_trades_storage()
+        if storage_warning:
+            persistence_warnings.append(storage_warning)
         execute_many_values(
             """
             INSERT INTO backtest_trades(run_id, symbol, strategy, direction, entry_time, exit_time, entry, exit, pnl, pnl_pct, reason)
@@ -369,5 +390,6 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
         "trades_count": len(trades),
         "halted_by_risk": halted_by_risk,
         "quality": quality,
+        "persistence_warnings": persistence_warnings,
         "equity_curve": equity_curve[-300:],
     }

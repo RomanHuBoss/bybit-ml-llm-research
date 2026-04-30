@@ -177,6 +177,14 @@
                   <div class="meter-track"><i id="rrMeterBar"></i></div>
                 </div>
               </div>
+              <div class="decision-telemetry" id="decisionTelemetry" aria-label="Ключевые параметры решения">
+                <div><span>Цена</span><strong id="telemetryPrice">—</strong><small id="telemetryMove">ожидание данных</small></div>
+                <div><span>Entry</span><strong id="telemetryEntry">—</strong><small>ручная проверка</small></div>
+                <div><span>Stop</span><strong id="telemetryStop">—</strong><small>отмена сценария</small></div>
+                <div><span>Take</span><strong id="telemetryTake">—</strong><small>цель сценария</small></div>
+                <div><span>Freshness</span><strong id="telemetryFreshness">—</strong><small id="telemetryDataStatus">нет свечи</small></div>
+                <div><span>Veto</span><strong id="telemetryVeto">—</strong><small id="telemetryVetoReason">по умолчанию запрет</small></div>
+              </div>
             </article>
 
             <article class="panel chart-panel">
@@ -321,6 +329,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=trading-cockpit-v20"></script>
+  <script src="/static/app.js?v=trading-cockpit-v21"></script>
 </body>
 </html>

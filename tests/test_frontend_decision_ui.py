@@ -348,3 +348,42 @@ def test_frontend_has_strategy_lab_and_desk_diagnostics_panel():
 
     for fragment in [".strategy-lab-panel", ".strategy-lab-table", ".quality-pill"]:
         assert fragment in css
+
+
+def test_frontend_has_institutional_decision_telemetry_panel():
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for fragment in [
+        'id="decisionTelemetry"',
+        'id="telemetryPrice"',
+        'id="telemetryEntry"',
+        'id="telemetryStop"',
+        'id="telemetryTake"',
+        'id="telemetryFreshness"',
+        'id="telemetryVeto"',
+    ]:
+        assert fragment in html
+
+    for fragment in [
+        "function volumeFmt",
+        "function pnlFmt",
+        "function scoreFmt",
+        "function riskRewardFmt",
+        "function currentPrice",
+        "function expectedMoveText",
+        "function hardVetoSummary",
+        "function renderDecisionTelemetry",
+        "renderDecisionTelemetry(s, d)",
+    ]:
+        assert fragment in js
+
+    for fragment in [
+        "v21 institutional decision cockpit",
+        ".decision-telemetry",
+        ".execution-map",
+        "prefers-reduced-motion",
+        "loading-skeleton",
+    ]:
+        assert fragment in css
