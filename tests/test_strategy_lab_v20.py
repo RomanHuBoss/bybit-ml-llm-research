@@ -34,6 +34,40 @@ def test_strategy_quality_uses_walk_forward_when_available():
     assert strong["quality_status"] == "APPROVED"
 
 
+def test_strategy_quality_requires_walk_forward_for_2026_approval():
+    without_wf = evaluate_strategy_quality(
+        {
+            "trades_count": 100,
+            "profit_factor": 1.55,
+            "max_drawdown": 0.05,
+            "total_return": 0.12,
+        }
+    )
+
+    assert without_wf["quality_status"] == "WATCHLIST"
+    assert without_wf["evidence_grade"] == "WF_PENDING"
+    assert "walk-forward" in without_wf["quality_reason"]
+
+
+def test_strategy_quality_marks_old_backtest_as_stale():
+    from datetime import datetime, timedelta, timezone
+
+    stale = evaluate_strategy_quality(
+        {
+            "trades_count": 100,
+            "profit_factor": 1.55,
+            "max_drawdown": 0.05,
+            "total_return": 0.12,
+            "walk_forward_pass_rate": 0.80,
+            "walk_forward_windows": 6,
+            "last_backtest_at": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
+        }
+    )
+
+    assert stale["quality_status"] == "STALE"
+    assert stale["evidence_grade"] == "STALE_BACKTEST"
+
+
 def test_strategy_lab_payload_explains_approved_and_blockers():
     payload = build_strategy_lab_payload(
         [

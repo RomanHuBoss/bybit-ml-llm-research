@@ -25,6 +25,11 @@ def _base_signal(**overrides):
         "trades_count": 40,
         "max_drawdown": 0.03,
         "roc_auc": 0.6,
+        "walk_forward_pass_rate": 0.75,
+        "walk_forward_windows": 4,
+        "last_backtest_at": "2026-05-01T00:00:00Z",
+        "expectancy": 0.015,
+        "last_30d_return": 0.02,
     }
     row.update(overrides)
     return row

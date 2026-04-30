@@ -432,13 +432,14 @@ function renderDecisionMeters(s, d) {
   const rr = riskReward(s);
   const levelIssue = levelsProblem(s);
   const confidence = num(s?.confidence, null);
-  const riskValue = s ? Math.round(Math.min(100, Math.max(0,
+  const serverRisk = num(s?.operator_risk_score, null);
+  const riskValue = s ? (serverRisk !== null ? Math.round(Math.max(0, Math.min(100, serverRisk))) : Math.round(Math.min(100, Math.max(0,
     (levelIssue ? 35 : 0)
     + riskFromSpread(s)
     + Math.min(35, Math.max(0, num(s.max_drawdown, 0) * 100))
     + (mtfSeverity(s) === 'fail' ? 30 : mtfSeverity(s) === 'warn' ? 14 : 0)
     + (decisionFor(s).level === 'reject' ? 18 : decisionFor(s).level === 'watch' ? 8 : 0)
-  ))) : 0;
+  )))) : 0;
   const rrValue = rr ? Math.min(100, Math.round((rr.ratio / 3) * 100)) : 0;
   setText('confidenceMeterValue', confidence === null ? '—' : pct(confidence, 0));
   setText('riskMeterValue', s ? `${riskValue}/100` : '—');
@@ -898,7 +899,7 @@ function renderLlmVerdict(s) {
 function strategyQualityStatus(s) {
   const status = String(s?.quality_status || '').toUpperCase();
   if (status === 'APPROVED') return 'pass';
-  if (status === 'REJECTED') return 'fail';
+  if (status === 'REJECTED' || status === 'STALE') return 'fail';
   return 'warn';
 }
 
@@ -908,6 +909,7 @@ function strategyQualityTitle(s) {
   if (status === 'APPROVED') return `Strategy quality APPROVED · ${fmt(score, 0)}/100`;
   if (status === 'WATCHLIST') return `Strategy quality WATCHLIST · ${fmt(score, 0)}/100`;
   if (status === 'REJECTED') return `Strategy quality REJECTED · ${fmt(score, 0)}/100`;
+  if (status === 'STALE') return `Strategy quality STALE · ${fmt(score, 0)}/100`;
   return `Strategy quality RESEARCH · ${fmt(score, 0)}/100`;
 }
 
@@ -979,6 +981,7 @@ function baseChecklistFor(s) {
     { key: 'rr', status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail', title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны', text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.' },
     { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.52 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
     { key: 'strategy_quality', status: strategyQualityStatus(s), title: strategyQualityTitle(s), text: s.quality_reason || 'Только APPROVED-стратегии могут стать REVIEW_ENTRY; остальные остаются Research/Watch.' },
+    { key: 'trust_gate', status: s.operator_trust_status === 'REVIEW_ALLOWED' ? 'pass' : s.operator_trust_status === 'BLOCKED' ? 'fail' : 'warn', title: `Trust gate: ${escapeHtml(s.operator_trust_status || 'UNKNOWN')}`, text: `Серверный risk score ${scoreFmt(s.operator_risk_score)} · grade ${escapeHtml(s.operator_risk_grade || '—')}. REVIEW_ENTRY разрешается только после снятия hard veto, approval и score-гейта.` },
     { key: 'backtest', status: backtestStatus, title: backtestEvidenceTitle(s), text: backtestStatus === 'fail' ? 'Негативный бэктест блокирует сетап или оставляет его вне входа.' : 'Малое число сделок или отсутствие свежего бэктеста больше не маскируется под рекомендацию.' },
     { key: 'ml', status: mlEvidenceStatus(s), title: mlEvidenceTitle(s), text: mlEvidenceText(s) },
   ];
@@ -1369,6 +1372,7 @@ const RAW_SORTERS = {
   dd: (s) => num(s.max_drawdown, 999),
   spread: (s) => num(s.spread_pct, 999),
   quality: (s) => String(s.quality_status || ''),
+  trust: (s) => num(s.operator_risk_score, 999),
   llm: (s) => String(llmVerdictFor(s).recommendation || ''),
 };
 
@@ -1496,6 +1500,8 @@ function renderTicket(s) {
       <div class="metric"><span>Потенциал до TP</span><strong>${rr ? pct(rr.rewardPct, 2) : '—'}</strong></div>
       <div class="metric"><span>R/R</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>
       <div class="metric"><span>Confidence</span><strong>${pct(s.confidence, 0)}</strong></div>
+      <div class="metric"><span>Risk score</span><strong>${scoreFmt(s.operator_risk_score)}</strong></div>
+      <div class="metric"><span>Trust gate</span><strong>${escapeHtml(s.operator_trust_status || '—')}</strong></div>
       <div class="metric"><span>MTF</span><strong>${escapeHtml(mtfLabel(s))}</strong></div>
       <div class="metric"><span>LLM</span><strong>${escapeHtml(llmStateText(s).replace('LLM: ', ''))}</strong></div>
     </div>
@@ -1598,7 +1604,8 @@ function renderQueue() {
     const compactLabel = escapeHtml(compactDecisionLabel(s.decision));
     const variantsCount = num(s.operator_variant_count || s.variant_count, 1);
     const stabilityText = bool(s.direction_conflict) ? ' · конфликт LONG/SHORT' : hasNumber(s.operator_stability_score) ? ` · stable ${pct(s.operator_stability_score, 0)}` : '';
-    const variants = variantsCount > 1 ? ` · ${variantsCount} вариантов${stabilityText}` : stabilityText;
+    const riskText = hasNumber(s.operator_risk_score) ? ` · risk ${Math.round(num(s.operator_risk_score, 0))}` : '';
+    const variants = variantsCount > 1 ? ` · ${variantsCount} вариантов${stabilityText}${riskText}` : `${stabilityText}${riskText}`;
     return `
       <article class="candidate ${decisionLevel} ${isSelected ? 'selected' : ''}" data-id="${escapeHtml(s.id ?? '')}" data-key="${escapeHtml(cardKey)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
         <span class="candidate-star" aria-hidden="true">☆</span>
@@ -1661,6 +1668,7 @@ function renderRawTable(list = candidates()) {
       <td>${pct(s.max_drawdown, 1)}</td>
       <td>${pctRaw(s.spread_pct, 3)}</td>
       <td>${escapeHtml(`${s.quality_status || 'RESEARCH'} ${fmt(s.quality_score, 0)}`)}</td>
+      <td>${escapeHtml(`${s.operator_trust_status || '—'} / risk ${scoreFmt(s.operator_risk_score)}`)}</td>
       <td>${escapeHtml(`${llmVerdictFor(s).recommendation} ${llmVerdictFor(s).confidenceText}`)}</td>
     </tr>`;
   }).join('');

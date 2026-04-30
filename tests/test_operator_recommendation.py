@@ -49,6 +49,8 @@ def test_operator_action_allows_review_only_for_approved_strategy_quality():
             profit_factor=1.42,
             max_drawdown=0.08,
             total_return=0.14,
+            walk_forward_pass_rate=0.75,
+            walk_forward_windows=4,
             quality_status="APPROVED",
             quality_score=84,
             evidence_grade="APPROVED",
@@ -118,3 +120,26 @@ def test_operator_action_treats_no_loss_backtest_as_evidence_not_missing():
     assert decision["operator_action"] == "RESEARCH_CANDIDATE"
     assert any(item["code"] == "backtest_no_losses" for item in decision["operator_evidence_notes"])
     assert not any(item["code"] == "backtest_missing" for item in decision["operator_evidence_notes"])
+
+
+def test_operator_action_blocks_stale_strategy_quality_even_if_row_says_approved():
+    from datetime import datetime, timedelta, timezone
+
+    decision = classify_operator_action(
+        base_row(
+            trades_count=80,
+            profit_factor=1.50,
+            max_drawdown=0.05,
+            total_return=0.12,
+            walk_forward_pass_rate=0.75,
+            walk_forward_windows=4,
+            last_backtest_at=(datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
+            quality_status="APPROVED",
+            quality_score=90,
+        )
+    )
+
+    assert decision["operator_action"] == "NO_TRADE"
+    assert decision["quality_status"] == "STALE"
+    assert any(item["code"] == "strategy_stale" for item in decision["operator_hard_reasons"])
+    assert decision["operator_trust_status"] == "BLOCKED"

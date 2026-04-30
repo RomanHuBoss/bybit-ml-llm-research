@@ -4,7 +4,7 @@ import math
 from typing import Any
 
 from .config import settings
-from .strategy_quality import APPROVED, REJECTED, RESEARCH, WATCHLIST, effective_strategy_quality
+from .strategy_quality import APPROVED, REJECTED, RESEARCH, STALE, WATCHLIST, effective_strategy_quality
 
 
 def _finite(value: Any, default: float | None = None) -> float | None:
@@ -56,6 +56,33 @@ def _directional_levels_problem(row: dict[str, Any], entry: float | None, stop: 
 
 def _add_reason(target: list[dict[str, str]], code: str, title: str, detail: str) -> None:
     target.append({"code": code, "title": title, "detail": detail})
+
+
+def _risk_score(*, hard_count: int, warning_count: int, rr: float | None, confidence: float, spread: float | None, max_dd: float | None, quality_status: str) -> int:
+    score = 0.0
+    score += min(45.0, hard_count * 22.0)
+    score += min(22.0, warning_count * 7.0)
+    score += 0.0 if rr is not None and rr >= 1.8 else 8.0 if rr is not None and rr >= 1.45 else 18.0
+    score += 0.0 if confidence >= 0.66 else 8.0 if confidence >= 0.58 else 18.0
+    if spread is None:
+        score += 6.0
+    elif spread > settings.max_spread_pct:
+        score += 18.0
+    elif spread > settings.max_spread_pct * 0.65:
+        score += 7.0
+    if max_dd is None:
+        score += 5.0
+    else:
+        score += min(18.0, max(0.0, max_dd) * 100.0)
+    if quality_status == APPROVED:
+        score -= 8.0
+    elif quality_status == WATCHLIST:
+        score += 5.0
+    elif quality_status in {REJECTED, STALE}:
+        score += 25.0
+    else:
+        score += 10.0
+    return int(round(max(0.0, min(100.0, score))))
 
 
 def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
@@ -138,6 +165,8 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     quality_score = _finite(quality.get("quality_score"), 0.0) or 0.0
     if quality_status == APPROVED:
         _add_reason(evidence, "strategy_approved", "Стратегия approved", str(quality.get("quality_reason") or "Strategy-quality фильтр пройден."))
+    elif quality_status == STALE:
+        _add_reason(hard, "strategy_stale", "Strategy evidence устарел", str(quality.get("quality_reason") or "Нужна актуализация бэктеста/quality перед ручной проверкой входа."))
     elif quality_status == WATCHLIST:
         _add_reason(evidence, "strategy_watchlist", "Стратегия в наблюдении", str(quality.get("quality_reason") or "Evidence близок к допуску, но approval еще не пройден."))
     elif quality_status == REJECTED:
@@ -212,7 +241,7 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         action = "NO_TRADE"
         label = "НЕТ ВХОДА"
         level = "reject"
-    elif core_entry_ok and strategy_approved and (score >= 56 or confidence >= 0.66):
+    elif core_entry_ok and strategy_approved and score >= 56:
         action = "REVIEW_ENTRY"
         label = "РУЧНАЯ ПРОВЕРКА ВХОДА"
         level = "review"
@@ -225,11 +254,26 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         label = "НАБЛЮДАТЬ"
         level = "watch"
 
+    risk_score = _risk_score(
+        hard_count=len(hard),
+        warning_count=len(warnings),
+        rr=rr,
+        confidence=confidence,
+        spread=spread,
+        max_dd=max_dd,
+        quality_status=quality_status,
+    )
+    trust_status = "BLOCKED" if hard else "REVIEW_ALLOWED" if action == "REVIEW_ENTRY" else "RESEARCH_ONLY" if action == "RESEARCH_CANDIDATE" else "WAIT"
+    risk_grade = "high" if risk_score >= 70 else "elevated" if risk_score >= 45 else "controlled"
+
     return {
         "operator_action": action,
         "operator_label": label,
         "operator_level": level,
         "operator_score": score,
+        "operator_risk_score": risk_score,
+        "operator_risk_grade": risk_grade,
+        "operator_trust_status": trust_status,
         "operator_confidence_band": confidence_band,
         "quality_status": quality_status,
         "quality_score": int(round(quality_score)),

@@ -196,6 +196,10 @@ class Settings:
     strategy_walk_forward_windows: int = _int("STRATEGY_WALK_FORWARD_WINDOWS", 6)
     strategy_walk_forward_min_windows: int = _int("STRATEGY_WALK_FORWARD_MIN_WINDOWS", 3)
     strategy_walk_forward_min_pass_rate: float = _float("STRATEGY_WALK_FORWARD_MIN_PASS_RATE", 0.55)
+    require_walk_forward_for_approval: bool = _bool("REQUIRE_WALK_FORWARD_FOR_APPROVAL", True)
+    strategy_quality_max_age_days: int = _int("STRATEGY_QUALITY_MAX_AGE_DAYS", 14)
+    strategy_min_expectancy: float = _float("STRATEGY_MIN_EXPECTANCY", 0.0)
+    strategy_min_recent_30d_return: float = _float("STRATEGY_MIN_RECENT_30D_RETURN", -0.03)
     strategy_quality_refresh_limit: int = _int("STRATEGY_QUALITY_REFRESH_LIMIT", 200)
     strategy_quality_refresh_time_budget_sec: int = _int("STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC", 30)
 
@@ -314,6 +318,12 @@ def _validate_settings(s: Settings) -> None:
         problems.append("STRATEGY_WALK_FORWARD_MIN_WINDOWS должен быть в диапазоне [1; STRATEGY_WALK_FORWARD_WINDOWS]")
     if not (0.0 <= s.strategy_walk_forward_min_pass_rate <= 1.0):
         problems.append("STRATEGY_WALK_FORWARD_MIN_PASS_RATE должен быть в диапазоне [0.0; 1.0]")
+    if not (1 <= s.strategy_quality_max_age_days <= 365):
+        problems.append("STRATEGY_QUALITY_MAX_AGE_DAYS должен быть в диапазоне [1; 365]")
+    if not (-0.50 <= s.strategy_min_expectancy <= 0.50):
+        problems.append("STRATEGY_MIN_EXPECTANCY должен быть в диапазоне [-0.50; 0.50]")
+    if not (-0.50 <= s.strategy_min_recent_30d_return <= 1.00):
+        problems.append("STRATEGY_MIN_RECENT_30D_RETURN должен быть в диапазоне [-0.50; 1.00]")
     if not (1 <= s.strategy_quality_refresh_limit <= 5000):
         problems.append("STRATEGY_QUALITY_REFRESH_LIMIT должен быть в диапазоне [1; 5000]")
     if not (5 <= s.strategy_quality_refresh_time_budget_sec <= 600):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import statistics
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .config import settings
@@ -34,6 +34,29 @@ def _int(value: Any, default: int = 0) -> int:
     return int(parsed)
 
 
+def _parse_dt(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _is_stale_backtest(value: Any, *, now: datetime | None = None) -> bool:
+    parsed = _parse_dt(value)
+    if parsed is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    max_age_days = max(1, int(_safe_setting("strategy_quality_max_age_days", 14)))
+    return now - parsed > timedelta(days=max_age_days)
+
+
 def _normalize_status(value: Any) -> str | None:
     if value in (None, ""):
         return None
@@ -59,6 +82,10 @@ def _quality_thresholds() -> dict[str, Any]:
         "watch_profit_factor": max(1.01, min_pf - 0.10),
         "walk_forward_min_pass_rate": float(_safe_setting("strategy_walk_forward_min_pass_rate", 0.55)),
         "walk_forward_min_windows": int(_safe_setting("strategy_walk_forward_min_windows", 3)),
+        "require_walk_forward_for_approval": bool(_safe_setting("require_walk_forward_for_approval", True)),
+        "quality_max_age_days": int(_safe_setting("strategy_quality_max_age_days", 14)),
+        "min_expectancy": float(_safe_setting("strategy_min_expectancy", 0.0)),
+        "min_recent_30d_return": float(_safe_setting("strategy_min_recent_30d_return", -0.03)),
     }
 
 
@@ -79,6 +106,8 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     expectancy = _finite(metrics.get("expectancy"))
     wf_rate = _finite(metrics.get("walk_forward_pass_rate"))
     wf_windows = _int(metrics.get("walk_forward_windows"), 0)
+    last_backtest_at = metrics.get("last_backtest_at") or metrics.get("created_at")
+    last_30d_return = _finite(metrics.get("last_30d_return"))
 
     thresholds = _quality_thresholds()
     min_trades = int(thresholds["min_trades"])
@@ -89,8 +118,20 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     watch_pf = float(thresholds["watch_profit_factor"])
     wf_min_rate = float(thresholds["walk_forward_min_pass_rate"])
     wf_min_windows = int(thresholds["walk_forward_min_windows"])
+    require_wf = bool(thresholds["require_walk_forward_for_approval"])
+    min_expectancy = float(thresholds["min_expectancy"])
+    min_recent_30d_return = float(thresholds["min_recent_30d_return"])
 
     diagnostics = dict(thresholds)
+
+    if _is_stale_backtest(last_backtest_at):
+        return {
+            "quality_status": STALE,
+            "quality_score": 0,
+            "evidence_grade": "STALE_BACKTEST",
+            "quality_reason": f"Бэктест старше {diagnostics['quality_max_age_days']} дн.; нужна актуализация evidence перед любой ручной проверкой входа.",
+            "quality_diagnostics": diagnostics,
+        }
 
     if trades <= 0:
         return {
@@ -124,6 +165,8 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
         (pf is not None and pf < 1.0)
         or (dd is not None and dd > max(max_dd * 1.5, max_dd + 0.12))
         or (total_return is not None and total_return < -0.05)
+        or (expectancy is not None and expectancy < min_expectancy and trades >= min_trades)
+        or (last_30d_return is not None and last_30d_return < min_recent_30d_return)
         or (wf_rate is not None and wf_windows >= wf_min_windows and wf_rate <= max(0.25, wf_min_rate - 0.25))
     )
     if negative_enough:
@@ -138,8 +181,11 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     pf_ok = pf is not None and pf >= min_pf
     dd_ok = dd is not None and dd <= max_dd
     ret_ok = total_return is None or total_return >= min_return
-    wf_ok = wf_rate is None or wf_windows < wf_min_windows or wf_rate >= wf_min_rate
-    if trades >= min_trades and pf_ok and dd_ok and ret_ok and wf_ok:
+    wf_available = wf_rate is not None and wf_windows >= wf_min_windows
+    wf_ok = (not require_wf and not wf_available) or (wf_available and wf_rate >= wf_min_rate)
+    expectancy_ok = expectancy is None or expectancy >= min_expectancy
+    recent_ok = last_30d_return is None or last_30d_return >= min_recent_30d_return
+    if trades >= min_trades and pf_ok and dd_ok and ret_ok and wf_ok and expectancy_ok and recent_ok:
         wf_tail = "" if wf_rate is None else f", WF {wf_rate:.0%}"
         return {
             "quality_status": APPROVED,
@@ -150,11 +196,12 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
         }
 
     if trades >= watch_trades and pf is not None and pf >= watch_pf and (dd is None or dd <= max(max_dd * 1.25, max_dd + 0.05)):
+        wf_note = " Требуется walk-forward evidence для допуска REVIEW_ENTRY." if require_wf and not wf_available else ""
         return {
             "quality_status": WATCHLIST,
             "quality_score": max(score, 45),
-            "evidence_grade": "WATCHLIST",
-            "quality_reason": "Стратегия в наблюдении: evidence близок к допуску, но фильтр approval еще не пройден.",
+            "evidence_grade": "WF_PENDING" if require_wf and not wf_available else "WATCHLIST",
+            "quality_reason": f"Стратегия в наблюдении: evidence близок к допуску, но фильтр approval еще не пройден.{wf_note}",
             "quality_diagnostics": diagnostics,
         }
 
@@ -170,6 +217,13 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
 def effective_strategy_quality(row: dict[str, Any]) -> dict[str, Any]:
     explicit_status = _normalize_status(row.get("quality_status"))
     if explicit_status:
+        evaluated = evaluate_strategy_quality(row)
+        if evaluated.get("quality_status") in {STALE, REJECTED}:
+            return evaluated
+        if explicit_status == APPROVED and evaluated.get("quality_status") != APPROVED:
+            # Защита от устаревших/legacy строк: сохраненный APPROVED не должен обходить
+            # новые 2026-gate требования к walk-forward, свежести и expectancy.
+            return evaluated
         return {
             "quality_status": explicit_status,
             "quality_score": _int(row.get("quality_score"), 0),

@@ -423,3 +423,49 @@ python -S -c "import sys, compileall; sys.path.insert(0, '/opt/pyvenv/lib/python
 Принятое допущение V21: backtest storage migration warning не является торговым evidence и не повышает статус стратегии. Он нужен только для прозрачной диагностики persistence layer. Для production/staging все равно требуется применить миграции к PostgreSQL и отдельно проверить запись `backtest_trades` на реальной БД.
 
 Отчет аудита V21 сохранен в `docs/RED_TEAM_AUDIT_2026-04-30_V21.md`.
+
+---
+
+## V23 — production hardening СППР / trust gate 2026
+
+Эта ревизия ужесточает логику допуска рекомендаций, потому что для советующей trading‑СППР отсутствие доказанной устойчивости должно считаться дефектом, а не косметическим предупреждением.
+
+### Что изменено
+
+- Исправлен runtime-DDL `strategy_quality`: в fresh PostgreSQL больше нет дублирующего объявления `diagnostics JSONB`, которое могло ломать первичную инициализацию Strategy Lab.
+- Добавлен 2026 trust gate для `REVIEW_ENTRY`: сохраненный `APPROVED` больше не обходится автоматически, если evidence устарел или не содержит walk-forward подтверждения при `REQUIRE_WALK_FORWARD_FOR_APPROVAL=true`.
+- `strategy_quality` теперь может возвращать статус `STALE`, если `last_backtest_at` старше `STRATEGY_QUALITY_MAX_AGE_DAYS`. Такой сетап блокируется как `NO_TRADE` до актуализации evidence.
+- В `evaluate_strategy_quality()` добавлены дополнительные защитные параметры: `STRATEGY_MIN_EXPECTANCY` и `STRATEGY_MIN_RECENT_30D_RETURN`.
+- Серверная рекомендация теперь дополнительно возвращает `operator_risk_score`, `operator_risk_grade` и `operator_trust_status`.
+- Frontend показывает trust/risk в карточке сделки, чек-листе и raw-таблице. Это помогает понять, почему торговая панель пуста: система не «сломалась», а не нашла сетап, прошедший trust gate.
+
+### Новые параметры `.env`
+
+```env
+REQUIRE_WALK_FORWARD_FOR_APPROVAL=true
+STRATEGY_QUALITY_MAX_AGE_DAYS=14
+STRATEGY_MIN_EXPECTANCY=0.0
+STRATEGY_MIN_RECENT_30D_RETURN=-0.03
+```
+
+### Практический смысл
+
+`REVIEW_ENTRY` теперь должен означать не просто «есть технический сигнал», а «нет hard veto, уровни валидны, MTF не конфликтует, ликвидность подтверждена, Strategy Lab свежий, walk-forward не слабый, score-гейт пройден». Если эти условия не выполнены, интерфейс обязан показывать `WAIT`, `RESEARCH_CANDIDATE` или `NO_TRADE`, а не создавать иллюзию торговой рекомендации.
+
+### Проверки V23
+
+Минимальный быстрый набор:
+
+```bash
+node --check frontend/app.js
+python -m compileall -q app tests
+python -m pytest -q tests/test_strategy_lab_v20.py tests/test_operator_recommendation.py tests/test_strategy_quality_schema.py
+```
+
+Если локальная среда содержит сторонние pytest-плагины, влияющие на запуск тестов, можно изолировать их:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_strategy_lab_v20.py tests/test_operator_recommendation.py tests/test_strategy_quality_schema.py
+```
+
+После обновления production/staging БД нужно выполнить/проверить миграции и затем запустить `Strategy Quality refresh`, чтобы старые строки `APPROVED` получили новую оценку по V23-gate.
