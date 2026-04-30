@@ -195,6 +195,18 @@ function marketSyncTimeoutMs() {
   return Math.min(900_000, Math.max(LONG_OPERATION_TIMEOUT_MS, estimated));
 }
 
+
+function signalBuildTimeoutMs() {
+  const symbolCount = Math.max(1, selectedSymbols().length);
+  const intervalCount = Math.max(1, intervals().length);
+  const jobs = symbolCount * intervalCount;
+  // Построение сигналов читает OHLCV+funding+OI+sentiment/liquidity из БД и считает
+  // индикаторы. Для MTF-корзины 45 секунд превращали нормальный тяжелый пересчет в
+  // ложную ошибку UI. Ограничение остается конечным, но масштабируется от числа job'ов.
+  const estimated = 90_000 + jobs * 18_000;
+  return Math.min(900_000, Math.max(LONG_OPERATION_TIMEOUT_MS, estimated));
+}
+
 async function api(path, options = {}, timeoutMs = DEFAULT_API_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -1993,10 +2005,12 @@ function bindControls() {
   bindClick('buildSignalsBtn', async () => {
     await runOperation('Signals built', async () => {
       validateInputs({ requireSymbols: true });
+      const jobCount = Math.max(1, selectedSymbols().length) * Math.max(1, intervals().length);
+      showOperationStatus(`Выполняется: построение сигналов (${jobCount} symbol×interval job). Для MTF-корзины используется расширенный таймаут.`, 'busy');
       const data = await api('/api/signals/build', {
         method: 'POST',
         body: JSON.stringify({ category: $('category').value, symbols: selectedSymbols(), interval: primaryInterval(), intervals: intervals() }),
-      });
+      }, signalBuildTimeoutMs());
       await refreshRank();
       await refreshSignals();
       try {

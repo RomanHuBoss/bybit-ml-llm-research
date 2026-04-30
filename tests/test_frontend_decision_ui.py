@@ -387,3 +387,12 @@ def test_frontend_has_institutional_decision_telemetry_panel():
         "loading-skeleton",
     ]:
         assert fragment in css
+
+
+def test_frontend_uses_extended_timeout_for_signal_build():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "function signalBuildTimeoutMs" in js
+    assert "symbol×interval job" in js
+    assert "}, signalBuildTimeoutMs());" in js
+    assert "45 секунд превращали нормальный тяжелый пересчет" in js

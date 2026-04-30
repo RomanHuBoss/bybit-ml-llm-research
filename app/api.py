@@ -407,24 +407,38 @@ def api_sentiment_summary(symbol: str = "BTCUSDT", limit: int = 20) -> dict[str,
 
 @router.post("/signals/build")
 def build_signals(req: SignalBuildRequest) -> dict[str, Any]:
-    output = {}
+    output: dict[str, Any] = {}
     try:
         category = normalize_category(req.category)
         intervals = normalize_intervals(req.intervals or req.interval)
         symbols = normalize_symbols(req.symbols)
+        jobs = [(symbol, interval) for symbol in symbols for interval in intervals]
+
+        def run_job(symbol: str, interval: str) -> tuple[str, str, dict[str, Any], int]:
+            # Ручной build не должен искусственно становиться медленнее из-за
+            # последовательного обхода symbol×interval. Каждая job использует
+            # собственные DB-соединения через app.db, поэтому ограниченный пул потоков
+            # безопаснее и наблюдаемее, чем один длинный HTTP-запрос на всю корзину.
+            signals = _build_latest_signals(category, symbol, interval)
+            inserted = int(_persist_signals(category, symbol, interval, signals) or 0)
+            payload = {"built": len(signals), "upserted": inserted, "signals": [s.__dict__ for s in signals]}
+            return symbol, interval, payload, inserted
+
+        workers = bounded_worker_count(settings.signal_build_workers, len(jobs), default=1, hard_limit=8)
+        if workers <= 1 or len(jobs) <= 1:
+            completed = [run_job(symbol, interval) for symbol, interval in jobs]
+        else:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="api-signal-build") as pool:
+                futures = [pool.submit(run_job, symbol, interval) for symbol, interval in jobs]
+                completed = [future.result() for future in as_completed(futures)]
+
         total_inserted = 0
-        for symbol in symbols:
-            if len(intervals) > 1:
-                output[symbol] = {}
-            for interval in intervals:
-                signals = _build_latest_signals(category, symbol, interval)
-                inserted = _persist_signals(category, symbol, interval, signals)
-                total_inserted += int(inserted or 0)
-                payload = {"built": len(signals), "upserted": inserted, "signals": [s.__dict__ for s in signals]}
-                if len(intervals) == 1:
-                    output[symbol] = payload
-                else:
-                    output[symbol][interval] = payload
+        for symbol, interval, payload, inserted in sorted(completed, key=lambda item: (symbols.index(item[0]), intervals.index(item[1]))):
+            total_inserted += inserted
+            if len(intervals) == 1:
+                output[symbol] = payload
+            else:
+                output.setdefault(symbol, {})[interval] = payload
         backtest_requested = False
         llm_requested = False
         if total_inserted > 0:
@@ -437,6 +451,8 @@ def build_signals(req: SignalBuildRequest) -> dict[str, Any]:
         return {
             "ok": True,
             "intervals": intervals,
+            "workers": workers,
+            "jobs": len(jobs),
             "result": output,
             "backtest_auto_requested": backtest_requested,
             "llm_auto_requested": llm_requested,

@@ -469,3 +469,16 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_strategy_lab_v20
 ```
 
 После обновления production/staging БД нужно выполнить/проверить миграции и затем запустить `Strategy Quality refresh`, чтобы старые строки `APPROVED` получили новую оценку по V23-gate.
+
+### V24 hotfix: `/api/signals/build` timeout
+
+Если UI показывал ошибку `Signals built. API timeout after 45s: /api/signals/build`, причина была не обязательно в падении backend. Ручной build сигналов для MTF-корзины может быть тяжелым DB/indicator-пересчетом, а UI раньше использовал общий 45-секундный timeout.
+
+Исправлено:
+
+- `/api/signals/build` обрабатывает `symbol × interval` jobs через ограниченный пул `SIGNAL_BUILD_WORKERS`;
+- ответ API содержит `workers` и `jobs` для диагностики;
+- frontend использует `signalBuildTimeoutMs()` вместо общего 45-секундного таймаута;
+- оператор видит статус тяжелого MTF-пересчета.
+
+Рекомендация для слабого локального ПК или медленной БД: оставить `SIGNAL_BUILD_WORKERS=1..2`; для более мощного стенда можно поднять до 4, но не выше без проверки нагрузки PostgreSQL.

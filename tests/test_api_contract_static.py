@@ -56,3 +56,12 @@ def test_api_exposes_strategy_lab_and_trading_desk_diagnostics():
     assert "trading_desk_diagnostics" in api
     assert "blocker_counts" in strategy_lab
     assert "near_approval" in strategy_lab
+
+
+def test_signal_build_endpoint_is_parallelized_and_reports_job_count():
+    api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+
+    assert "jobs = [(symbol, interval) for symbol in symbols for interval in intervals]" in api
+    assert "thread_name_prefix=\"api-signal-build\"" in api
+    assert '"workers": workers' in api
+    assert '"jobs": len(jobs)' in api
