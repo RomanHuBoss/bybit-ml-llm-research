@@ -96,7 +96,8 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
         ), latest_quality AS (
             SELECT category, symbol, interval, strategy, quality_status, quality_score, evidence_grade,
                    quality_reason, diagnostics AS quality_diagnostics, updated_at AS quality_updated_at,
-                   backtest_run_id, last_backtest_at
+                   backtest_run_id, last_backtest_at, expectancy, avg_trade_pnl, median_trade_pnl,
+                   last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
             FROM strategy_quality
             WHERE category=%s AND interval = ANY(%s::text[])
         ), latest_llm AS (
@@ -111,6 +112,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
                s.entry, s.stop_loss, s.take_profit, s.ml_probability, s.sentiment_score, s.rationale,
                b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
                q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
+               q.expectancy, q.avg_trade_pnl, q.median_trade_pnl, q.last_30d_return, q.last_90d_return, q.walk_forward_pass_rate, q.walk_forward_windows, q.walk_forward_summary,
                m.roc_auc, m.precision_score, m.recall_score,
                l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
                l.liquidity_captured_at, l.liquidity_status,
@@ -119,6 +121,7 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
                    COALESCE(s.confidence::float, 0) * 0.30
                  + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.18
                  + CASE WHEN q.quality_status = 'APPROVED' THEN 0.08 WHEN q.quality_status = 'WATCHLIST' THEN 0.03 WHEN q.quality_status = 'REJECTED' THEN -0.18 ELSE -0.04 END
+                 + CASE WHEN q.walk_forward_pass_rate IS NULL THEN 0 ELSE LEAST(GREATEST(q.walk_forward_pass_rate::float, 0), 1) * 0.05 END
                  + LEAST(GREATEST(COALESCE(b.profit_factor::float, 1) / 2.0, 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
                  + LEAST(GREATEST(COALESCE(b.sharpe::float, 0) / 3.0, 0), 1) * 0.06 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
                  + LEAST(GREATEST(COALESCE(b.win_rate::float, 0), 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)

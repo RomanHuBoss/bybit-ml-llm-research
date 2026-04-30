@@ -345,3 +345,26 @@ pytest -q
 Результат полного regression-прогона: `120 passed`.
 
 Подробное описание сохранено в `docs/STRATEGY_QUALITY_GATE_2026-04-30.md`.
+
+## Ревизия V20 — Strategy Lab, diagnostics и walk-forward evidence от 2026-04-30
+
+Эта ревизия доводит V19 до продуктово пригодного состояния: теперь есть отдельный Strategy Lab для квалификации стратегий и диагностический блок, объясняющий, почему Trading Desk пуст или почему конкретный сетап не стал `REVIEW_ENTRY`.
+
+Ключевые изменения:
+
+- Добавлен `app/strategy_lab.py`.
+- Добавлены endpoints `GET /api/strategies/lab` и `GET /api/trading-desk/diagnostics`.
+- `strategy_quality` расширен метриками `expectancy`, `last_30d_return`, `last_90d_return`, `walk_forward_pass_rate`, `walk_forward_windows`, `walk_forward_summary`.
+- `run_backtest` теперь сначала сохраняет сделки, затем пересчитывает quality, чтобы walk-forward/expectancy считались по реальным `backtest_trades`.
+- Frontend получил отдельный блок `Strategy Lab`, воронку статусов и понятные blocker-коды.
+- Добавлена кнопка `Quality refresh`.
+- Если `REVIEW_ENTRY = 0`, UI показывает не пустоту, а диагностику причин.
+- В `docs/QUALITY_SNAPSHOT_2026-04-30.json` сохранён контрольный пример quality-выгрузки.
+
+Проверка:
+
+```bash
+python -S -m py_compile app/config.py app/strategy_quality.py app/strategy_lab.py app/recommendation.py app/backtest.py app/backtest_background.py app/research.py app/api.py
+node --check frontend/app.js
+pytest -q
+```

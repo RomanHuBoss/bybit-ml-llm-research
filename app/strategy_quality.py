@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 from datetime import datetime, timezone
 from typing import Any
 
@@ -39,12 +40,34 @@ def _normalize_status(value: Any) -> str | None:
     return status if status in QUALITY_STATUSES else None
 
 
+def _safe_setting(name: str, default: Any) -> Any:
+    return getattr(settings, name, default)
+
+
+def _quality_thresholds() -> dict[str, Any]:
+    min_trades = int(settings.strategy_approval_min_trades)
+    min_pf = float(settings.strategy_approval_min_profit_factor)
+    max_dd = float(settings.strategy_approval_max_drawdown)
+    min_return = float(settings.strategy_approval_min_total_return)
+    return {
+        "min_trades": min_trades,
+        "min_profit_factor": min_pf,
+        "max_drawdown": max_dd,
+        "min_total_return": min_return,
+        "watch_trades": max(10, min_trades // 2),
+        "watch_profit_factor": max(1.01, min_pf - 0.10),
+        "walk_forward_min_pass_rate": float(_safe_setting("strategy_walk_forward_min_pass_rate", 0.55)),
+        "walk_forward_min_windows": int(_safe_setting("strategy_walk_forward_min_windows", 3)),
+    }
+
+
 def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     """Classify symbol+interval+strategy quality from persisted research evidence.
 
-    This is intentionally stricter than a single live signal. A signal can exist as a
-    research candidate, but only an approved strategy-quality row may become an
-    operator review setup.
+    A signal can exist as a research candidate, but only an approved strategy-quality
+    row may become an operator review setup. Walk-forward stability is considered
+    when available; old rows without those metrics are still evaluated by legacy
+    backtest evidence so production upgrades do not wipe existing approvals.
     """
     trades = _int(metrics.get("trades_count"), 0)
     pf = _finite(metrics.get("profit_factor"))
@@ -52,22 +75,21 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     total_return = _finite(metrics.get("total_return"))
     sharpe = _finite(metrics.get("sharpe"))
     win_rate = _finite(metrics.get("win_rate"))
+    expectancy = _finite(metrics.get("expectancy"))
+    wf_rate = _finite(metrics.get("walk_forward_pass_rate"))
+    wf_windows = _int(metrics.get("walk_forward_windows"), 0)
 
-    min_trades = int(settings.strategy_approval_min_trades)
-    min_pf = float(settings.strategy_approval_min_profit_factor)
-    max_dd = float(settings.strategy_approval_max_drawdown)
-    min_return = float(settings.strategy_approval_min_total_return)
-    watch_trades = max(10, min_trades // 2)
-    watch_pf = max(1.01, min_pf - 0.10)
+    thresholds = _quality_thresholds()
+    min_trades = int(thresholds["min_trades"])
+    min_pf = float(thresholds["min_profit_factor"])
+    max_dd = float(thresholds["max_drawdown"])
+    min_return = float(thresholds["min_total_return"])
+    watch_trades = int(thresholds["watch_trades"])
+    watch_pf = float(thresholds["watch_profit_factor"])
+    wf_min_rate = float(thresholds["walk_forward_min_pass_rate"])
+    wf_min_windows = int(thresholds["walk_forward_min_windows"])
 
-    diagnostics = {
-        "min_trades": min_trades,
-        "min_profit_factor": min_pf,
-        "max_drawdown": max_dd,
-        "min_total_return": min_return,
-        "watch_trades": watch_trades,
-        "watch_profit_factor": watch_pf,
-    }
+    diagnostics = dict(thresholds)
 
     if trades <= 0:
         return {
@@ -84,12 +106,24 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     return_factor = 0.0 if total_return is None else max(0.0, min(1.0, (total_return - min_return + 0.10) / 0.35))
     sharpe_factor = 0.5 if sharpe is None else max(0.0, min(1.0, (sharpe + 0.25) / 1.75))
     win_factor = 0.5 if win_rate is None else max(0.0, min(1.0, win_rate / 0.58))
-    score = int(round(100 * (0.30 * sample_factor + 0.25 * pf_factor + 0.18 * dd_factor + 0.12 * return_factor + 0.10 * sharpe_factor + 0.05 * win_factor)))
+    expectancy_factor = 0.5 if expectancy is None else max(0.0, min(1.0, (expectancy + 0.005) / 0.03))
+    wf_factor = 0.5 if wf_rate is None or wf_windows < wf_min_windows else max(0.0, min(1.0, wf_rate / max(wf_min_rate, 1e-9)))
+    score = int(round(100 * (
+        0.24 * sample_factor
+        + 0.22 * pf_factor
+        + 0.16 * dd_factor
+        + 0.11 * return_factor
+        + 0.09 * sharpe_factor
+        + 0.05 * win_factor
+        + 0.05 * expectancy_factor
+        + 0.08 * wf_factor
+    )))
 
     negative_enough = trades >= watch_trades and (
         (pf is not None and pf < 1.0)
         or (dd is not None and dd > max(max_dd * 1.5, max_dd + 0.12))
         or (total_return is not None and total_return < -0.05)
+        or (wf_rate is not None and wf_windows >= wf_min_windows and wf_rate <= max(0.25, wf_min_rate - 0.25))
     )
     if negative_enough:
         return {
@@ -103,12 +137,14 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     pf_ok = pf is not None and pf >= min_pf
     dd_ok = dd is not None and dd <= max_dd
     ret_ok = total_return is None or total_return >= min_return
-    if trades >= min_trades and pf_ok and dd_ok and ret_ok:
+    wf_ok = wf_rate is None or wf_windows < wf_min_windows or wf_rate >= wf_min_rate
+    if trades >= min_trades and pf_ok and dd_ok and ret_ok and wf_ok:
+        wf_tail = "" if wf_rate is None else f", WF {wf_rate:.0%}"
         return {
             "quality_status": APPROVED,
             "quality_score": max(score, 70),
             "evidence_grade": "APPROVED",
-            "quality_reason": f"Стратегия допущена: сделок {trades}, PF {pf:.2f}, DD {dd:.2%}.",
+            "quality_reason": f"Стратегия допущена: сделок {trades}, PF {pf:.2f}, DD {dd:.2%}{wf_tail}.",
             "quality_diagnostics": diagnostics,
         }
 
@@ -117,7 +153,7 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
             "quality_status": WATCHLIST,
             "quality_score": max(score, 45),
             "evidence_grade": "WATCHLIST",
-            "quality_reason": f"Стратегия в наблюдении: evidence близок к допуску, но фильтр approval еще не пройден.",
+            "quality_reason": "Стратегия в наблюдении: evidence близок к допуску, но фильтр approval еще не пройден.",
             "quality_diagnostics": diagnostics,
         }
 
@@ -138,7 +174,7 @@ def effective_strategy_quality(row: dict[str, Any]) -> dict[str, Any]:
             "quality_score": _int(row.get("quality_score"), 0),
             "evidence_grade": str(row.get("evidence_grade") or explicit_status),
             "quality_reason": str(row.get("quality_reason") or "Strategy-quality row supplied by backend."),
-            "quality_diagnostics": row.get("quality_diagnostics") if isinstance(row.get("quality_diagnostics"), dict) else {},
+            "quality_diagnostics": row.get("quality_diagnostics") if isinstance(row.get("quality_diagnostics"), dict) else row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {},
         }
     return evaluate_strategy_quality(row)
 
@@ -172,21 +208,163 @@ def _ensure_strategy_quality_table() -> None:
             win_rate NUMERIC,
             profit_factor NUMERIC,
             trades_count INTEGER NOT NULL DEFAULT 0,
+            expectancy NUMERIC,
+            avg_trade_pnl NUMERIC,
+            median_trade_pnl NUMERIC,
+            last_30d_return NUMERIC,
+            last_90d_return NUMERIC,
+            walk_forward_pass_rate NUMERIC,
+            walk_forward_windows INTEGER,
+            walk_forward_summary JSONB,
             diagnostics JSONB,
             UNIQUE(category, symbol, interval, strategy)
         )
         """
     )
+    for ddl in (
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS expectancy NUMERIC",
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS avg_trade_pnl NUMERIC",
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS median_trade_pnl NUMERIC",
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS last_30d_return NUMERIC",
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS last_90d_return NUMERIC",
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS walk_forward_pass_rate NUMERIC",
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS walk_forward_windows INTEGER",
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS walk_forward_summary JSONB",
+    ):
+        execute(ddl)
     execute(
         """
         CREATE INDEX IF NOT EXISTS idx_strategy_quality_status
         ON strategy_quality(category, interval, quality_status, quality_score DESC, updated_at DESC)
         """
     )
+    execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_strategy_quality_symbol
+        ON strategy_quality(category, symbol, interval, strategy, updated_at DESC)
+        """
+    )
 
 
 def ensure_strategy_quality_storage() -> None:
     _ensure_strategy_quality_table()
+
+
+def _parse_time(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        text = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _windowed_trade_metrics(trades: list[dict[str, Any]], windows: int = 6) -> dict[str, Any]:
+    if not trades:
+        return {
+            "expectancy": None,
+            "avg_trade_pnl": None,
+            "median_trade_pnl": None,
+            "walk_forward_pass_rate": None,
+            "walk_forward_windows": 0,
+            "walk_forward_summary": [],
+        }
+    ordered = sorted(trades, key=lambda t: _parse_time(t.get("exit_time")) or datetime.min.replace(tzinfo=timezone.utc))
+    pnls = [_finite(t.get("pnl"), 0.0) or 0.0 for t in ordered]
+    avg = statistics.fmean(pnls) if pnls else None
+    median = statistics.median(pnls) if pnls else None
+    losses = [abs(x) for x in pnls if x < 0]
+    avg_loss = statistics.fmean(losses) if losses else None
+    expectancy = None
+    if avg is not None and avg_loss and avg_loss > 0:
+        expectancy = avg / avg_loss
+
+    window_count = max(1, min(int(windows), len(ordered)))
+    chunk_size = max(1, math.ceil(len(ordered) / window_count))
+    chunks: list[dict[str, Any]] = []
+    passed = 0
+    for idx in range(0, len(ordered), chunk_size):
+        chunk = ordered[idx : idx + chunk_size]
+        chunk_pnls = [_finite(t.get("pnl"), 0.0) or 0.0 for t in chunk]
+        wins = [p for p in chunk_pnls if p > 0]
+        losses_abs = abs(sum(p for p in chunk_pnls if p <= 0))
+        gross_profit = sum(wins)
+        pf = gross_profit / losses_abs if losses_abs > 0 else (None if gross_profit <= 0 else 99.0)
+        pnl_sum = sum(chunk_pnls)
+        win_rate = len(wins) / len(chunk_pnls) if chunk_pnls else None
+        ok = pnl_sum > 0 and (pf is None or pf >= 1.0)
+        passed += 1 if ok else 0
+        chunks.append(
+            {
+                "window": len(chunks) + 1,
+                "trades": len(chunk),
+                "pnl": round(pnl_sum, 8),
+                "profit_factor": None if pf is None else round(min(pf, 99.0), 6),
+                "win_rate": win_rate,
+                "passed": ok,
+            }
+        )
+    pass_rate = passed / len(chunks) if chunks else None
+    return {
+        "expectancy": expectancy,
+        "avg_trade_pnl": avg,
+        "median_trade_pnl": median,
+        "walk_forward_pass_rate": pass_rate,
+        "walk_forward_windows": len(chunks),
+        "walk_forward_summary": chunks,
+    }
+
+
+def _recent_equity_return(equity_curve: list[dict[str, Any]], days: int) -> float | None:
+    if not equity_curve:
+        return None
+    parsed: list[tuple[datetime, float]] = []
+    for point in equity_curve:
+        ts = _parse_time(point.get("time"))
+        equity = _finite(point.get("equity"))
+        if ts is not None and equity is not None and equity > 0:
+            parsed.append((ts, equity))
+    if len(parsed) < 2:
+        return None
+    parsed.sort(key=lambda pair: pair[0])
+    end_time, end_equity = parsed[-1]
+    threshold = end_time.timestamp() - days * 86400
+    start = next(((ts, eq) for ts, eq in parsed if ts.timestamp() >= threshold), parsed[0])
+    if start[1] <= 0:
+        return None
+    return end_equity / start[1] - 1
+
+
+def derive_backtest_run_metrics(run_id: int | None, run_row: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not run_id:
+        return {}
+    trades = fetch_all(
+        """
+        SELECT entry_time, exit_time, pnl, pnl_pct, reason
+        FROM backtest_trades
+        WHERE run_id=%s
+        ORDER BY exit_time
+        """,
+        (run_id,),
+    )
+    metrics = _windowed_trade_metrics(trades, int(_safe_setting("strategy_walk_forward_windows", 6)))
+    equity_curve = None
+    if run_row and isinstance(run_row.get("equity_curve"), list):
+        equity_curve = run_row.get("equity_curve")
+    if equity_curve is None:
+        row = fetch_one("SELECT equity_curve FROM backtest_runs WHERE id=%s", (run_id,))
+        equity_curve = row.get("equity_curve") if row else None
+    if isinstance(equity_curve, list):
+        metrics["last_30d_return"] = _recent_equity_return(equity_curve, 30)
+        metrics["last_90d_return"] = _recent_equity_return(equity_curve, 90)
+    else:
+        metrics["last_30d_return"] = None
+        metrics["last_90d_return"] = None
+    return metrics
 
 
 def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | None:
@@ -196,7 +374,7 @@ def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | 
     row = fetch_one(
         """
         SELECT id AS backtest_run_id, created_at AS last_backtest_at, category, symbol, interval, strategy,
-               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count
+               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve
         FROM backtest_runs
         WHERE id=%s
         """,
@@ -204,13 +382,17 @@ def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | 
     )
     if not row:
         return None
-    quality = evaluate_strategy_quality(row)
+    derived = derive_backtest_run_metrics(run_id, row)
+    quality_input = {**row, **derived}
+    quality = evaluate_strategy_quality(quality_input)
     execute(
         """
         INSERT INTO strategy_quality(category, symbol, interval, strategy, quality_status, quality_score, evidence_grade,
                                      quality_reason, backtest_run_id, last_backtest_at, total_return, max_drawdown,
-                                     sharpe, win_rate, profit_factor, trades_count, diagnostics)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                     sharpe, win_rate, profit_factor, trades_count, expectancy, avg_trade_pnl,
+                                     median_trade_pnl, last_30d_return, last_90d_return, walk_forward_pass_rate,
+                                     walk_forward_windows, walk_forward_summary, diagnostics)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (category, symbol, interval, strategy)
         DO UPDATE SET updated_at=NOW(), quality_status=EXCLUDED.quality_status,
                       quality_score=EXCLUDED.quality_score, evidence_grade=EXCLUDED.evidence_grade,
@@ -218,7 +400,13 @@ def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | 
                       last_backtest_at=EXCLUDED.last_backtest_at, total_return=EXCLUDED.total_return,
                       max_drawdown=EXCLUDED.max_drawdown, sharpe=EXCLUDED.sharpe,
                       win_rate=EXCLUDED.win_rate, profit_factor=EXCLUDED.profit_factor,
-                      trades_count=EXCLUDED.trades_count, diagnostics=EXCLUDED.diagnostics
+                      trades_count=EXCLUDED.trades_count, expectancy=EXCLUDED.expectancy,
+                      avg_trade_pnl=EXCLUDED.avg_trade_pnl, median_trade_pnl=EXCLUDED.median_trade_pnl,
+                      last_30d_return=EXCLUDED.last_30d_return, last_90d_return=EXCLUDED.last_90d_return,
+                      walk_forward_pass_rate=EXCLUDED.walk_forward_pass_rate,
+                      walk_forward_windows=EXCLUDED.walk_forward_windows,
+                      walk_forward_summary=EXCLUDED.walk_forward_summary,
+                      diagnostics=EXCLUDED.diagnostics
         """,
         (
             row["category"],
@@ -237,10 +425,19 @@ def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | 
             row.get("win_rate"),
             row.get("profit_factor"),
             row.get("trades_count") or 0,
+            derived.get("expectancy"),
+            derived.get("avg_trade_pnl"),
+            derived.get("median_trade_pnl"),
+            derived.get("last_30d_return"),
+            derived.get("last_90d_return"),
+            derived.get("walk_forward_pass_rate"),
+            derived.get("walk_forward_windows"),
+            derived.get("walk_forward_summary"),
             quality["quality_diagnostics"],
         ),
     )
-    return {**row, **quality}
+    returned = {k: v for k, v in row.items() if k != "equity_curve"}
+    return {**returned, **derived, **quality}
 
 
 def refresh_strategy_quality(limit: int = 500) -> dict[str, Any]:
@@ -298,10 +495,25 @@ def quality_summary(category: str = "linear") -> dict[str, Any]:
                COUNT(*) FILTER (WHERE quality_status='WATCHLIST') AS watchlist,
                COUNT(*) FILTER (WHERE quality_status='RESEARCH') AS research,
                COUNT(*) FILTER (WHERE quality_status='REJECTED') AS rejected,
-               MAX(updated_at) AS last_updated_at
+               COUNT(*) FILTER (WHERE quality_status='STALE') AS stale,
+               MAX(updated_at) AS last_updated_at,
+               AVG(quality_score) AS avg_quality_score,
+               AVG(profit_factor) AS avg_profit_factor,
+               AVG(walk_forward_pass_rate) AS avg_walk_forward_pass_rate
         FROM strategy_quality
         WHERE category=%s
         """,
         (category,),
     )
-    return row or {"total": 0, "approved": 0, "watchlist": 0, "research": 0, "rejected": 0, "last_updated_at": None}
+    return row or {
+        "total": 0,
+        "approved": 0,
+        "watchlist": 0,
+        "research": 0,
+        "rejected": 0,
+        "stale": 0,
+        "last_updated_at": None,
+        "avg_quality_score": None,
+        "avg_profit_factor": None,
+        "avg_walk_forward_pass_rate": None,
+    }

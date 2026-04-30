@@ -44,3 +44,15 @@ def test_symbol_universe_uses_symbol_scoped_fresh_liquidity_snapshot():
     assert "liquidity_snapshot_max_age_minutes" in symbols
     assert "liquidity_status" in symbols
     assert "MAX(captured_at)" not in symbols
+
+
+def test_api_exposes_strategy_lab_and_trading_desk_diagnostics():
+    api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+    strategy_lab = (ROOT / "app" / "strategy_lab.py").read_text(encoding="utf-8")
+
+    assert '"/strategies/lab"' in api
+    assert '"/trading-desk/diagnostics"' in api
+    assert "strategy_lab_snapshot" in api
+    assert "trading_desk_diagnostics" in api
+    assert "blocker_counts" in strategy_lab
+    assert "near_approval" in strategy_lab

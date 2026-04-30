@@ -13,6 +13,7 @@
       <div class="side-logo" aria-label="Bybit Research Lab">B</div>
       <button type="button" class="nav-item active" data-nav-target="workspace" title="Рабочее место оператора" aria-label="Рабочее место оператора" aria-current="page">D</button>
       <button type="button" class="nav-item" data-nav-target="candidateQueue" title="15m рекомендации" aria-label="15m рекомендации">S</button>
+      <button type="button" class="nav-item" data-nav-target="strategyLabPanel" title="Strategy Lab" aria-label="Strategy Lab">Q</button>
       <button type="button" class="nav-item" data-nav-target="equityCanvas" title="Карта сделки и equity" aria-label="Карта сделки и equity">G</button>
       <button type="button" class="nav-item" data-nav-target="llmVerdictCard" title="LLM verdict" aria-label="LLM verdict">AI</button>
       <button type="button" class="nav-item" data-nav-target="operatorProtocol" title="Протокол" aria-label="Протокол">P</button>
@@ -55,6 +56,8 @@
           <article class="kpi-card price-card"><span>Свечи</span><b id="kpiCandles">—</b><small>актуальность рынка</small></article>
           <article class="kpi-card"><span>Universe</span><b id="kpiUniverse">—</b><small>ликвидные рынки</small></article>
           <article class="kpi-card hot signal-card"><span>15m setups</span><b id="kpiSignals">—</b><small>15m рекомендации</small></article>
+          <article class="kpi-card"><span>Approved</span><b id="kpiApprovedStrategies">—</b><small>допуск Strategy Lab</small></article>
+          <article class="kpi-card"><span>Trading Desk</span><b id="kpiReviewEntries">—</b><small>кандидаты на ручную проверку</small></article>
         </section>
 
         <section class="cockpit-grid" aria-label="Trading decision cockpit">
@@ -76,6 +79,21 @@
               <div class="queue-header" aria-hidden="true"><span>Инструмент</span><span>Статус</span><span>Score</span></div>
               <div id="candidateQueue" class="candidate-queue empty-state" aria-live="polite">Очередь появится после построения рекомендаций.</div>
               <button type="button" class="queue-more ghost">Открыть полный список <span>›</span></button>
+            </section>
+
+            <section class="panel strategy-lab-panel" id="strategyLabPanel">
+              <div class="panel-head compact-head">
+                <div><p class="eyebrow">Strategy Lab</p><h2>Качество стратегий</h2></div>
+                <button type="button" id="refreshStrategyLabBtn" class="icon-button" data-busy-lock="true" title="Обновить Strategy Lab" aria-label="Обновить Strategy Lab">↻</button>
+              </div>
+              <div class="strategy-lab-summary" aria-label="Воронка допуска стратегий">
+                <div><span>Approved</span><b id="labApprovedCount">—</b></div>
+                <div><span>Watch</span><b id="labWatchCount">—</b></div>
+                <div><span>Research</span><b id="labResearchCount">—</b></div>
+                <div><span>Rejected</span><b id="labRejectedCount">—</b></div>
+              </div>
+              <div id="tradingDeskDiagnostics" class="desk-diagnostics empty-state">Диагностика появится после загрузки Strategy Lab.</div>
+              <div id="strategyLabBody" class="strategy-lab-body empty-state">Нет данных Strategy Lab. Запустите quality refresh или фоновый backtest.</div>
             </section>
 
             <section class="panel ops-panel" id="opsPanel">
@@ -125,6 +143,7 @@
                   <button type="button" id="syncSentimentBtn" data-busy-lock="true">Обновить sentiment</button>
                   <button type="button" id="backtestBtn" data-busy-lock="true">Бэктест сетапа</button>
                   <button type="button" id="backtestAutoBtn" data-busy-lock="true">Авто-бэктест сейчас</button>
+                  <button type="button" id="qualityRefreshBtn" data-busy-lock="true">Quality refresh</button>
                 </div>
                 <div id="operationStatus" class="operation-status" role="status" aria-live="polite">Операции не запускались.</div>
               </div>
@@ -302,6 +321,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=trading-cockpit-v12"></script>
+  <script src="/static/app.js?v=trading-cockpit-v20"></script>
 </body>
 </html>

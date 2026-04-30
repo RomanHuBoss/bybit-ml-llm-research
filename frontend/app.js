@@ -17,6 +17,8 @@ const state = {
   backtestStatus: null,
   backtestSummary: null,
   signalStatus: null,
+  strategyLab: null,
+  tradingDiagnostics: null,
   contextTab: 'risk',
   entryInterval: '15',
   recommendationIntervals: ['15'],
@@ -906,6 +908,17 @@ function baseChecklistFor(s) {
 }
 
 function noSignalExplanation() {
+  const desk = state.tradingDiagnostics || {};
+  if (desk.desk_status === 'NO_REVIEW' && desk.total_candidates > 0) {
+    const quality = desk.by_quality || {};
+    const blockers = Object.entries(desk.blockers || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join('; ');
+    return `Trading Desk пуст: ${desk.total_candidates} свежих сетапов, REVIEW_ENTRY = 0. Quality: APPROVED ${quality.APPROVED || 0}, WATCHLIST ${quality.WATCHLIST || 0}, RESEARCH ${quality.RESEARCH || 0}, REJECTED ${quality.REJECTED || 0}. ${blockers ? `Главные причины: ${blockers}.` : 'Причины см. в Strategy Lab.'}`;
+  }
+  const lab = state.strategyLab || {};
+  const summary = lab.summary || {};
+  if (summary.total && !Number(summary.approved || 0)) {
+    return `Торговых рекомендаций нет: Strategy Lab не имеет APPROVED-стратегий (${summary.research || 0} research, ${summary.rejected || 0} rejected). Это штатный запрет, а не пустой экран.`;
+  }
   const cycle = state.signalStatus?.last_cycle || {};
   const queued = num(cycle.queued, 0) || 0;
   const built = num(cycle.signals_built, 0) || 0;
@@ -921,6 +934,110 @@ function noSignalExplanation() {
     return 'Фоновый цикл запущен, но свежий рынок еще не загружен. Вход по умолчанию запрещён.';
   }
   return 'Обновите рынок и рекомендации. По умолчанию вход запрещён.';
+}
+
+function qualityStatusClass(status) {
+  return cssToken(String(status || 'RESEARCH').toLowerCase(), 'research');
+}
+
+function blockerText(code) {
+  return {
+    sample_size: 'мало сделок',
+    profit_factor: 'PF ниже допуска',
+    pf_missing: 'PF не рассчитан',
+    drawdown: 'DD выше лимита',
+    return: 'доходность ниже допуска',
+    walk_forward: 'walk-forward слабый',
+    rejected: 'отклонено',
+    strategy_research: 'не approved',
+    strategy_rejected: 'quality rejected',
+    backtest_missing: 'нет бэктеста',
+    backtest_weak: 'слабый бэктест',
+    walk_forward_missing: 'нет WF',
+    liquidity_unknown: 'нет liquidity',
+    mtf_partial: 'MTF частичный',
+  }[code] || code;
+}
+
+function renderTradingDiagnostics() {
+  const box = $('tradingDeskDiagnostics');
+  if (!box) return;
+  const diag = state.tradingDiagnostics || {};
+  if (!diag.total_candidates && !state.strategyLab) {
+    box.className = 'desk-diagnostics empty-state';
+    box.textContent = 'Диагностика появится после загрузки Strategy Lab.';
+    return;
+  }
+  const blockers = Object.entries(diag.blockers || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  box.className = `desk-diagnostics ${diag.desk_status === 'HAS_REVIEW' ? 'ok' : 'warn'}`;
+  box.innerHTML = `
+    <strong>${escapeHtml(diag.headline || state.strategyLab?.headline || 'Strategy Lab загружен.')}</strong>
+    <div class="lab-blockers">
+      ${blockers.length ? blockers.map(([code, count]) => `<div><span>${escapeHtml(blockerText(code))}</span><b>${escapeHtml(count)}</b></div>`).join('') : '<div><span>Блокеры</span><b>—</b></div>'}
+    </div>`;
+}
+
+function renderStrategyLab() {
+  const lab = state.strategyLab || {};
+  const summary = lab.summary || {};
+  const items = lab.items || [];
+  setText('kpiApprovedStrategies', summary.approved ?? '—');
+  setText('labApprovedCount', summary.approved ?? '—');
+  setText('labWatchCount', summary.watchlist ?? '—');
+  setText('labResearchCount', summary.research ?? '—');
+  setText('labRejectedCount', summary.rejected ?? '—');
+  renderTradingDiagnostics();
+  const body = $('strategyLabBody');
+  if (!body) return;
+  if (!items.length) {
+    body.className = 'strategy-lab-body empty-state';
+    body.textContent = 'Нет quality-строк. Запустите фоновый backtest или /api/strategies/quality/refresh.';
+    return;
+  }
+  const top = items.slice(0, 30);
+  body.className = 'strategy-lab-body';
+  body.innerHTML = `
+    <div class="lab-table-wrap">
+      <table class="strategy-lab-table">
+        <thead><tr><th>Status</th><th>Score</th><th>Symbol</th><th>TF</th><th>Strategy</th><th>Trades</th><th>PF</th><th>DD</th><th>WF</th><th>Blocker</th></tr></thead>
+        <tbody>
+          ${top.map((row) => {
+            const status = String(row.quality_status || 'RESEARCH').toUpperCase();
+            const blockers = (row.approval_blockers || []).map((x) => blockerText(x.code)).slice(0, 2).join('; ');
+            return `<tr>
+              <td><span class="quality-pill ${qualityStatusClass(status)}">${escapeHtml(status)}</span></td>
+              <td>${fmt(row.quality_score, 0)}</td>
+              <td>${escapeHtml(row.symbol || '—')}</td>
+              <td>${escapeHtml(row.interval || '—')}</td>
+              <td title="${escapeHtml(row.strategy || '')}">${escapeHtml(compactStrategy(row.strategy || '—'))}</td>
+              <td>${fmt(row.trades_count, 0)}</td>
+              <td>${fmt(row.profit_factor, 2)}</td>
+              <td>${pct(row.max_drawdown, 1)}</td>
+              <td>${row.walk_forward_pass_rate === null || row.walk_forward_pass_rate === undefined ? '—' : pct(row.walk_forward_pass_rate, 0)}</td>
+              <td title="${escapeHtml(row.quality_reason || '')}">${escapeHtml(blockers || row.quality_reason || '—')}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function refreshStrategyLab() {
+  const category = encodeURIComponent($('category')?.value || 'linear');
+  const lab = await api(`/api/strategies/lab?category=${category}&limit=200`);
+  state.strategyLab = lab;
+  try {
+    const diag = await api(`/api/trading-desk/diagnostics?category=${category}&interval=${encodeURIComponent($('interval')?.value || state.entryInterval || '15')}&limit=200`);
+    state.tradingDiagnostics = diag;
+    setText('kpiReviewEntries', diag.review_entries ?? '—');
+  } catch (error) {
+    state.tradingDiagnostics = null;
+    log(`WARN trading desk diagnostics: ${error.message}`);
+  }
+  renderStrategyLab();
+  renderQueue();
 }
 
 function algorithmDecisionFor(s) {
@@ -1615,7 +1732,7 @@ async function refreshAll() {
     await refreshSignalStatus();
     await refreshBacktestStatus();
     await refreshLlmStatus();
-    const results = await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews()]);
+    const results = await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews(), refreshStrategyLab()]);
     const failed = results.filter((r) => r.status === 'rejected');
     if (failed.length) {
       showOperationStatus(`Экран обновлен частично: ${failed.length} блока недоступны. Подробности в журнале.`, 'warn');
@@ -1755,7 +1872,18 @@ function bindControls() {
     });
   });
 
-  bindClick('rankBtn', async () => runOperation('Rank refreshed', refreshRank));
+  bindClick('rankBtn', async () => runOperation('Rank refreshed', async () => { await refreshRank(); await refreshStrategyLab(); }));
+
+  bindClick('refreshStrategyLabBtn', async () => runOperation('Strategy Lab refreshed', refreshStrategyLab));
+
+  bindClick('qualityRefreshBtn', async () => {
+    await runOperation('Strategy quality refreshed', async () => {
+      const data = await api('/api/strategies/quality/refresh', { method: 'POST' });
+      await refreshStrategyLab();
+      await refreshRank();
+      return data.result;
+    });
+  });
 
   bindClick('backtestBtn', async () => {
     await runOperation('Backtest', async () => {
@@ -1780,6 +1908,7 @@ function bindControls() {
     await runOperation('Background backtest refresh requested', async () => {
       const data = await api('/api/backtest/background/run-now', { method: 'POST' });
       await refreshBacktestStatus();
+      await refreshStrategyLab();
       await refreshRank();
       return data.status;
     });

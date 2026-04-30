@@ -193,6 +193,9 @@ class Settings:
     strategy_approval_min_profit_factor: float = _float("STRATEGY_APPROVAL_MIN_PROFIT_FACTOR", 1.20)
     strategy_approval_max_drawdown: float = _float("STRATEGY_APPROVAL_MAX_DRAWDOWN", 0.25)
     strategy_approval_min_total_return: float = _float("STRATEGY_APPROVAL_MIN_TOTAL_RETURN", 0.0)
+    strategy_walk_forward_windows: int = _int("STRATEGY_WALK_FORWARD_WINDOWS", 6)
+    strategy_walk_forward_min_windows: int = _int("STRATEGY_WALK_FORWARD_MIN_WINDOWS", 3)
+    strategy_walk_forward_min_pass_rate: float = _float("STRATEGY_WALK_FORWARD_MIN_PASS_RATE", 0.55)
 
     # ML must be maintained by the background research loop, not only by a manual
     # UI button. The model remains per category+symbol+interval+horizon; stale or
@@ -303,6 +306,12 @@ def _validate_settings(s: Settings) -> None:
         problems.append("STRATEGY_APPROVAL_MAX_DRAWDOWN должен быть в диапазоне [0.01; 0.80]")
     if not (-0.50 <= s.strategy_approval_min_total_return <= 2.0):
         problems.append("STRATEGY_APPROVAL_MIN_TOTAL_RETURN должен быть в диапазоне [-0.50; 2.0]")
+    if not (2 <= s.strategy_walk_forward_windows <= 20):
+        problems.append("STRATEGY_WALK_FORWARD_WINDOWS должен быть в диапазоне [2; 20]")
+    if not (1 <= s.strategy_walk_forward_min_windows <= s.strategy_walk_forward_windows):
+        problems.append("STRATEGY_WALK_FORWARD_MIN_WINDOWS должен быть в диапазоне [1; STRATEGY_WALK_FORWARD_WINDOWS]")
+    if not (0.0 <= s.strategy_walk_forward_min_pass_rate <= 1.0):
+        problems.append("STRATEGY_WALK_FORWARD_MIN_PASS_RATE должен быть в диапазоне [0.0; 1.0]")
     if s.ml_auto_train_ttl_hours < 1:
         problems.append("ML_AUTO_TRAIN_TTL_HOURS должен быть >= 1")
     if not (1 <= s.ml_auto_train_horizon_bars <= 240):

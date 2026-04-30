@@ -320,3 +320,31 @@ def test_frontend_unknown_spread_is_not_rendered_as_zero_risk():
     assert "+ riskFromSpread(s)" in js
     assert "num(s.spread_pct, 0) > 0.15" not in js
 
+
+
+def test_frontend_has_strategy_lab_and_desk_diagnostics_panel():
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for fragment in [
+        'id="strategyLabPanel"',
+        'id="strategyLabBody"',
+        'id="tradingDeskDiagnostics"',
+        'id="qualityRefreshBtn"',
+        'id="kpiApprovedStrategies"',
+        'id="kpiReviewEntries"',
+    ]:
+        assert fragment in html
+
+    for fragment in [
+        "function refreshStrategyLab",
+        "/api/strategies/lab",
+        "/api/trading-desk/diagnostics",
+        "Trading Desk пуст",
+        "walk_forward_pass_rate",
+    ]:
+        assert fragment in js
+
+    for fragment in [".strategy-lab-panel", ".strategy-lab-table", ".quality-pill"]:
+        assert fragment in css

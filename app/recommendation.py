@@ -129,6 +129,8 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     pf = _finite(row.get("profit_factor"))
     max_dd = _finite(row.get("max_drawdown"))
     win_rate = _finite(row.get("win_rate"))
+    wf_rate = _finite(row.get("walk_forward_pass_rate"))
+    wf_windows = int(_finite(row.get("walk_forward_windows"), 0) or 0)
     no_loss_backtest = trades > 0 and pf is None and win_rate is not None and win_rate >= 0.999
 
     quality = effective_strategy_quality(row)
@@ -155,6 +157,12 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         _add_reason(evidence, "backtest_weak", "Бэктест слабый или малый", f"Сделок {int(trades)}, PF {pf:.2f}; требуется approval: сделок >= {settings.strategy_approval_min_trades}, PF >= {settings.strategy_approval_min_profit_factor:.2f}.")
     if max_dd is not None and max_dd > max(settings.strategy_approval_max_drawdown, settings.max_daily_drawdown * 2.5, 0.12):
         _add_reason(evidence, "drawdown_high", "Бэктест показывает высокий DD", f"Max DD {max_dd:.2%}; риск выше quality-лимита.")
+    if wf_rate is None or wf_windows < settings.strategy_walk_forward_min_windows:
+        _add_reason(evidence, "walk_forward_missing", "Walk-forward еще не рассчитан", "Quality gate работает по обычному backtest evidence; нужен rolling stability / walk-forward блок.")
+    elif wf_rate < settings.strategy_walk_forward_min_pass_rate:
+        _add_reason(evidence, "walk_forward_weak", "Walk-forward нестабилен", f"WF pass {wf_rate:.0%} ниже лимита {settings.strategy_walk_forward_min_pass_rate:.0%}.")
+    else:
+        _add_reason(evidence, "walk_forward_ok", "Walk-forward подтверждает устойчивость", f"WF pass {wf_rate:.0%} по {wf_windows} окнам.")
 
     roc_auc = _finite(row.get("roc_auc"))
     ml_probability = _finite(row.get("ml_probability"))
@@ -183,6 +191,8 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         score += max(0.0, min(1.0, (ml_probability - 0.5) / 0.25)) * 4.0
     if max_dd is not None:
         score += max(0.0, 1.0 - min(1.0, max_dd / 0.18)) * 4.0
+    if wf_rate is not None and wf_windows >= settings.strategy_walk_forward_min_windows:
+        score += max(0.0, min(1.0, wf_rate)) * 4.0
     score -= min(18.0, len(evidence) * 3.0)
     score -= min(16.0, len(warnings) * 4.0)
     score = int(round(max(0.0, min(100.0, score))))

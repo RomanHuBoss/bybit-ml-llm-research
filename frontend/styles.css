@@ -930,3 +930,104 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
   font-size: 13px;
   line-height: 1.35;
 }
+
+.strategy-lab-panel {
+  min-height: 360px;
+}
+
+.strategy-lab-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.strategy-lab-summary > div,
+.desk-diagnostics,
+.lab-table-wrap,
+.lab-blockers {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.42);
+  border-radius: 14px;
+}
+
+.strategy-lab-summary > div {
+  padding: 8px;
+}
+
+.strategy-lab-summary span,
+.lab-blockers span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.strategy-lab-summary b {
+  display: block;
+  margin-top: 2px;
+  font-size: 18px;
+}
+
+.desk-diagnostics {
+  padding: 10px;
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.desk-diagnostics strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.lab-blockers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.lab-table-wrap {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.strategy-lab-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.strategy-lab-table th,
+.strategy-lab-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.strategy-lab-table th {
+  color: var(--muted);
+  font-weight: 600;
+  background: rgba(2, 6, 23, 0.38);
+  position: sticky;
+  top: 0;
+}
+
+.quality-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.quality-pill.approved { color: var(--green); background: rgba(0, 227, 140, .10); }
+.quality-pill.watchlist { color: #facc15; background: rgba(250, 204, 21, .10); }
+.quality-pill.research { color: var(--blue); background: rgba(56, 189, 248, .10); }
+.quality-pill.rejected { color: var(--red); background: rgba(255, 77, 109, .10); }
+.quality-pill.stale { color: var(--muted); background: rgba(148, 163, 184, .10); }

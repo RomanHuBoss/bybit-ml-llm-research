@@ -298,15 +298,6 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
     # создает race condition и может привязать сделки к чужому run_id.
     run_id = int(returned[0]["id"]) if returned else None
     quality = None
-    if run_id:
-        try:
-            from .strategy_quality import upsert_strategy_quality_from_run_id
-
-            quality = upsert_strategy_quality_from_run_id(run_id)
-        except Exception:
-            # Бэктест должен сохранить результат даже если quality-слой еще не мигрирован
-            # или временно недоступен. Следующий фоновый цикл сможет пересчитать quality.
-            quality = None
     if run_id and trades:
         execute_many_values(
             """
@@ -330,6 +321,15 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
                 for t in trades
             ],
         )
+    if run_id:
+        try:
+            from .strategy_quality import upsert_strategy_quality_from_run_id
+
+            quality = upsert_strategy_quality_from_run_id(run_id)
+        except Exception:
+            # Бэктест должен сохранить результат даже если quality-слой еще не мигрирован
+            # или временно недоступен. Следующий фоновый цикл сможет пересчитать quality.
+            quality = None
     return {
         "run_id": run_id,
         "symbol": symbol.upper(),

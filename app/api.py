@@ -71,6 +71,7 @@ from .safety import annotate_and_filter_fresh_signals
 from .signal_background import signal_refresher
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
 from .strategy_quality import latest_strategy_quality, quality_summary, refresh_strategy_quality
+from .strategy_lab import strategy_lab_snapshot, trading_desk_diagnostics
 from .validation import bounded_int, normalize_category, normalize_interval, normalize_intervals, normalize_symbol, normalize_symbols
 
 router = DeferredAPIRouter(prefix="/api")
@@ -266,6 +267,9 @@ def status() -> dict[str, Any]:
             "min_profit_factor": settings.strategy_approval_min_profit_factor,
             "max_drawdown": settings.strategy_approval_max_drawdown,
             "min_total_return": settings.strategy_approval_min_total_return,
+            "walk_forward_windows": settings.strategy_walk_forward_windows,
+            "walk_forward_min_windows": settings.strategy_walk_forward_min_windows,
+            "walk_forward_min_pass_rate": settings.strategy_walk_forward_min_pass_rate,
         },
         "mtf_consensus": {
             "enabled": settings.mtf_consensus_enabled,
@@ -589,6 +593,36 @@ def api_strategy_quality(category: str = settings.default_category, interval: st
         }
     except ValueError as exc:
         raise _bad_request(exc) from exc
+
+
+@router.get("/strategies/lab")
+def api_strategy_lab(category: str = settings.default_category, interval: str | None = None, limit: int = 200) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        interval_value = normalize_interval(interval) if interval else None
+        bounded_limit = bounded_int(limit, "limit", 1, 500)
+        return {"ok": True, **strategy_lab_snapshot(category, interval_value, bounded_limit)}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/trading-desk/diagnostics")
+def api_trading_desk_diagnostics(category: str = settings.default_category, interval: str | None = None, limit: int = 200) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        interval_value = interval or (settings.mtf_entry_interval if settings.mtf_consensus_enabled else settings.default_interval)
+        if interval_value.strip().lower() in {"all", "multi", "mtf", "*"}:
+            intervals = list(settings.signal_auto_intervals)
+        else:
+            intervals = normalize_intervals(interval_value)
+        items = rank_candidates_multi(category, intervals, bounded_int(limit, "limit", 1, 500))
+        return {"ok": True, "intervals": intervals, **trading_desk_diagnostics(items), "items": items}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/strategies/quality/refresh")

@@ -224,12 +224,23 @@ CREATE TABLE IF NOT EXISTS strategy_quality (
     win_rate NUMERIC,
     profit_factor NUMERIC,
     trades_count INTEGER NOT NULL DEFAULT 0,
+    expectancy NUMERIC,
+    avg_trade_pnl NUMERIC,
+    median_trade_pnl NUMERIC,
+    last_30d_return NUMERIC,
+    last_90d_return NUMERIC,
+    walk_forward_pass_rate NUMERIC,
+    walk_forward_windows INTEGER,
+    walk_forward_summary JSONB,
     diagnostics JSONB,
     UNIQUE(category, symbol, interval, strategy)
 );
 
 CREATE INDEX IF NOT EXISTS idx_strategy_quality_status
 ON strategy_quality(category, interval, quality_status, quality_score DESC, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_quality_symbol
+ON strategy_quality(category, symbol, interval, strategy, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS model_runs (
     id BIGSERIAL PRIMARY KEY,

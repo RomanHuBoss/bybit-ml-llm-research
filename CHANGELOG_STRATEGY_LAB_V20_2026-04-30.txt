@@ -1,0 +1,11 @@
+V20 Strategy Lab / Trading Desk diagnostics
+
+- Added app/strategy_lab.py.
+- Added GET /api/strategies/lab.
+- Added GET /api/trading-desk/diagnostics.
+- Extended strategy_quality with expectancy, recent returns and walk-forward stability fields.
+- Moved strategy quality upsert after backtest_trades insert so derived metrics use actual trades.
+- Added frontend Strategy Lab panel, funnel counts and blockers.
+- Added Quality refresh control.
+- Updated no-signal explanation to show Trading Desk diagnostics instead of a generic empty state.
+- Added docs/QUALITY_SNAPSHOT_2026-04-30.json as a sample export for regression/product review.
