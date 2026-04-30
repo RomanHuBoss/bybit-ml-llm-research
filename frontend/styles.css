@@ -1436,3 +1436,45 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
     transition-duration: .01ms !important;
   }
 }
+
+/* v22 reliability patch: bounded async Strategy Quality refresh status */
+.quality-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.quality-refresh-status {
+  max-width: 190px;
+  padding: 4px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quality-refresh-status.running {
+  color: var(--blue);
+  border-color: rgba(56, 189, 248, 0.38);
+}
+
+.quality-refresh-status.ok {
+  color: var(--green);
+  border-color: rgba(0, 227, 140, 0.32);
+}
+
+.quality-refresh-status.warn {
+  color: var(--amber);
+  border-color: rgba(245, 158, 11, 0.42);
+}
+
+.quality-refresh-status.error {
+  color: var(--red);
+  border-color: rgba(255, 77, 109, 0.42);
+}

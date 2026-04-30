@@ -84,7 +84,10 @@
             <section class="panel strategy-lab-panel" id="strategyLabPanel">
               <div class="panel-head compact-head">
                 <div><p class="eyebrow">Strategy Lab</p><h2>Качество стратегий</h2></div>
-                <button type="button" id="refreshStrategyLabBtn" class="icon-button" data-busy-lock="true" title="Обновить Strategy Lab" aria-label="Обновить Strategy Lab">↻</button>
+                <div class="quality-actions">
+                  <span id="qualityRefreshStatus" class="quality-refresh-status" aria-live="polite">refresh idle</span>
+                  <button type="button" id="refreshStrategyLabBtn" class="icon-button" data-busy-lock="true" title="Обновить Strategy Lab" aria-label="Обновить Strategy Lab">↻</button>
+                </div>
               </div>
               <div class="strategy-lab-summary" aria-label="Воронка допуска стратегий">
                 <div><span>Approved</span><b id="labApprovedCount">—</b></div>

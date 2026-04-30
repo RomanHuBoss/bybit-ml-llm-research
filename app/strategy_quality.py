@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import statistics
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -367,23 +368,20 @@ def derive_backtest_run_metrics(run_id: int | None, run_row: dict[str, Any] | No
     return metrics
 
 
-def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | None:
+def upsert_strategy_quality_from_run(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Пересчитывает и сохраняет quality row для уже выбранного backtest_run.
+
+    В refresh-цикле это устраняет лишний SELECT backtest_runs на каждую стратегию.
+    Тяжелая часть — чтение сделок для walk-forward — остается, но теперь она
+    ограничивается внешним time budget и не блокирует UI HTTP-запрос.
+    """
+    run_id = int(row.get("backtest_run_id") or row.get("id") or 0)
     if not run_id:
         return None
-    _ensure_strategy_quality_table()
-    row = fetch_one(
-        """
-        SELECT id AS backtest_run_id, created_at AS last_backtest_at, category, symbol, interval, strategy,
-               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve
-        FROM backtest_runs
-        WHERE id=%s
-        """,
-        (run_id,),
-    )
-    if not row:
-        return None
-    derived = derive_backtest_run_metrics(run_id, row)
-    quality_input = {**row, **derived}
+    normalized = dict(row)
+    normalized["backtest_run_id"] = run_id
+    derived = derive_backtest_run_metrics(run_id, normalized)
+    quality_input = {**normalized, **derived}
     quality = evaluate_strategy_quality(quality_input)
     execute(
         """
@@ -409,22 +407,22 @@ def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | 
                       diagnostics=EXCLUDED.diagnostics
         """,
         (
-            row["category"],
-            row["symbol"],
-            row["interval"],
-            row["strategy"],
+            normalized["category"],
+            normalized["symbol"],
+            normalized["interval"],
+            normalized["strategy"],
             quality["quality_status"],
             quality["quality_score"],
             quality["evidence_grade"],
             quality["quality_reason"],
-            row["backtest_run_id"],
-            row["last_backtest_at"],
-            row.get("total_return"),
-            row.get("max_drawdown"),
-            row.get("sharpe"),
-            row.get("win_rate"),
-            row.get("profit_factor"),
-            row.get("trades_count") or 0,
+            normalized["backtest_run_id"],
+            normalized.get("last_backtest_at"),
+            normalized.get("total_return"),
+            normalized.get("max_drawdown"),
+            normalized.get("sharpe"),
+            normalized.get("win_rate"),
+            normalized.get("profit_factor"),
+            normalized.get("trades_count") or 0,
             derived.get("expectancy"),
             derived.get("avg_trade_pnl"),
             derived.get("median_trade_pnl"),
@@ -436,17 +434,42 @@ def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | 
             quality["quality_diagnostics"],
         ),
     )
-    returned = {k: v for k, v in row.items() if k != "equity_curve"}
+    returned = {k: v for k, v in normalized.items() if k != "equity_curve"}
     return {**returned, **derived, **quality}
 
 
-def refresh_strategy_quality(limit: int = 500) -> dict[str, Any]:
+def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | None:
+    if not run_id:
+        return None
+    _ensure_strategy_quality_table()
+    row = fetch_one(
+        """
+        SELECT id AS backtest_run_id, created_at AS last_backtest_at, category, symbol, interval, strategy,
+               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve
+        FROM backtest_runs
+        WHERE id=%s
+        """,
+        (run_id,),
+    )
+    if not row:
+        return None
+    return upsert_strategy_quality_from_run(row)
+
+
+def refresh_strategy_quality(limit: int = 500, time_budget_sec: float | None = None) -> dict[str, Any]:
+    """Пересчитывает strategy_quality ограниченной пачкой и с soft time-budget.
+
+    Раньше UI дергал этот расчет синхронно на 500 стратегий, что легко превышало
+    45 секунд: на каждую стратегию читались сделки, equity curve и выполнялся upsert.
+    Теперь функция умеет честно вернуть partial=True, а HTTP endpoint запускает ее в фоне.
+    """
+    started = time.monotonic()
     _ensure_strategy_quality_table()
     rows = fetch_all(
         """
         SELECT DISTINCT ON (category, symbol, interval, strategy)
                id AS backtest_run_id, created_at AS last_backtest_at, category, symbol, interval, strategy,
-               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count
+               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve
         FROM backtest_runs
         ORDER BY category, symbol, interval, strategy, created_at DESC
         LIMIT %s
@@ -454,13 +477,46 @@ def refresh_strategy_quality(limit: int = 500) -> dict[str, Any]:
         (limit,),
     )
     updated = 0
+    failed = 0
+    partial = False
+    errors: list[dict[str, Any]] = []
     statuses: dict[str, int] = {APPROVED: 0, WATCHLIST: 0, RESEARCH: 0, REJECTED: 0, STALE: 0}
-    for row in rows:
-        quality = upsert_strategy_quality_from_run_id(int(row["backtest_run_id"]))
+    for index, row in enumerate(rows):
+        elapsed = time.monotonic() - started
+        if time_budget_sec is not None and elapsed >= max(0.0, float(time_budget_sec)):
+            partial = True
+            break
+        try:
+            quality = upsert_strategy_quality_from_run(row)
+        except Exception as exc:
+            failed += 1
+            if len(errors) < 10:
+                errors.append(
+                    {
+                        "backtest_run_id": row.get("backtest_run_id"),
+                        "symbol": row.get("symbol"),
+                        "interval": row.get("interval"),
+                        "strategy": row.get("strategy"),
+                        "error": str(exc)[:500],
+                    }
+                )
+            continue
         if quality:
             updated += 1
             statuses[quality["quality_status"]] = statuses.get(quality["quality_status"], 0) + 1
-    return {"updated": updated, "statuses": statuses}
+    scanned = updated + failed
+    return {
+        "updated": updated,
+        "failed": failed,
+        "scanned": scanned,
+        "available": len(rows),
+        "limit": limit,
+        "partial": partial,
+        "duration_sec": round(time.monotonic() - started, 3),
+        "time_budget_sec": time_budget_sec,
+        "statuses": statuses,
+        "errors": errors,
+    }
 
 
 def latest_strategy_quality(category: str = "linear", interval: str | None = None, limit: int = 100) -> list[dict[str, Any]]:

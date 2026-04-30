@@ -196,6 +196,8 @@ class Settings:
     strategy_walk_forward_windows: int = _int("STRATEGY_WALK_FORWARD_WINDOWS", 6)
     strategy_walk_forward_min_windows: int = _int("STRATEGY_WALK_FORWARD_MIN_WINDOWS", 3)
     strategy_walk_forward_min_pass_rate: float = _float("STRATEGY_WALK_FORWARD_MIN_PASS_RATE", 0.55)
+    strategy_quality_refresh_limit: int = _int("STRATEGY_QUALITY_REFRESH_LIMIT", 200)
+    strategy_quality_refresh_time_budget_sec: int = _int("STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC", 30)
 
     # ML must be maintained by the background research loop, not only by a manual
     # UI button. The model remains per category+symbol+interval+horizon; stale or
@@ -312,6 +314,10 @@ def _validate_settings(s: Settings) -> None:
         problems.append("STRATEGY_WALK_FORWARD_MIN_WINDOWS должен быть в диапазоне [1; STRATEGY_WALK_FORWARD_WINDOWS]")
     if not (0.0 <= s.strategy_walk_forward_min_pass_rate <= 1.0):
         problems.append("STRATEGY_WALK_FORWARD_MIN_PASS_RATE должен быть в диапазоне [0.0; 1.0]")
+    if not (1 <= s.strategy_quality_refresh_limit <= 5000):
+        problems.append("STRATEGY_QUALITY_REFRESH_LIMIT должен быть в диапазоне [1; 5000]")
+    if not (5 <= s.strategy_quality_refresh_time_budget_sec <= 600):
+        problems.append("STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC должен быть в диапазоне [5; 600]")
     if s.ml_auto_train_ttl_hours < 1:
         problems.append("ML_AUTO_TRAIN_TTL_HOURS должен быть >= 1")
     if not (1 <= s.ml_auto_train_horizon_bars <= 240):

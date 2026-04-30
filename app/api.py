@@ -71,6 +71,7 @@ from .safety import annotate_and_filter_fresh_signals
 from .signal_background import signal_refresher
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
 from .strategy_quality import latest_strategy_quality, quality_summary, refresh_strategy_quality
+from .strategy_quality_background import strategy_quality_refresher
 from .strategy_lab import strategy_lab_snapshot, trading_desk_diagnostics
 from .validation import bounded_int, normalize_category, normalize_interval, normalize_intervals, normalize_symbol, normalize_symbols
 
@@ -270,6 +271,9 @@ def status() -> dict[str, Any]:
             "walk_forward_windows": settings.strategy_walk_forward_windows,
             "walk_forward_min_windows": settings.strategy_walk_forward_min_windows,
             "walk_forward_min_pass_rate": settings.strategy_walk_forward_min_pass_rate,
+            "refresh_limit": settings.strategy_quality_refresh_limit,
+            "refresh_time_budget_sec": settings.strategy_quality_refresh_time_budget_sec,
+            "refresh_background": strategy_quality_refresher.status(),
         },
         "mtf_consensus": {
             "enabled": settings.mtf_consensus_enabled,
@@ -625,10 +629,33 @@ def api_trading_desk_diagnostics(category: str = settings.default_category, inte
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/strategies/quality/refresh/status")
+def api_strategy_quality_refresh_status() -> dict[str, Any]:
+    return {"ok": True, "status": strategy_quality_refresher.status()}
+
+
 @router.post("/strategies/quality/refresh")
-def api_strategy_quality_refresh(limit: int = 500) -> dict[str, Any]:
+def api_strategy_quality_refresh(limit: int = settings.strategy_quality_refresh_limit, wait: bool = False) -> dict[str, Any]:
     try:
-        return {"ok": True, "result": refresh_strategy_quality(bounded_int(limit, "limit", 1, 5000))}
+        bounded_limit = bounded_int(limit, "limit", 1, 5000)
+        if wait:
+            # Синхронный режим оставлен для CLI/тестов и малых пачек. UI по умолчанию
+            # использует фоновый запуск, чтобы оператор не получал timeout вместо статуса.
+            return {
+                "ok": True,
+                "mode": "sync",
+                "result": refresh_strategy_quality(
+                    bounded_limit,
+                    time_budget_sec=settings.strategy_quality_refresh_time_budget_sec,
+                ),
+                "status": strategy_quality_refresher.status(),
+            }
+        return {
+            "ok": True,
+            "mode": "background",
+            "accepted": True,
+            "status": strategy_quality_refresher.request_run(bounded_limit),
+        }
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:

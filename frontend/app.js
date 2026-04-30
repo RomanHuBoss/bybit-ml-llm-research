@@ -19,6 +19,8 @@ const state = {
   signalStatus: null,
   strategyLab: null,
   tradingDiagnostics: null,
+  strategyQualityRefresh: null,
+  qualityRefreshPollTimer: null,
   contextTab: 'risk',
   entryInterval: '15',
   recommendationIntervals: ['15'],
@@ -180,6 +182,8 @@ function llmLifeText(updatedAt) {
 const DEFAULT_API_TIMEOUT_MS = 45_000;
 const SENTIMENT_OPERATION_TIMEOUT_MS = 180_000;
 const LONG_OPERATION_TIMEOUT_MS = 360_000;
+const QUALITY_REFRESH_LIMIT = 200;
+const QUALITY_REFRESH_POLL_MS = 4_000;
 
 function marketSyncTimeoutMs() {
   const symbolCount = Math.max(1, selectedSymbols().length);
@@ -987,6 +991,7 @@ function noSignalExplanation() {
     const blockers = Object.entries(desk.blockers || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join('; ');
     return `Trading Desk пуст: ${desk.total_candidates} свежих сетапов, REVIEW_ENTRY = 0. Quality: APPROVED ${quality.APPROVED || 0}, WATCHLIST ${quality.WATCHLIST || 0}, RESEARCH ${quality.RESEARCH || 0}, REJECTED ${quality.REJECTED || 0}. ${blockers ? `Главные причины: ${blockers}.` : 'Причины см. в Strategy Lab.'}`;
   }
+  renderStrategyQualityRefreshStatus();
   const lab = state.strategyLab || {};
   const summary = lab.summary || {};
   if (summary.total && !Number(summary.approved || 0)) {
@@ -1052,7 +1057,58 @@ function renderTradingDiagnostics() {
     </div>`;
 }
 
+function renderStrategyQualityRefreshStatus() {
+  const box = $('qualityRefreshStatus');
+  if (!box) return;
+  const status = state.strategyQualityRefresh || {};
+  const result = status.last_result || {};
+  const running = Boolean(status.running);
+  const pending = Boolean(status.pending);
+  const error = status.last_error;
+  const updated = num(result.updated, null);
+  const failed = num(result.failed, null);
+  const partial = Boolean(result.partial);
+  let text = 'refresh idle';
+  let cls = 'quality-refresh-status';
+  if (running) {
+    text = pending ? 'refresh running · pending' : 'refresh running';
+    cls += ' running loading-skeleton';
+  } else if (error) {
+    text = `refresh error · ${String(error).slice(0, 80)}`;
+    cls += ' error';
+  } else if (updated !== null || failed !== null) {
+    text = `refresh done · updated ${updated ?? 0}${failed ? ` · failed ${failed}` : ''}${partial ? ' · partial' : ''}`;
+    cls += partial ? ' warn' : ' ok';
+  }
+  box.className = cls;
+  box.textContent = text;
+}
+
+async function refreshStrategyQualityStatus() {
+  try {
+    const data = await api('/api/strategies/quality/refresh/status');
+    state.strategyQualityRefresh = data.status || {};
+  } catch (error) {
+    state.strategyQualityRefresh = { last_error: error.message || String(error) };
+  }
+  renderStrategyQualityRefreshStatus();
+  return state.strategyQualityRefresh;
+}
+
+function scheduleQualityRefreshPoll() {
+  if (state.qualityRefreshPollTimer) window.clearTimeout(state.qualityRefreshPollTimer);
+  state.qualityRefreshPollTimer = window.setTimeout(async () => {
+    const status = await refreshStrategyQualityStatus();
+    if (status?.running || status?.pending) {
+      scheduleQualityRefreshPoll();
+    } else {
+      await refreshStrategyLab().catch((error) => log(`WARN refresh Strategy Lab after quality refresh: ${error.message}`));
+    }
+  }, QUALITY_REFRESH_POLL_MS);
+}
+
 function renderStrategyLab() {
+  renderStrategyQualityRefreshStatus();
   const lab = state.strategyLab || {};
   const summary = lab.summary || {};
   const items = lab.items || [];
@@ -1109,6 +1165,7 @@ async function refreshStrategyLab() {
     state.tradingDiagnostics = null;
     log(`WARN trading desk diagnostics: ${error.message}`);
   }
+  await refreshStrategyQualityStatus();
   renderStrategyLab();
   renderQueue();
 }
@@ -1806,6 +1863,7 @@ async function refreshAll() {
     await refreshSignalStatus();
     await refreshBacktestStatus();
     await refreshLlmStatus();
+    await refreshStrategyQualityStatus();
     const results = await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews(), refreshStrategyLab()]);
     const failed = results.filter((r) => r.status === 'rejected');
     if (failed.length) {
@@ -1951,11 +2009,13 @@ function bindControls() {
   bindClick('refreshStrategyLabBtn', async () => runOperation('Strategy Lab refreshed', refreshStrategyLab));
 
   bindClick('qualityRefreshBtn', async () => {
-    await runOperation('Strategy quality refreshed', async () => {
-      const data = await api('/api/strategies/quality/refresh', { method: 'POST' });
-      await refreshStrategyLab();
+    await runOperation('Strategy quality refresh requested', async () => {
+      const data = await api(`/api/strategies/quality/refresh?limit=${QUALITY_REFRESH_LIMIT}`, { method: 'POST' });
+      state.strategyQualityRefresh = data.status || {};
+      renderStrategyQualityRefreshStatus();
+      scheduleQualityRefreshPoll();
       await refreshRank();
-      return data.result;
+      return data.status || data;
     });
   });
 

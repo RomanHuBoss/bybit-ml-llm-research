@@ -14,6 +14,7 @@ app/strategies.py         Правила сигналов, validation, persist l
 app/mtf.py                15m/60m/240m MTF consensus и veto
 app/recommendation.py     Каноническое операторское решение и strategy-quality gate
 app/strategy_quality.py    Квалификация стратегий APPROVED/WATCHLIST/RESEARCH/REJECTED
+app/strategy_quality_background.py Фоновый bounded refresh Strategy Quality Gate без HTTP-timeout
 app/operator_queue.py      Стабилизация очереди: 1 рынок = 1 операторский вердикт
 app/safety.py             Freshness, stale-bar filtering, R/R diagnostics
 app/research.py           Ранжирование кандидатов с backtest/ML/liquidity/LLM joins
@@ -62,6 +63,8 @@ DEFAULT_CATEGORY=linear
 DEFAULT_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
 DEFAULT_INTERVAL=60
 SIGNAL_AUTO_INTERVALS=15,60,240
+STRATEGY_QUALITY_REFRESH_LIMIT=200
+STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC=30
 MTF_ENTRY_INTERVAL=15
 MTF_BIAS_INTERVAL=60
 MTF_REGIME_INTERVAL=240
@@ -119,6 +122,7 @@ node --check frontend/app.js
 - практичного фьючерсного `trend_continuation_setup` с entry/SL/TP без автоматической торговли;
 - directional validity SL/TP относительно LONG/SHORT;
 - сортируемой таблицы сырых сигналов во frontend;
+- фонового non-blocking Strategy Quality refresh без 45-секундного UI-timeout;
 - сохранения advisory-only frontend-контракта.
 
 ## Торговая логика
@@ -170,6 +174,12 @@ Hard-veto срабатывает при:
 
 Только entry-TF может быть торговым кандидатом. Bias/regime TF используются как контекст. Если старший TF явно конфликтует с entry-направлением, candidate получает hard-veto.
 
+## Strategy Quality refresh и устранение UI-timeout
+
+Ручная кнопка `Quality refresh` больше не выполняет тяжелый пересчет `strategy_quality` в HTTP-потоке. Endpoint `POST /api/strategies/quality/refresh` ставит bounded-задачу в фоновый сериализованный исполнитель и сразу возвращает статус. Текущее состояние доступно через `GET /api/strategies/quality/refresh/status`.
+
+Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
+
 ## Frontend
 
 Интерфейс реализован как dark-mode trading cockpit:
@@ -213,6 +223,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 
 - Пустая очередь: проверьте свежесть свечей, MTF entry interval, liquidity filters, `MAX_SIGNAL_AGE_HOURS` и наличие хотя бы одного сетапа после `trend_continuation_setup`.
 - Все кандидаты `НЕТ ВХОДА`: откройте checklist/reasons; чаще всего причина в stale данных, MTF conflict, низком R/R или liquidity/spread.
+- `Quality refresh` долго идет: это штатная фоновая операция; смотрите статус в Strategy Lab или `/api/strategies/quality/refresh/status`. Если часто видите `partial=true`, уменьшите `STRATEGY_QUALITY_REFRESH_LIMIT` или увеличьте `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`.
 - Ошибка Bybit: уменьшите число symbols/intervals/days, проверьте rate limits и сеть.
 - Ошибка PostgreSQL: проверьте `.env`, доступность БД и примененную `sql/schema.sql`.
 - LLM unavailable: проверьте `OLLAMA_BASE_URL`, модель и timeout.
