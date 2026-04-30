@@ -368,3 +368,19 @@ python -S -m py_compile app/config.py app/strategy_quality.py app/strategy_lab.p
 node --check frontend/app.js
 pytest -q
 ```
+
+### V20 database migration for existing installs
+
+For an existing PostgreSQL database, run once after pulling V20:
+
+```bash
+python -m app.migrate_v20_strategy_lab
+```
+
+Equivalent direct SQL:
+
+```bash
+psql -h <host> -p <port> -U <user> -d <db> -f sql/migrations/20260430_v20_strategy_lab.sql
+```
+
+This migration is idempotent. It creates `backtest_trades`, extends `strategy_quality`, and adds the indexes required by Strategy Lab.

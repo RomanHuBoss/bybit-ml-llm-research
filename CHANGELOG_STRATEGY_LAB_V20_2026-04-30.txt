@@ -9,3 +9,8 @@ V20 Strategy Lab / Trading Desk diagnostics
 - Added Quality refresh control.
 - Updated no-signal explanation to show Trading Desk diagnostics instead of a generic empty state.
 - Added docs/QUALITY_SNAPSHOT_2026-04-30.json as a sample export for regression/product review.
+
+DB migration note:
+- Added sql/migrations/20260430_v20_strategy_lab.sql for existing PostgreSQL databases.
+- Added app/migrate_v20_strategy_lab.py runner.
+- Backtest path now self-creates backtest_trades storage as a defensive fallback.

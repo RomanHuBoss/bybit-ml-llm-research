@@ -72,3 +72,23 @@ rejected=18
 ```
 
 По этому snapshot система должна показывать, что Trading Desk не сломан: есть 3 approved-стратегии, но остальные не имеют права выглядеть как торговые рекомендации.
+
+## Existing database migration
+
+Fresh installations get the V20 schema from `sql/schema.sql`. Existing databases must apply:
+
+```bash
+python -m app.migrate_v20_strategy_lab
+```
+
+or run the SQL directly:
+
+```bash
+psql -h <host> -p <port> -U <user> -d <db> -f sql/migrations/20260430_v20_strategy_lab.sql
+```
+
+The migration is idempotent and creates/updates:
+
+- `backtest_trades` for persisted trade-level backtest evidence;
+- `strategy_quality` V20 columns: expectancy, recent returns, walk-forward metrics;
+- indexes and uniqueness needed by `ON CONFLICT(category, symbol, interval, strategy)`.

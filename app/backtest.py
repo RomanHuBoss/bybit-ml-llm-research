@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .config import settings
-from .db import execute_many_values, execute_many_values_returning
+from .db import execute, execute_many_values, execute_many_values_returning
 from .features import load_market_frame
 from .strategies import (
     StrategySignal,
@@ -38,6 +38,30 @@ STRATEGY_MAP: dict[str, StrategyFn] = {
     "volatility_squeeze_breakout": volatility_squeeze,  # type: ignore[dict-item]
     "regime_adaptive_combo": regime_adaptive_combo,  # type: ignore[dict-item]
 }
+
+
+def ensure_backtest_trades_storage() -> None:
+    """Create V20 persisted-trades storage when an existing DB was not migrated yet."""
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS backtest_trades (
+            id BIGSERIAL PRIMARY KEY,
+            run_id BIGINT NOT NULL REFERENCES backtest_runs(id) ON DELETE CASCADE,
+            symbol TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            entry_time TIMESTAMPTZ NOT NULL,
+            exit_time TIMESTAMPTZ NOT NULL,
+            entry NUMERIC NOT NULL,
+            exit NUMERIC NOT NULL,
+            pnl NUMERIC NOT NULL,
+            pnl_pct NUMERIC NOT NULL,
+            reason TEXT
+        )
+        """
+    )
+    execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_run ON backtest_trades(run_id)")
+    execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_run_exit ON backtest_trades(run_id, exit_time)")
 
 
 def _interval_to_minutes(interval: str) -> int:
@@ -299,6 +323,7 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
     run_id = int(returned[0]["id"]) if returned else None
     quality = None
     if run_id and trades:
+        ensure_backtest_trades_storage()
         execute_many_values(
             """
             INSERT INTO backtest_trades(run_id, symbol, strategy, direction, entry_time, exit_time, entry, exit, pnl, pnl_pct, reason)
