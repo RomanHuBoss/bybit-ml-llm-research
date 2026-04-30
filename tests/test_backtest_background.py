@@ -39,10 +39,11 @@ def test_candidates_needing_backtest_uses_staleness_query(monkeypatch):
     assert rows[0]["symbol"] == "BTCUSDT"
     assert "b.run_id IS NULL" in captured["sql"]
     assert "b.backtest_created_at < s.signal_created_at" in captured["sql"]
+    assert "strategy_names" in captured["sql"]
+    assert "candle_ok" in captured["sql"]
     assert captured["params"][-1] == 3
-    assert "interval = %s" in captured["sql"]
-    assert captured["params"][1] is True
-    assert captured["params"][2] == "15"
+    assert "interval = ANY" in captured["sql"]
+    assert "15" in captured["params"][1]
 
 
 def test_backtest_background_run_once_runs_candidates_with_bounded_workers(monkeypatch):

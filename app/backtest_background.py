@@ -9,8 +9,23 @@ from typing import Any
 from .concurrency import bounded_worker_count
 from .config import settings
 from .db import fetch_all, fetch_one
+from .strategy_quality import refresh_strategy_quality
 
 logger = logging.getLogger(__name__)
+
+
+BACKTEST_STRATEGIES = (
+    "regime_adaptive_combo",
+    "donchian_atr_breakout",
+    "ema_pullback_trend",
+    "bollinger_rsi_reversion",
+    "funding_extreme_contrarian",
+    "oi_trend_confirmation",
+    "volatility_squeeze_breakout",
+    "trend_continuation_setup",
+    "sentiment_fear_reversal",
+    "sentiment_greed_reversal",
+)
 
 
 def run_backtest(*args, **kwargs):
@@ -88,6 +103,7 @@ class BacktestBackgroundRunner:
                 "ttl_hours": settings.backtest_auto_ttl_hours,
                 "max_candidates": settings.backtest_auto_max_candidates,
                 "limit": settings.backtest_auto_limit,
+                "mode": "strategy_matrix",
                 "workers": settings.backtest_auto_workers,
                 "last_error": self._last_error,
                 "last_started_at": self._last_started_at,
@@ -142,6 +158,7 @@ class BacktestBackgroundRunner:
 
             candidates = candidates_needing_backtest(limit=settings.backtest_auto_max_candidates)
             summary["queued"] = len(candidates)
+            summary["mode"] = "strategy_matrix"
             workers = bounded_worker_count(settings.backtest_auto_workers, len(candidates), default=1, hard_limit=4)
             summary["workers"] = workers
 
@@ -181,6 +198,11 @@ class BacktestBackgroundRunner:
                 else:
                     summary["failed"] += 1
                 summary["items"].append(item)
+            if summary["backtested"]:
+                try:
+                    summary["quality_refresh"] = refresh_strategy_quality(limit=max(settings.backtest_auto_max_candidates * 2, 50))
+                except Exception as exc:
+                    summary["quality_refresh"] = {"error": str(exc)[:500]}
         except Exception as exc:
             with self._condition:
                 self._last_error = str(exc)
@@ -204,15 +226,66 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def candidates_needing_backtest(limit: int | None = None) -> list[dict[str, Any]]:
+    """Return stale/missing strategy-matrix cells, not only fresh live signals.
+
+    The previous implementation only backtested strategies that had just emitted a
+    signal. That made the UI look like a recommendation stream with permanently
+    weak evidence. The matrix mode qualifies symbol+interval+strategy first; live
+    signals can then use that quality row as a hard gate for REVIEW_ENTRY.
+    """
     candidate_limit = int(limit or settings.backtest_auto_max_candidates)
+    intervals = [str(x).strip().upper() for x in settings.signal_auto_intervals if str(x).strip()]
+    configured_symbols = [str(x).strip().upper() for x in settings.core_symbols if str(x).strip()]
+    strategies = list(BACKTEST_STRATEGIES)
+    # Ensure the quality table exists before the LEFT JOIN below.
+    try:
+        refresh_strategy_quality(limit=1)
+    except Exception:
+        # If the DB is unavailable the main query will raise the original DB error.
+        pass
     return fetch_all(
         """
-        WITH latest_signals AS (
+        WITH strategy_names AS (
+            SELECT unnest(%s::text[]) AS strategy
+        ), interval_names AS (
+            SELECT unnest(%s::text[]) AS interval
+        ), latest_universe_time AS (
+            SELECT MAX(selected_at) AS selected_at
+            FROM symbol_universe
+            WHERE category=%s
+        ), universe_symbols AS (
+            SELECT u.symbol, MIN(u.rank_no) AS rank_no, 1 AS source_rank
+            FROM symbol_universe u
+            JOIN latest_universe_time t ON t.selected_at = u.selected_at
+            WHERE u.category=%s
+            GROUP BY u.symbol
+        ), live_signal_symbols AS (
+            SELECT symbol, 500 AS rank_no, 2 AS source_rank
+            FROM signals
+            WHERE category=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
+            GROUP BY symbol
+        ), configured_symbols AS (
+            SELECT unnest(%s::text[]) AS symbol, 900 AS rank_no, 3 AS source_rank
+        ), candidate_symbols AS (
+            SELECT DISTINCT ON (symbol) symbol, rank_no, source_rank
+            FROM (
+                SELECT * FROM universe_symbols
+                UNION ALL SELECT * FROM live_signal_symbols
+                UNION ALL SELECT * FROM configured_symbols
+            ) x
+            WHERE symbol IS NOT NULL AND symbol <> ''
+            ORDER BY symbol, source_rank, rank_no
+        ), candle_ok AS (
+            SELECT category, symbol, interval, COUNT(*) AS candle_count, MAX(start_time) AS last_candle_at
+            FROM candles
+            WHERE category=%s AND interval = ANY(%s::text[])
+            GROUP BY category, symbol, interval
+            HAVING COUNT(*) >= 300
+        ), latest_signals AS (
             SELECT DISTINCT ON (category, interval, symbol, strategy)
                    category, interval, symbol, strategy, created_at AS signal_created_at, confidence
             FROM signals
-            WHERE created_at >= NOW() - (%s::text || ' hours')::interval
-              AND (%s = FALSE OR interval = %s)
+            WHERE category=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
             ORDER BY category, interval, symbol, strategy, created_at DESC
         ), latest_backtests AS (
             SELECT DISTINCT ON (category, interval, symbol, strategy)
@@ -220,19 +293,46 @@ def candidates_needing_backtest(limit: int | None = None) -> list[dict[str, Any]
             FROM backtest_runs
             ORDER BY category, interval, symbol, strategy, created_at DESC
         )
-        SELECT s.category, s.interval, s.symbol, s.strategy,
+        SELECT %s AS category, i.interval, cs.symbol, st.strategy,
                s.signal_created_at, s.confidence,
-               b.run_id, b.backtest_created_at
-        FROM latest_signals s
-        LEFT JOIN latest_backtests b
-          ON b.category=s.category AND b.interval=s.interval AND b.symbol=s.symbol AND b.strategy=s.strategy
+               c.candle_count, c.last_candle_at,
+               b.run_id, b.backtest_created_at,
+               q.quality_status, q.quality_score
+        FROM candidate_symbols cs
+        CROSS JOIN interval_names i
+        CROSS JOIN strategy_names st
+        JOIN candle_ok c ON c.category=%s AND c.symbol=cs.symbol AND c.interval=i.interval
+        LEFT JOIN latest_signals s ON s.category=%s AND s.symbol=cs.symbol AND s.interval=i.interval AND s.strategy=st.strategy
+        LEFT JOIN latest_backtests b ON b.category=%s AND b.symbol=cs.symbol AND b.interval=i.interval AND b.strategy=st.strategy
+        LEFT JOIN strategy_quality q ON q.category=%s AND q.symbol=cs.symbol AND q.interval=i.interval AND q.strategy=st.strategy
         WHERE b.run_id IS NULL
-           OR b.backtest_created_at < s.signal_created_at
            OR b.backtest_created_at < NOW() - (%s::text || ' hours')::interval
-        ORDER BY s.confidence DESC NULLS LAST, s.signal_created_at DESC
+           OR (s.signal_created_at IS NOT NULL AND b.backtest_created_at < s.signal_created_at)
+        ORDER BY
+            CASE q.quality_status WHEN 'APPROVED' THEN 0 WHEN 'WATCHLIST' THEN 1 WHEN 'RESEARCH' THEN 2 WHEN 'REJECTED' THEN 4 ELSE 3 END,
+            s.confidence DESC NULLS LAST, cs.source_rank, cs.rank_no, c.last_candle_at DESC, cs.symbol, i.interval, st.strategy
         LIMIT %s
         """,
-        (settings.max_signal_age_hours, settings.mtf_consensus_enabled, settings.mtf_entry_interval, settings.backtest_auto_ttl_hours, candidate_limit),
+        (
+            strategies,
+            intervals,
+            settings.default_category,
+            settings.default_category,
+            settings.default_category,
+            settings.max_signal_age_hours,
+            configured_symbols,
+            settings.default_category,
+            intervals,
+            settings.default_category,
+            settings.max_signal_age_hours,
+            settings.default_category,
+            settings.default_category,
+            settings.default_category,
+            settings.default_category,
+            settings.default_category,
+            settings.backtest_auto_ttl_hours,
+            candidate_limit,
+        ),
     )
 
 

@@ -1,6 +1,6 @@
 # Bybit Futures Advisory Research Lab
 
-Советующая СППР для анализа крипторынка Bybit. Проект собирает публичные рыночные данные, строит технические/рыночные признаки, применяет стратегические правила, MTF-фильтрацию, backtest/ML/LLM evidence и показывает оператору рекомендации в формате `НЕТ ВХОДА` / `НАБЛЮДАТЬ` / `РУЧНАЯ ПРОВЕРКА ВХОДА`.
+Советующая СППР для анализа крипторынка Bybit. Проект собирает публичные рыночные данные, строит технические/рыночные признаки, применяет стратегические правила, MTF-фильтрацию, backtest/ML/LLM evidence и показывает оператору решения в формате `НЕТ ВХОДА` / `НАБЛЮДАТЬ` / `ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ` / `РУЧНАЯ ПРОВЕРКА ВХОДА`.
 
 > **Критичное ограничение:** система является советующей СППР и не должна автоматически отправлять ордера. В проекте используется публичный Bybit REST для market data; live order execution отсутствует намеренно. Любые entry/SL/TP значения являются аналитическими подсказками для ручной проверки оператором.
 
@@ -12,7 +12,8 @@ app/api.py                API-контракт и endpoint-функции
 app/bybit_client.py       Bybit V5 public REST client, retry/backoff, ingestion
 app/strategies.py         Правила сигналов, validation, persist latest signals
 app/mtf.py                15m/60m/240m MTF consensus и veto
-app/recommendation.py     Каноническое операторское решение
+app/recommendation.py     Каноническое операторское решение и strategy-quality gate
+app/strategy_quality.py    Квалификация стратегий APPROVED/WATCHLIST/RESEARCH/REJECTED
 app/operator_queue.py      Стабилизация очереди: 1 рынок = 1 операторский вердикт
 app/safety.py             Freshness, stale-bar filtering, R/R diagnostics
 app/research.py           Ранжирование кандидатов с backtest/ML/liquidity/LLM joins
@@ -99,7 +100,8 @@ python run.py app
 2. обновить universe/market/sentiment;
 3. построить рекомендации или запустить фоновый контур;
 4. анализировать очередь кандидатов и главный операторский вердикт;
-5. вручную проверить entry, SL, TP, R/R, MTF, liquidity, LLM/backtest/ML evidence.
+5. вручную проверить entry, SL, TP, R/R, MTF, liquidity, LLM/backtest/ML evidence;
+6. отличать торговые карточки `REVIEW_ENTRY` от исследовательских `RESEARCH_CANDIDATE`.
 
 ## Тесты и проверки
 
@@ -138,7 +140,8 @@ node --check frontend/app.js
 
 - `NO_TRADE` / `НЕТ ВХОДА` — есть hard-veto, вход запрещен;
 - `WAIT` / `НАБЛЮДАТЬ` — критического запрета нет, но доказательности недостаточно;
-- `REVIEW_ENTRY` / `РУЧНАЯ ПРОВЕРКА ВХОДА` — сетап можно вынести на ручную проверку, но это не приказ на сделку.
+- `RESEARCH_CANDIDATE` / `ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ` — технический сетап есть, но стратегия еще не имеет статуса `APPROVED`;
+- `REVIEW_ENTRY` / `РУЧНАЯ ПРОВЕРКА ВХОДА` — сетап можно вынести на ручную проверку только после strategy-quality gate, но это не приказ на сделку.
 
 ## Veto-логика
 
@@ -151,6 +154,7 @@ Hard-veto срабатывает при:
 - слишком низком R/R;
 - confidence ниже защитного минимума;
 - отрицательном backtest при достаточном числе сделок;
+- отсутствии статуса `APPROVED` у стратегии, если включен `REQUIRE_STRATEGY_APPROVAL_FOR_REVIEW`;
 - spread выше лимита;
 - liquidity universe пометил рынок как неeligible.
 
@@ -185,6 +189,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 - `paper/research`: основной режим проекта; рекомендации и backtest без исполнения.
 - `live market data`: допускается получение публичных данных Bybit, но без private orders.
 - `backtest`: локальная проверка стратегий на исторических свечах.
+- `strategy_matrix`: фоновая проверка матрицы `symbols × intervals × strategies` для предварительной квалификации стратегий.
 
 Отдельного live execution режима в проекте нет.
 
@@ -303,3 +308,40 @@ pytest -q --import-mode=importlib -p no:cacheprovider
 В текущей среде полный pytest-прогон выполнен из активного Python runtime, потому что обычный shell-процесс Python в этой sandbox-сессии зависал на platform `sitecustomize`/scientific-stack teardown. Результат полного прогона: `119 passed`.
 
 Отчет аудита V18 сохранен в `docs/RED_TEAM_AUDIT_2026-04-29_V18.md`.
+
+
+## Ревизия V19 — strategy-quality gate и разделение research/review от 2026-04-30
+
+Эта ревизия исправляет главный продуктовый дефект: слабый или малый бэктест больше не показывается как торговая рекомендация. Теперь такой сетап получает статус `RESEARCH_CANDIDATE`, а `REVIEW_ENTRY` разрешается только после прохождения strategy-quality gate.
+
+Что изменено:
+
+- Добавлен модуль `app/strategy_quality.py` и таблица `strategy_quality` в `sql/schema.sql`.
+- Введены статусы качества стратегий: `APPROVED`, `WATCHLIST`, `RESEARCH`, `REJECTED`, `STALE`.
+- `app/recommendation.py` больше не допускает `REVIEW_ENTRY` при отсутствующем, слабом или малом backtest evidence.
+- `app/backtest.py` после каждого прогона обновляет качество стратегии.
+- `app/backtest_background.py` переведен из режима проверки случайных свежих сигналов в режим `strategy_matrix`: `symbols × intervals × strategies`.
+- `app/research.py` подтягивает `strategy_quality` и учитывает его в ранжировании.
+- `app/api.py` добавил `/api/strategies/quality` и `/api/strategies/quality/refresh`, а `/api/status` отражает параметры gate.
+- Frontend получил отдельный фильтр `RESEARCH`, отдельный визуальный статус `RESEARCH_CANDIDATE`, колонку `Quality` и пункт `strategy_quality` в checklist.
+- `.env.example` синхронизирован с новыми параметрами qualification gate и более длинным backtest horizon.
+
+Новый безопасный контракт:
+
+```text
+NO_TRADE            = вход запрещен hard-veto
+WAIT                = наблюдать
+RESEARCH_CANDIDATE  = сетап есть, но стратегия не approved
+REVIEW_ENTRY        = только ручная проверка approved-сетапа
+```
+
+Проверки V19:
+
+```bash
+python -m py_compile app/config.py app/strategy_quality.py app/recommendation.py app/backtest.py app/backtest_background.py app/research.py app/api.py
+pytest -q
+```
+
+Результат полного regression-прогона: `120 passed`.
+
+Подробное описание сохранено в `docs/STRATEGY_QUALITY_GATE_2026-04-30.md`.

@@ -203,6 +203,34 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
 CREATE INDEX IF NOT EXISTS idx_backtest_trades_run
 ON backtest_trades(run_id);
 
+
+CREATE TABLE IF NOT EXISTS strategy_quality (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    category TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    interval TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    quality_status TEXT NOT NULL CHECK (quality_status IN ('APPROVED','WATCHLIST','RESEARCH','REJECTED','STALE')),
+    quality_score NUMERIC NOT NULL DEFAULT 0,
+    evidence_grade TEXT NOT NULL DEFAULT 'INSUFFICIENT',
+    quality_reason TEXT,
+    backtest_run_id BIGINT REFERENCES backtest_runs(id) ON DELETE SET NULL,
+    last_backtest_at TIMESTAMPTZ,
+    total_return NUMERIC,
+    max_drawdown NUMERIC,
+    sharpe NUMERIC,
+    win_rate NUMERIC,
+    profit_factor NUMERIC,
+    trades_count INTEGER NOT NULL DEFAULT 0,
+    diagnostics JSONB,
+    UNIQUE(category, symbol, interval, strategy)
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_quality_status
+ON strategy_quality(category, interval, quality_status, quality_score DESC, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS model_runs (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

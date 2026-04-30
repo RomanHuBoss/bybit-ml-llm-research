@@ -4,6 +4,7 @@ import math
 from typing import Any
 
 from .config import settings
+from .strategy_quality import APPROVED, REJECTED, RESEARCH, WATCHLIST, effective_strategy_quality
 
 
 def _finite(value: Any, default: float | None = None) -> float | None:
@@ -129,18 +130,31 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     max_dd = _finite(row.get("max_drawdown"))
     win_rate = _finite(row.get("win_rate"))
     no_loss_backtest = trades > 0 and pf is None and win_rate is not None and win_rate >= 0.999
+
+    quality = effective_strategy_quality(row)
+    quality_status = str(quality.get("quality_status") or RESEARCH).upper()
+    quality_score = _finite(quality.get("quality_score"), 0.0) or 0.0
+    if quality_status == APPROVED:
+        _add_reason(evidence, "strategy_approved", "Стратегия approved", str(quality.get("quality_reason") or "Strategy-quality фильтр пройден."))
+    elif quality_status == WATCHLIST:
+        _add_reason(evidence, "strategy_watchlist", "Стратегия в наблюдении", str(quality.get("quality_reason") or "Evidence близок к допуску, но approval еще не пройден."))
+    elif quality_status == REJECTED:
+        _add_reason(hard, "strategy_rejected", "Стратегия отклонена quality-фильтром", str(quality.get("quality_reason") or "Бэктест/риск-профиль стратегии неприемлем."))
+    else:
+        _add_reason(evidence, "strategy_research", "Стратегия не approved", str(quality.get("quality_reason") or "Сетап остается исследовательским кандидатом до прохождения quality-фильтра."))
+
     if trades <= 0:
-        _add_reason(evidence, "backtest_missing", "Бэктест еще не готов", "Отсутствие бэктеста снижает доказательность, но не блокирует сам рыночный сетап.")
+        _add_reason(evidence, "backtest_missing", "Бэктест еще не готов", "Отсутствие бэктеста теперь блокирует REVIEW_ENTRY: сетап остается RESEARCH_CANDIDATE.")
     elif no_loss_backtest:
         _add_reason(evidence, "backtest_no_losses", "Бэктест без убыточных сделок", f"Сделок {int(trades)}, win rate {win_rate:.0%}; PF не конечен, поэтому оператор должен проверить размер выборки.")
     elif pf is None:
         _add_reason(evidence, "backtest_incomplete", "Бэктест неполный", f"Сделок {int(trades)}, но profit factor не рассчитан; требуется ручная проверка отчета.")
     elif trades >= 20 and pf < 1.0:
         _add_reason(hard, "backtest_negative", "Бэктест отрицательный", f"PF {pf:.2f} при {int(trades)} сделках — сетап нельзя выносить на вход.")
-    elif trades < 20 or pf < 1.15:
-        _add_reason(evidence, "backtest_weak", "Бэктест слабый или малый", f"Сделок {int(trades)}, PF {pf:.2f}; нужна ручная верификация.")
-    if max_dd is not None and max_dd > max(settings.max_daily_drawdown * 2.5, 0.12):
-        _add_reason(evidence, "drawdown_high", "Бэктест показывает высокий DD", f"Max DD {max_dd:.2%}; риск выше локального лимита.")
+    elif trades < settings.strategy_approval_min_trades or pf < settings.strategy_approval_min_profit_factor:
+        _add_reason(evidence, "backtest_weak", "Бэктест слабый или малый", f"Сделок {int(trades)}, PF {pf:.2f}; требуется approval: сделок >= {settings.strategy_approval_min_trades}, PF >= {settings.strategy_approval_min_profit_factor:.2f}.")
+    if max_dd is not None and max_dd > max(settings.strategy_approval_max_drawdown, settings.max_daily_drawdown * 2.5, 0.12):
+        _add_reason(evidence, "drawdown_high", "Бэктест показывает высокий DD", f"Max DD {max_dd:.2%}; риск выше quality-лимита.")
 
     roc_auc = _finite(row.get("roc_auc"))
     ml_probability = _finite(row.get("ml_probability"))
@@ -158,10 +172,11 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     score += max(0.0, min(1.0, ((rr or 0.0) - 1.0) / 1.5)) * 18.0
     score += 10.0 if eligible is True else 0.0
     score += 8.0 if spread is not None and spread <= settings.max_spread_pct else 0.0
+    score += max(0.0, min(1.0, quality_score / 100.0)) * 10.0
     if no_loss_backtest:
-        score += 7.0 * max(0.25, min(1.0, trades / 40.0))
+        score += 5.0 * max(0.25, min(1.0, trades / max(settings.strategy_approval_min_trades, 1)))
     elif pf is not None and trades > 0:
-        score += max(0.0, min(1.0, pf / 1.8)) * 7.0 * max(0.25, min(1.0, trades / 40.0))
+        score += max(0.0, min(1.0, pf / 1.8)) * 5.0 * max(0.25, min(1.0, trades / max(settings.strategy_approval_min_trades, 1)))
     if roc_auc is not None:
         score += max(0.0, min(1.0, (roc_auc - 0.5) / 0.18)) * 5.0
     if ml_probability is not None:
@@ -182,14 +197,19 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         and rr >= 1.45
         and mtf_status not in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}
     )
+    strategy_approved = (not settings.require_strategy_approval_for_review) or quality_status == APPROVED
     if hard:
         action = "NO_TRADE"
         label = "НЕТ ВХОДА"
         level = "reject"
-    elif core_entry_ok and (score >= 56 or confidence >= 0.66):
+    elif core_entry_ok and strategy_approved and (score >= 56 or confidence >= 0.66):
         action = "REVIEW_ENTRY"
         label = "РУЧНАЯ ПРОВЕРКА ВХОДА"
         level = "review"
+    elif core_entry_ok and not strategy_approved:
+        action = "RESEARCH_CANDIDATE"
+        label = "ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ"
+        level = "research"
     else:
         action = "WAIT"
         label = "НАБЛЮДАТЬ"
@@ -201,6 +221,11 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         "operator_level": level,
         "operator_score": score,
         "operator_confidence_band": confidence_band,
+        "quality_status": quality_status,
+        "quality_score": int(round(quality_score)),
+        "evidence_grade": quality.get("evidence_grade"),
+        "quality_reason": quality.get("quality_reason"),
+        "quality_diagnostics": quality.get("quality_diagnostics"),
         "operator_hard_reasons": hard,
         "operator_warnings": warnings,
         "operator_evidence_notes": evidence,

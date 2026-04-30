@@ -30,15 +30,37 @@ def base_row(**overrides):
     return row
 
 
-def test_operator_action_allows_manual_review_without_finished_ml_or_backtest():
+def test_operator_action_keeps_unqualified_setup_as_research_candidate():
     decision = classify_operator_action(base_row())
 
-    assert decision["operator_action"] == "REVIEW_ENTRY"
-    assert decision["operator_level"] == "review"
-    assert decision["operator_score"] >= 56
+    assert decision["operator_action"] == "RESEARCH_CANDIDATE"
+    assert decision["operator_level"] == "research"
+    assert decision["quality_status"] == "RESEARCH"
+    assert any(item["code"] == "strategy_research" for item in decision["operator_evidence_notes"])
     assert any(item["code"] == "backtest_missing" for item in decision["operator_evidence_notes"])
     assert any(item["code"] == "ml_missing" for item in decision["operator_evidence_notes"])
     assert decision["operator_hard_reasons"] == []
+
+
+def test_operator_action_allows_review_only_for_approved_strategy_quality():
+    decision = classify_operator_action(
+        base_row(
+            trades_count=64,
+            profit_factor=1.42,
+            max_drawdown=0.08,
+            total_return=0.14,
+            quality_status="APPROVED",
+            quality_score=84,
+            evidence_grade="APPROVED",
+            quality_reason="approved by strategy quality",
+        )
+    )
+
+    assert decision["operator_action"] == "REVIEW_ENTRY"
+    assert decision["operator_level"] == "review"
+    assert decision["quality_status"] == "APPROVED"
+    assert decision["operator_score"] >= 56
+    assert any(item["code"] == "strategy_approved" for item in decision["operator_evidence_notes"])
 
 
 def test_operator_action_blocks_higher_timeframe_conflict():
@@ -86,13 +108,13 @@ def test_operator_action_blocks_string_mtf_veto_from_json_boundary():
 def test_operator_action_does_not_treat_string_false_as_mtf_veto():
     decision = classify_operator_action(base_row(mtf_veto="false", higher_tf_conflict="false", mtf_status="aligned_bias"))
 
-    assert decision["operator_action"] == "REVIEW_ENTRY"
+    assert decision["operator_action"] == "RESEARCH_CANDIDATE"
     assert not any(item["code"] == "mtf" for item in decision["operator_hard_reasons"])
 
 
 def test_operator_action_treats_no_loss_backtest_as_evidence_not_missing():
     decision = classify_operator_action(base_row(trades_count=12, profit_factor=None, win_rate=1.0))
 
-    assert decision["operator_action"] == "REVIEW_ENTRY"
+    assert decision["operator_action"] == "RESEARCH_CANDIDATE"
     assert any(item["code"] == "backtest_no_losses" for item in decision["operator_evidence_notes"])
     assert not any(item["code"] == "backtest_missing" for item in decision["operator_evidence_notes"])

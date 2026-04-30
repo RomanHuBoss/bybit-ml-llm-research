@@ -339,6 +339,7 @@ input:focus, select:focus { border-color: rgba(84, 163, 255, 0.52); box-shadow: 
   white-space: nowrap;
 }
 .badge.review, .decision-badge.review { color: var(--green); border-color: rgba(0, 227, 140, 0.38); background: var(--green-soft); }
+.badge.research, .decision-badge.research { color: var(--blue); border-color: rgba(84, 163, 255, 0.40); background: var(--blue-soft); }
 .badge.watch, .decision-badge.watch { color: var(--amber); border-color: rgba(245, 185, 66, 0.38); background: var(--amber-soft); }
 .badge.reject, .decision-badge.reject { color: var(--red); border-color: rgba(255, 77, 109, 0.38); background: var(--red-soft); }
 .candidate-score { font-weight: 950; text-align: right; }
@@ -362,6 +363,7 @@ input:focus, select:focus { border-color: rgba(84, 163, 255, 0.52); box-shadow: 
   background: radial-gradient(circle at 90% 10%, rgba(84, 163, 255, 0.14), transparent 42%);
 }
 .decision-board.review::before { background: radial-gradient(circle at 90% 10%, rgba(0, 227, 140, 0.16), transparent 42%); }
+.decision-board.research::before { background: radial-gradient(circle at 90% 10%, rgba(84, 163, 255, 0.16), transparent 42%); }
 .decision-board.watch::before { background: radial-gradient(circle at 90% 10%, rgba(245, 185, 66, 0.15), transparent 42%); }
 .decision-board.reject::before { background: radial-gradient(circle at 90% 10%, rgba(255, 77, 109, 0.14), transparent 42%); }
 .decision-main, .decision-actions, .decision-meters { position: relative; z-index: 1; }
@@ -763,6 +765,12 @@ tbody tr.dir-short td, tbody tr td.short { color: var(--red); }
   border-color: rgba(0, 227, 140, 0.45);
   background: linear-gradient(180deg, rgba(0, 227, 140, 0.18), rgba(0, 227, 140, 0.08));
 }
+.decision-badge.research,
+.badge.research {
+  background: rgba(84, 163, 255, 0.12);
+  color: #b9dcff;
+  border-color: rgba(84, 163, 255, 0.38);
+}
 .decision-badge.watch,
 .badge.watch {
   color: var(--amber);
@@ -785,6 +793,7 @@ tbody tr.dir-short td, tbody tr td.short { color: var(--red); }
   border-color: rgba(0, 227, 140, 0.30);
   box-shadow: inset 3px 0 0 rgba(0, 227, 140, 0.85);
 }
+.candidate.research { box-shadow: inset 3px 0 0 rgba(84, 163, 255, 0.75); }
 .candidate.watch { box-shadow: inset 3px 0 0 rgba(245, 185, 66, 0.75); }
 .candidate.reject { box-shadow: inset 3px 0 0 rgba(255, 77, 109, 0.72); }
 .raw-table-wrap { scrollbar-gutter: stable; }

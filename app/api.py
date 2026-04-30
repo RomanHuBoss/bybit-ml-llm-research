@@ -70,6 +70,7 @@ from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
 from .signal_background import signal_refresher
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
+from .strategy_quality import latest_strategy_quality, quality_summary, refresh_strategy_quality
 from .validation import bounded_int, normalize_category, normalize_interval, normalize_intervals, normalize_symbol, normalize_symbols
 
 router = DeferredAPIRouter(prefix="/api")
@@ -254,8 +255,17 @@ def status() -> dict[str, Any]:
             "enabled": settings.backtest_auto_enabled,
             "interval_sec": settings.backtest_auto_interval_sec,
             "max_candidates": settings.backtest_auto_max_candidates,
+            "limit": settings.backtest_auto_limit,
             "ttl_hours": settings.backtest_auto_ttl_hours,
             "workers": settings.backtest_auto_workers,
+            "mode": "strategy_matrix",
+        },
+        "strategy_quality": {
+            "require_approval_for_review": settings.require_strategy_approval_for_review,
+            "min_trades": settings.strategy_approval_min_trades,
+            "min_profit_factor": settings.strategy_approval_min_profit_factor,
+            "max_drawdown": settings.strategy_approval_max_drawdown,
+            "min_total_return": settings.strategy_approval_min_total_return,
         },
         "mtf_consensus": {
             "enabled": settings.mtf_consensus_enabled,
@@ -564,6 +574,31 @@ def api_rank_candidates(category: str = settings.default_category, interval: str
         }
     except ValueError as exc:
         raise _bad_request(exc) from exc
+
+
+@router.get("/strategies/quality")
+def api_strategy_quality(category: str = settings.default_category, interval: str | None = None, limit: int = 100) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        interval_value = normalize_interval(interval) if interval else None
+        bounded_limit = bounded_int(limit, "limit", 1, 500)
+        return {
+            "ok": True,
+            "summary": quality_summary(category),
+            "items": latest_strategy_quality(category, interval_value, bounded_limit),
+        }
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.post("/strategies/quality/refresh")
+def api_strategy_quality_refresh(limit: int = 500) -> dict[str, Any]:
+    try:
+        return {"ok": True, "result": refresh_strategy_quality(bounded_int(limit, "limit", 1, 5000))}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/backtest/run")

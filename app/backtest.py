@@ -297,6 +297,16 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
     # Не используем SELECT ORDER BY id DESC: при параллельных запусках backtest это
     # создает race condition и может привязать сделки к чужому run_id.
     run_id = int(returned[0]["id"]) if returned else None
+    quality = None
+    if run_id:
+        try:
+            from .strategy_quality import upsert_strategy_quality_from_run_id
+
+            quality = upsert_strategy_quality_from_run_id(run_id)
+        except Exception:
+            # Бэктест должен сохранить результат даже если quality-слой еще не мигрирован
+            # или временно недоступен. Следующий фоновый цикл сможет пересчитать quality.
+            quality = None
     if run_id and trades:
         execute_many_values(
             """
@@ -333,5 +343,6 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
         "profit_factor": profit_factor,
         "trades_count": len(trades),
         "halted_by_risk": halted_by_risk,
+        "quality": quality,
         "equity_curve": equity_curve[-300:],
     }

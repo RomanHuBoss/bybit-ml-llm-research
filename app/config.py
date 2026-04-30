@@ -181,9 +181,18 @@ class Settings:
     backtest_auto_enabled: bool = _bool("BACKTEST_AUTO_ENABLED", True)
     backtest_auto_interval_sec: int = _int("BACKTEST_AUTO_INTERVAL_SEC", 900)
     backtest_auto_startup_delay_sec: int = _int("BACKTEST_AUTO_STARTUP_DELAY_SEC", 45)
-    backtest_auto_max_candidates: int = _int("BACKTEST_AUTO_MAX_CANDIDATES", 8)
-    backtest_auto_limit: int = _int("BACKTEST_AUTO_LIMIT", 5000)
-    backtest_auto_ttl_hours: int = _int("BACKTEST_AUTO_TTL_HOURS", 24)
+    backtest_auto_max_candidates: int = _int("BACKTEST_AUTO_MAX_CANDIDATES", 50)
+    backtest_auto_limit: int = _int("BACKTEST_AUTO_LIMIT", 30000)
+    backtest_auto_ttl_hours: int = _int("BACKTEST_AUTO_TTL_HOURS", 12)
+
+    # Strategy qualification is the gate between raw research candidates and real
+    # operator review setups. A live signal may be shown as RESEARCH_CANDIDATE,
+    # but REVIEW_ENTRY requires this quality layer unless explicitly disabled.
+    require_strategy_approval_for_review: bool = _bool("REQUIRE_STRATEGY_APPROVAL_FOR_REVIEW", True)
+    strategy_approval_min_trades: int = _int("STRATEGY_APPROVAL_MIN_TRADES", 40)
+    strategy_approval_min_profit_factor: float = _float("STRATEGY_APPROVAL_MIN_PROFIT_FACTOR", 1.20)
+    strategy_approval_max_drawdown: float = _float("STRATEGY_APPROVAL_MAX_DRAWDOWN", 0.25)
+    strategy_approval_min_total_return: float = _float("STRATEGY_APPROVAL_MIN_TOTAL_RETURN", 0.0)
 
     # ML must be maintained by the background research loop, not only by a manual
     # UI button. The model remains per category+symbol+interval+horizon; stale or
@@ -280,12 +289,20 @@ def _validate_settings(s: Settings) -> None:
         problems.append("BACKTEST_AUTO_INTERVAL_SEC должен быть >= 60")
     if s.backtest_auto_startup_delay_sec < 0:
         problems.append("BACKTEST_AUTO_STARTUP_DELAY_SEC не может быть отрицательным")
-    if not (1 <= s.backtest_auto_max_candidates <= 50):
-        problems.append("BACKTEST_AUTO_MAX_CANDIDATES должен быть в диапазоне [1; 50]")
+    if not (1 <= s.backtest_auto_max_candidates <= 200):
+        problems.append("BACKTEST_AUTO_MAX_CANDIDATES должен быть в диапазоне [1; 200]")
     if not (300 <= s.backtest_auto_limit <= 100000):
         problems.append("BACKTEST_AUTO_LIMIT должен быть в диапазоне [300; 100000]")
     if s.backtest_auto_ttl_hours < 1:
         problems.append("BACKTEST_AUTO_TTL_HOURS должен быть >= 1")
+    if not (10 <= s.strategy_approval_min_trades <= 500):
+        problems.append("STRATEGY_APPROVAL_MIN_TRADES должен быть в диапазоне [10; 500]")
+    if not (1.0 <= s.strategy_approval_min_profit_factor <= 5.0):
+        problems.append("STRATEGY_APPROVAL_MIN_PROFIT_FACTOR должен быть в диапазоне [1.0; 5.0]")
+    if not (0.01 <= s.strategy_approval_max_drawdown <= 0.80):
+        problems.append("STRATEGY_APPROVAL_MAX_DRAWDOWN должен быть в диапазоне [0.01; 0.80]")
+    if not (-0.50 <= s.strategy_approval_min_total_return <= 2.0):
+        problems.append("STRATEGY_APPROVAL_MIN_TOTAL_RETURN должен быть в диапазоне [-0.50; 2.0]")
     if s.ml_auto_train_ttl_hours < 1:
         problems.append("ML_AUTO_TRAIN_TTL_HOURS должен быть >= 1")
     if not (1 <= s.ml_auto_train_horizon_bars <= 240):

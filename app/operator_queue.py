@@ -104,7 +104,7 @@ def _add_stability_warning(row: dict[str, Any], *, directions: dict[str, float],
     out["direction_gap"] = round(abs(directions.get("long", 0.0) - directions.get("short", 0.0)), 6)
     out["operator_variant_count"] = variants
     out["operator_stability_score"] = round(stability_score, 6)
-    if stability_score < 0.66 and out.get("operator_level") == "review":
+    if stability_score < 0.72 and str(out.get("operator_level") or "").lower() in {"review", "research"}:
         out["operator_action"] = "WAIT"
         out["operator_label"] = "НАБЛЮДАТЬ"
         out["operator_level"] = "watch"
@@ -172,7 +172,7 @@ def consolidate_operator_queue(rows: list[dict[str, Any]], limit: int | None = N
             output.append(_add_stability_warning(cleaned_best, directions=directions, variants=variants))
 
     def sort_key(row: dict[str, Any]) -> tuple[int, float, float, str]:
-        priority = {"review": 3, "watch": 2, "reject": 1}.get(str(row.get("operator_level") or "").lower(), 0)
+        priority = {"review": 4, "research": 3, "watch": 2, "reject": 1}.get(str(row.get("operator_level") or "").lower(), 0)
         return (priority, _finite(row.get("operator_score"), 0.0), _finite(row.get("confidence"), 0.0), str(row.get("symbol") or ""))
 
     output.sort(key=sort_key, reverse=True)

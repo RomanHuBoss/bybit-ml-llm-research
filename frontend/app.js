@@ -556,6 +556,7 @@ const MTF_ACTION_COMPACT_LABELS = {
 
 const DECISION_COMPACT_LABELS = {
   review: 'ПРОВЕРКА',
+  research: 'RESEARCH',
   watch: 'WATCH',
   reject: 'STOP',
 };
@@ -815,7 +816,25 @@ function renderLlmVerdict(s) {
   setText('llmVerdictMeta', verdict.meta);
 }
 
+function strategyQualityStatus(s) {
+  const status = String(s?.quality_status || '').toUpperCase();
+  if (status === 'APPROVED') return 'pass';
+  if (status === 'REJECTED') return 'fail';
+  return 'warn';
+}
+
+function strategyQualityTitle(s) {
+  const status = String(s?.quality_status || 'RESEARCH').toUpperCase();
+  const score = num(s?.quality_score, null);
+  if (status === 'APPROVED') return `Strategy quality APPROVED · ${fmt(score, 0)}/100`;
+  if (status === 'WATCHLIST') return `Strategy quality WATCHLIST · ${fmt(score, 0)}/100`;
+  if (status === 'REJECTED') return `Strategy quality REJECTED · ${fmt(score, 0)}/100`;
+  return `Strategy quality RESEARCH · ${fmt(score, 0)}/100`;
+}
+
 function backtestEvidenceStatus(s) {
+  const quality = strategyQualityStatus(s);
+  if (quality === 'pass' || quality === 'fail') return quality;
   const trades = num(s?.trades_count, 0);
   const pf = num(s?.profit_factor, null);
   const dd = num(s?.max_drawdown, null);
@@ -829,7 +848,7 @@ function backtestEvidenceTitle(s) {
   const trades = num(s?.trades_count, 0);
   const pf = num(s?.profit_factor, null);
   const dd = num(s?.max_drawdown, null);
-  if (!trades || trades <= 0 || pf === null || dd === null) return 'Бэктест ожидается';
+  if (!trades || trades <= 0 || pf === null || dd === null) return 'Бэктест/quality ожидается';
   return `Бэктест: ${fmt(trades, 0)} сделок, PF ${fmt(pf, 2)}, DD ${pct(dd, 1)}`;
 }
 
@@ -880,7 +899,8 @@ function baseChecklistFor(s) {
     { key: 'spread', status: spreadStatus, title: spreadStatus === 'pass' ? 'Spread нормальный' : spreadStatus === 'warn' ? 'Spread требует контроля' : 'Spread слишком широкий', text: `Текущий spread ${hasSpread ? pctRaw(spread, 4) : '—'}. Чем шире spread, тем хуже исполнимость ручного входа по фьючерсу.` },
     { key: 'rr', status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail', title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны', text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.' },
     { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.52 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
-    { key: 'backtest', status: backtestStatus, title: backtestEvidenceTitle(s), text: backtestStatus === 'fail' ? 'Негативный бэктест снижает приоритет сетапа; это evidence-veto, а не MTF-veto.' : 'Малое число сделок или отсутствие свежего бэктеста снижает доказательность, но не скрывает сетап из очереди.' },
+    { key: 'strategy_quality', status: strategyQualityStatus(s), title: strategyQualityTitle(s), text: s.quality_reason || 'Только APPROVED-стратегии могут стать REVIEW_ENTRY; остальные остаются Research/Watch.' },
+    { key: 'backtest', status: backtestStatus, title: backtestEvidenceTitle(s), text: backtestStatus === 'fail' ? 'Негативный бэктест блокирует сетап или оставляет его вне входа.' : 'Малое число сделок или отсутствие свежего бэктеста больше не маскируется под рекомендацию.' },
     { key: 'ml', status: mlEvidenceStatus(s), title: mlEvidenceTitle(s), text: mlEvidenceText(s) },
   ];
 }
@@ -912,20 +932,23 @@ function algorithmDecisionFor(s) {
   // в API, таблице и главной карточке. Frontend fallback ниже нужен только для
   // старых backend-сборок или аварийной деградации API-контракта.
   if (s.operator_action) {
-    const level = cssToken(s.operator_level, s.operator_action === 'REVIEW_ENTRY' ? 'review' : s.operator_action === 'WAIT' ? 'watch' : 'reject');
+    const fallbackLevel = s.operator_action === 'REVIEW_ENTRY' ? 'review' : s.operator_action === 'RESEARCH_CANDIDATE' ? 'research' : s.operator_action === 'WAIT' ? 'watch' : 'reject';
+    const level = cssToken(s.operator_level, fallbackLevel);
     const score = Math.round(num(s.operator_score, 0) || 0);
     const hard = Array.isArray(s.operator_hard_reasons) ? s.operator_hard_reasons : [];
     const warnings = Array.isArray(s.operator_warnings) ? s.operator_warnings : [];
     const evidence = Array.isArray(s.operator_evidence_notes) ? s.operator_evidence_notes : [];
     const first = hard[0] || warnings[0] || evidence[0];
     const subtitle = level === 'review'
-      ? `Сетап можно вынести на ручную проверку: score ${score}. ${evidence.length ? `Evidence notes: ${evidence.map((x) => x.title).slice(0, 2).join('; ')}.` : 'Критических veto нет.'}`
-      : level === 'watch'
-        ? `Ждать/наблюдать: ${first?.title || 'недостаточно совокупной доказательности'}; score ${score}.`
-        : `Вход запрещён: ${first?.title || 'сработал защитный фильтр'}; score ${score}.`;
+      ? `Сетап можно вынести на ручную проверку: score ${score}. Strategy quality: ${s.quality_status || '—'}.`
+      : level === 'research'
+        ? `Не торговая рекомендация: стратегия не прошла approval. ${s.quality_reason || first?.title || 'Нужен полноценный бэктест.'}; score ${score}.`
+        : level === 'watch'
+          ? `Ждать/наблюдать: ${first?.title || 'недостаточно совокупной доказательности'}; score ${score}.`
+          : `Вход запрещён: ${first?.title || 'сработал защитный фильтр'}; score ${score}.`;
     return {
       level,
-      label: s.operator_label || (level === 'review' ? 'РУЧНАЯ ПРОВЕРКА ВХОДА' : level === 'watch' ? 'НАБЛЮДАТЬ' : 'НЕТ ВХОДА'),
+      label: s.operator_label || (level === 'review' ? 'РУЧНАЯ ПРОВЕРКА ВХОДА' : level === 'research' ? 'ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ' : level === 'watch' ? 'НАБЛЮДАТЬ' : 'НЕТ ВХОДА'),
       score,
       title: `${s.symbol}: ${s.operator_label || 'решение рассчитано'}`,
       subtitle,
@@ -944,8 +967,9 @@ function algorithmDecisionFor(s) {
   score += Math.max(0, Math.min(1, ((rr?.ratio || 0) - 1) / 1.5)) * 18;
   score += bool(s.is_eligible) ? 10 : 0;
   score += num(s.spread_pct, 999) <= 0.08 ? 8 : num(s.spread_pct, 999) <= 0.15 ? 3 : 0;
-  score += Math.max(0, Math.min(1, num(s.trades_count, 0) / 50)) * 6;
-  score += Math.max(0, Math.min(1, num(s.profit_factor, 0) / 2)) * 6;
+  score += Math.max(0, Math.min(1, num(s.quality_score, 0) / 100)) * 10;
+  score += Math.max(0, Math.min(1, num(s.trades_count, 0) / 50)) * 4;
+  score += Math.max(0, Math.min(1, num(s.profit_factor, 0) / 2)) * 4;
   score += Math.max(0, Math.min(1, (num(s.roc_auc, 0.5) - 0.5) / 0.2)) * 5;
   score += Math.max(0, 1 - Math.min(1, num(s.max_drawdown, 0.4) / 0.35)) * 3;
   if (s.mtf_veto || s.higher_tf_conflict || s.entry_tf_conflict || s.mtf_status === 'context_only') score -= 30;
@@ -955,7 +979,10 @@ function algorithmDecisionFor(s) {
     return { level: 'reject', label: 'НЕТ ВХОДА', score, title: `${s.symbol}: вход запрещён`, subtitle: `Причина: ${hardFails[0].title}. Сетап можно только разобрать; ручной вход запрещен до снятия красного пункта.` };
   }
   if (num(s.confidence, 0) >= 0.58 && rr && rr.ratio >= 1.45 && score >= 56) {
-    return { level: 'review', label: 'РУЧНАЯ ПРОВЕРКА ВХОДА', score, title: `${s.symbol}: можно вынести на ручную проверку`, subtitle: `Критических veto нет. ${warnings.length ? `Есть замечания: ${warnings.map((x) => x.title).slice(0, 2).join('; ')}.` : 'Дополнительные проверки ниже.'}` };
+    if (String(s.quality_status || '').toUpperCase() === 'APPROVED') {
+      return { level: 'review', label: 'РУЧНАЯ ПРОВЕРКА ВХОДА', score, title: `${s.symbol}: можно вынести на ручную проверку`, subtitle: `Критических veto нет. Strategy quality APPROVED. ${warnings.length ? `Есть замечания: ${warnings.map((x) => x.title).slice(0, 2).join('; ')}.` : 'Дополнительные проверки ниже.'}` };
+    }
+    return { level: 'research', label: 'ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ', score, title: `${s.symbol}: research candidate`, subtitle: `Сетап есть, но strategy quality не APPROVED: ${s.quality_reason || 'нужен полноценный бэктест.'}` };
   }
   return { level: 'watch', label: 'НАБЛЮДАТЬ', score, title: `${s.symbol}: только наблюдение`, subtitle: `Нет критического запрета, но сетап пока слабый: ${warnings.map((x) => x.title).slice(0, 2).join('; ') || 'score ниже входного порога'}.` };
 }
@@ -1004,9 +1031,9 @@ function reasonItems(s) {
       text: rr ? `Риск ${pct(rr.riskPct, 2)} против потенциала ${pct(rr.rewardPct, 2)}.` : 'Entry/SL/TP не позволяют оценить риск.',
     },
     {
-      level: num(s.profit_factor, 0) >= 1.25 ? 'good' : 'warn',
-      title: `Бэктест: PF ${fmt(s.profit_factor, 2)}, Sharpe ${fmt(s.sharpe, 2)}`,
-      text: `Сделок ${fmt(s.trades_count, 0)}, win rate ${pct(s.win_rate, 0)}, max DD ${pct(s.max_drawdown, 1)}.`,
+      level: strategyQualityStatus(s) === 'pass' ? 'good' : strategyQualityStatus(s) === 'fail' ? 'bad' : 'warn',
+      title: strategyQualityTitle(s),
+      text: `${s.quality_reason || 'Quality row еще не рассчитан.'} Бэктест: PF ${fmt(s.profit_factor, 2)}, сделок ${fmt(s.trades_count, 0)}, DD ${pct(s.max_drawdown, 1)}.`,
     },
     {
       level: mlEvidenceStatus(s) === 'pass' ? 'good' : mlEvidenceStatus(s) === 'warn' ? 'warn' : 'bad',
@@ -1027,7 +1054,7 @@ function operatorProtocol(s) {
   return [
     {
       title: '1. Проверить запреты',
-      text: d.level === 'reject' ? 'Есть красный пункт. Сделку не открывать.' : 'Красных пунктов нет, но желтые требуют ручной проверки.',
+      text: d.level === 'reject' ? 'Есть красный пункт. Сделку не открывать.' : d.level === 'research' ? 'Красных пунктов нет, но strategy quality не APPROVED: это research queue, не вход.' : 'Красных пунктов нет, но желтые требуют ручной проверки.',
     },
     {
       title: '2. Сверить MTF-картину',
@@ -1060,7 +1087,7 @@ function isEntryRecommendation(item) {
 }
 
 function candidateSortValue(item) {
-  const priority = { review: 3, watch: 2, reject: 1 };
+  const priority = { review: 4, research: 3, watch: 2, reject: 1 };
   return [
     priority[item?.decision?.level] || 0,
     num(item?.decision?.score, 0),
@@ -1094,6 +1121,7 @@ const RAW_SORTERS = {
   pf: (s) => num(s.profit_factor, -1),
   dd: (s) => num(s.max_drawdown, 999),
   spread: (s) => num(s.spread_pct, 999),
+  quality: (s) => String(s.quality_status || ''),
   llm: (s) => String(llmVerdictFor(s).recommendation || ''),
 };
 
@@ -1181,7 +1209,7 @@ function renderDecision() {
   setText('decisionBadge', d.label);
   if ($('decisionBadge')) $('decisionBadge').className = `decision-badge ${d.level}`;
   setText('decisionTitle', s?.symbol || d.title);
-  setText('decisionVerdict', d.level === 'review' ? 'Только ручная проверка' : d.label === 'НЕТ ВХОДА' ? 'Вход запрещён' : d.label);
+  setText('decisionVerdict', d.level === 'review' ? 'Только ручная проверка' : d.level === 'research' ? 'Research only' : d.label === 'НЕТ ВХОДА' ? 'Вход запрещён' : d.label);
   setText('decisionSubtitle', d.subtitle);
   setText('decisionScore', d.score);
   updateTopContext(s);
@@ -1384,6 +1412,7 @@ function renderRawTable(list = candidates()) {
       <td>${fmt(s.profit_factor, 2)}</td>
       <td>${pct(s.max_drawdown, 1)}</td>
       <td>${pctRaw(s.spread_pct, 3)}</td>
+      <td>${escapeHtml(`${s.quality_status || 'RESEARCH'} ${fmt(s.quality_score, 0)}`)}</td>
       <td>${escapeHtml(`${llmVerdictFor(s).recommendation} ${llmVerdictFor(s).confidenceText}`)}</td>
     </tr>`;
   }).join('');
