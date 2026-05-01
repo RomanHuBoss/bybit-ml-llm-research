@@ -205,6 +205,44 @@ def _bad_request(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
+def _read_error(exc: Exception) -> str:
+    text = str(exc).strip()
+    return text or exc.__class__.__name__
+
+
+def _empty_quality_summary() -> dict[str, int]:
+    return {"total": 0, "approved": 0, "watchlist": 0, "research": 0, "rejected": 0, "stale": 0}
+
+
+def _empty_strategy_lab_payload(error: str) -> dict[str, Any]:
+    summary = _empty_quality_summary()
+    return {
+        "summary": {**summary, "status_counts": {"APPROVED": 0, "WATCHLIST": 0, "RESEARCH": 0, "REJECTED": 0, "STALE": 0}},
+        "thresholds": {},
+        "desk_status": "DEGRADED",
+        "headline": f"Strategy Lab недоступна: {error}",
+        "blocker_counts": {},
+        "trading_desk": [],
+        "near_approval": [],
+        "rejected": [],
+        "items": [],
+    }
+
+
+def _empty_trading_desk_payload(error: str, intervals: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "intervals": intervals or [],
+        "total_candidates": 0,
+        "review_entries": 0,
+        "desk_status": "DEGRADED",
+        "headline": f"Trading Desk diagnostics недоступны: {error}",
+        "by_action": {},
+        "by_quality": {},
+        "blockers": {},
+        "items": [],
+    }
+
+
 def _sync_market_interval(category: str, symbol: str, interval: str, days: int, funding_rows: int) -> tuple[str, dict[str, int]]:
     # Funding не зависит от таймфрейма и уже синхронизирован один раз на symbol.
     # Остальные операции независимы по interval и безопасны для ограниченного ThreadPool:
@@ -235,10 +273,20 @@ def _sync_market_bundle_multi(category: str, symbol: str, intervals: list[str], 
 
 @router.get("/status")
 def status() -> dict[str, Any]:
-    db = fetch_one("SELECT NOW() AS now")
-    latest = fetch_one("SELECT COUNT(*) AS candles FROM candles")
+    db: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    db_error: str | None = None
+    try:
+        db = fetch_one("SELECT NOW() AS now")
+        latest = fetch_one("SELECT COUNT(*) AS candles FROM candles")
+    except Exception as exc:
+        # /api/status is the first request made by the UI. If PostgreSQL is down or
+        # the schema is not initialized yet, the page must still load diagnostics
+        # and let the operator use non-DB controls instead of failing with HTTP 500.
+        db_error = str(exc)
     return {
-        "ok": True,
+        "ok": db_error is None,
+        "db_error": db_error,
         "db_time": str(db["now"]) if db else None,
         "candles": int(latest["candles"]) if latest else 0,
         "default_symbols": settings.default_symbols,
@@ -331,6 +379,8 @@ def api_latest_liquidity(category: str = settings.default_category, limit: int =
         return {"ok": True, "items": latest_liquidity(normalize_category(category), bounded_int(limit, "limit", 1, 500))}
     except ValueError as exc:
         raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "items": [], "error": _read_error(exc)}
 
 
 @router.post("/symbols/universe/build")
@@ -357,6 +407,8 @@ def api_latest_universe(category: str = settings.default_category, mode: str | N
         return {"ok": True, "items": latest_universe(category, mode, bounded_int(limit, "limit", 1, 500))}
     except ValueError as exc:
         raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "items": [], "error": _read_error(exc)}
 
 
 @router.post("/sync/market")
@@ -403,6 +455,8 @@ def api_sentiment_summary(symbol: str = "BTCUSDT", limit: int = 20) -> dict[str,
         return {"ok": True, "result": _sentiment_summary(normalize_symbol(symbol), bounded_int(limit, "limit", 1, 200))}
     except ValueError as exc:
         raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "result": {"score": None, "summary_score": None, "items": []}, "error": _read_error(exc)}
 
 
 @router.post("/signals/build")
@@ -470,8 +524,9 @@ def api_signal_background_status() -> dict[str, Any]:
 
 @router.post("/signals/background/run-now")
 def api_signal_background_run_now() -> dict[str, Any]:
+    signal_refresher.start(force=True)
     signal_refresher.request_run()
-    return {"ok": True, "status": signal_refresher.status()}
+    return {"ok": True, "accepted": True, "status": signal_refresher.status()}
 
 
 @router.get("/signals/latest")
@@ -482,18 +537,132 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
     except ValueError as exc:
         raise _bad_request(exc) from exc
 
-    if settings.mtf_consensus_enabled:
-        entry_interval = str(settings.mtf_entry_interval).strip().upper()
-        context_intervals = _unique_intervals([settings.mtf_entry_interval, settings.mtf_bias_interval, settings.mtf_regime_interval])
-        query_limit = max(limit * 8, 120)
+    try:
+        if settings.mtf_consensus_enabled:
+            entry_interval = str(settings.mtf_entry_interval).strip().upper()
+            context_intervals = _unique_intervals([settings.mtf_entry_interval, settings.mtf_bias_interval, settings.mtf_regime_interval])
+            query_limit = max(limit * 8, 120)
+            try:
+                # Без этого JOIN /api/signals/latest никогда не видел APPROVED quality-row
+                # и классифицировал любой живой сетап как RESEARCH_CANDIDATE. Это был
+                # критичный разрыв между витриной оператора и Strategy Quality Gate.
+                ensure_strategy_quality_storage()
+            except Exception:
+                # Если БД/миграция недоступны, основной запрос вернет диагностируемую
+                # ошибку. На этом уровне не скрываем отказ от пользователя.
+                pass
+            rows = fetch_all(
+                """
+                WITH latest_signals AS (
+                    SELECT DISTINCT ON (category, symbol, interval, strategy, direction)
+                           id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
+                           entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
+                    FROM signals
+                    WHERE category=%s AND interval = ANY(%s::text[]) AND created_at >= NOW() - (%s::text || ' hours')::interval
+                      AND bar_time IS NOT NULL
+                    ORDER BY category, symbol, interval, strategy, direction, created_at DESC
+                ), latest_backtests AS (
+                    SELECT DISTINCT ON (symbol, interval, strategy)
+                           symbol, interval, strategy, total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, created_at
+                    FROM backtest_runs
+                    WHERE category=%s AND interval = ANY(%s::text[])
+                    ORDER BY symbol, interval, strategy, created_at DESC
+                ), latest_models AS (
+                    SELECT DISTINCT ON (symbol, interval)
+                           symbol, interval, roc_auc, precision_score, recall_score, created_at
+                    FROM model_runs
+                    WHERE category=%s AND interval = ANY(%s::text[])
+                      AND created_at >= NOW() - (%s::text || ' hours')::interval
+                    ORDER BY symbol, interval, created_at DESC
+                ), latest_liq_raw AS (
+                    SELECT DISTINCT ON (l.symbol) l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h,
+                           l.open_interest_value, l.is_eligible, l.captured_at AS liquidity_captured_at,
+                           (l.captured_at >= NOW() - (%s::text || ' minutes')::interval) AS liquidity_is_fresh
+                    FROM liquidity_snapshots l
+                    WHERE l.category=%s
+                    ORDER BY l.symbol, l.captured_at DESC
+                ), latest_liq AS (
+                    SELECT symbol,
+                           CASE WHEN liquidity_is_fresh THEN liquidity_score ELSE NULL END AS liquidity_score,
+                           CASE WHEN liquidity_is_fresh THEN spread_pct ELSE NULL END AS spread_pct,
+                           CASE WHEN liquidity_is_fresh THEN turnover_24h ELSE NULL END AS turnover_24h,
+                           CASE WHEN liquidity_is_fresh THEN open_interest_value ELSE NULL END AS open_interest_value,
+                           CASE WHEN liquidity_is_fresh THEN is_eligible ELSE NULL END AS is_eligible,
+                           liquidity_captured_at,
+                           CASE WHEN liquidity_captured_at IS NULL THEN 'missing'
+                                WHEN liquidity_is_fresh THEN 'fresh' ELSE 'stale' END AS liquidity_status
+                    FROM latest_liq_raw
+                ), latest_quality AS (
+                    SELECT category, symbol, interval, strategy, quality_status, quality_score, evidence_grade,
+                           quality_reason, diagnostics AS quality_diagnostics, updated_at AS quality_updated_at,
+                           backtest_run_id, last_backtest_at, expectancy, avg_trade_pnl, median_trade_pnl,
+                           last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
+                    FROM strategy_quality
+                    WHERE category=%s AND interval = ANY(%s::text[])
+                ), latest_llm AS (
+                    SELECT DISTINCT ON (signal_id)
+                           signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
+                           model AS llm_model, updated_at AS llm_updated_at, duration_ms AS llm_duration_ms,
+                           payload_hash AS llm_payload_hash
+                    FROM llm_evaluations
+                    ORDER BY signal_id, updated_at DESC
+                )
+                SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
+                       s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
+                       b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
+                       q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
+                       q.expectancy, q.avg_trade_pnl, q.median_trade_pnl, q.last_30d_return, q.last_90d_return, q.walk_forward_pass_rate, q.walk_forward_windows, q.walk_forward_summary,
+                       m.roc_auc, m.precision_score, m.recall_score,
+                       l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
+                       l.liquidity_captured_at, l.liquidity_status,
+                       e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
+                       (
+                           COALESCE(s.confidence::float, 0) * 0.30
+                         + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.18
+                         + CASE WHEN q.quality_status = 'APPROVED' THEN 0.08 WHEN q.quality_status = 'WATCHLIST' THEN 0.03 WHEN q.quality_status = 'REJECTED' THEN -0.18 ELSE -0.04 END
+                         + CASE WHEN q.walk_forward_pass_rate IS NULL THEN 0 ELSE LEAST(GREATEST(q.walk_forward_pass_rate::float, 0), 1) * 0.05 END
+                         + LEAST(GREATEST(COALESCE(b.profit_factor::float, 1) / 2.0, 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                         + LEAST(GREATEST(COALESCE(b.sharpe::float, 0) / 3.0, 0), 1) * 0.06 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                         + LEAST(GREATEST(COALESCE(b.win_rate::float, 0), 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                         + LEAST(GREATEST((COALESCE(m.roc_auc::float, 0.5) - 0.5) / 0.25, 0), 1) * 0.15
+                         + LEAST(GREATEST(COALESCE(l.liquidity_score::float, 0) / 8.0, 0), 1) * 0.10
+                         + CASE WHEN COALESCE(l.is_eligible, FALSE) THEN 0.05 ELSE -0.10 END
+                         + CASE WHEN COALESCE(l.spread_pct::float, 999) <= %s THEN 0.05 ELSE -0.05 END
+                         - LEAST(GREATEST(COALESCE(b.max_drawdown::float, 0.2), 0), 1) * 0.10
+                       ) AS research_score
+                FROM latest_signals s
+                LEFT JOIN latest_backtests b ON b.symbol=s.symbol AND b.interval=s.interval AND b.strategy=s.strategy
+                LEFT JOIN latest_quality q ON q.symbol=s.symbol AND q.interval=s.interval AND q.strategy=s.strategy
+                LEFT JOIN latest_models m ON m.symbol=s.symbol AND m.interval=s.interval
+                LEFT JOIN latest_liq l ON l.symbol=s.symbol
+                LEFT JOIN latest_llm e ON e.signal_id=s.id
+                ORDER BY research_score DESC NULLS LAST, s.created_at DESC
+                LIMIT %s
+                """,
+                (
+                    category, context_intervals, settings.max_signal_age_hours,
+                    category, context_intervals,
+                    category, context_intervals, settings.ml_auto_train_ttl_hours,
+                    settings.liquidity_snapshot_max_age_minutes, category,
+                    category, context_intervals,
+                    settings.max_spread_pct, query_limit,
+                ),
+            )
+            rows = annotate_and_filter_fresh_signals(rows)
+            rows = _apply_mtf_consensus(
+                rows,
+                entry_interval=settings.mtf_entry_interval,
+                bias_interval=settings.mtf_bias_interval,
+                regime_interval=settings.mtf_regime_interval,
+            )
+            if entry_only:
+                rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
+            rows = consolidate_operator_queue(annotate_recommendations(rows), limit=limit)
+            return {"ok": True, "category": category, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
+    
         try:
-            # Без этого JOIN /api/signals/latest никогда не видел APPROVED quality-row
-            # и классифицировал любой живой сетап как RESEARCH_CANDIDATE. Это был
-            # критичный разрыв между витриной оператора и Strategy Quality Gate.
             ensure_strategy_quality_storage()
         except Exception:
-            # Если БД/миграция недоступны, основной запрос вернет диагностируемую
-            # ошибку. На этом уровне не скрываем отказ от пользователя.
             pass
         rows = fetch_all(
             """
@@ -502,20 +671,20 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                        id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
                        entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
                 FROM signals
-                WHERE category=%s AND interval = ANY(%s::text[]) AND created_at >= NOW() - (%s::text || ' hours')::interval
+                WHERE category=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
                   AND bar_time IS NOT NULL
                 ORDER BY category, symbol, interval, strategy, direction, created_at DESC
             ), latest_backtests AS (
                 SELECT DISTINCT ON (symbol, interval, strategy)
                        symbol, interval, strategy, total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, created_at
                 FROM backtest_runs
-                WHERE category=%s AND interval = ANY(%s::text[])
+                WHERE category=%s
                 ORDER BY symbol, interval, strategy, created_at DESC
             ), latest_models AS (
                 SELECT DISTINCT ON (symbol, interval)
                        symbol, interval, roc_auc, precision_score, recall_score, created_at
                 FROM model_runs
-                WHERE category=%s AND interval = ANY(%s::text[])
+                WHERE category=%s
                   AND created_at >= NOW() - (%s::text || ' hours')::interval
                 ORDER BY symbol, interval, created_at DESC
             ), latest_liq_raw AS (
@@ -542,7 +711,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                        backtest_run_id, last_backtest_at, expectancy, avg_trade_pnl, median_trade_pnl,
                        last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
                 FROM strategy_quality
-                WHERE category=%s AND interval = ANY(%s::text[])
+                WHERE category=%s
             ), latest_llm AS (
                 SELECT DISTINCT ON (signal_id)
                        signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
@@ -551,8 +720,8 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 FROM llm_evaluations
                 ORDER BY signal_id, updated_at DESC
             )
-            SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
-                   s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
+            SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit,
+                   s.atr, s.ml_probability, s.sentiment_score, s.rationale,
                    b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
                    q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
                    q.expectancy, q.avg_trade_pnl, q.median_trade_pnl, q.last_30d_return, q.last_90d_return, q.walk_forward_pass_rate, q.walk_forward_windows, q.walk_forward_summary,
@@ -584,133 +753,29 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
             LIMIT %s
             """,
             (
-                category, context_intervals, settings.max_signal_age_hours,
-                category, context_intervals,
-                category, context_intervals, settings.ml_auto_train_ttl_hours,
+                category, settings.max_signal_age_hours,
+                category,
+                category, settings.ml_auto_train_ttl_hours,
                 settings.liquidity_snapshot_max_age_minutes, category,
-                category, context_intervals,
-                settings.max_spread_pct, query_limit,
+                category,
+                settings.max_spread_pct, limit,
             ),
         )
-        rows = annotate_and_filter_fresh_signals(rows)
-        rows = _apply_mtf_consensus(
-            rows,
-            entry_interval=settings.mtf_entry_interval,
-            bias_interval=settings.mtf_bias_interval,
-            regime_interval=settings.mtf_regime_interval,
-        )
-        if entry_only:
-            rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
-        rows = consolidate_operator_queue(annotate_recommendations(rows), limit=limit)
-        return {"ok": True, "category": category, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
-
-    try:
-        ensure_strategy_quality_storage()
-    except Exception:
-        pass
-    rows = fetch_all(
-        """
-        WITH latest_signals AS (
-            SELECT DISTINCT ON (category, symbol, interval, strategy, direction)
-                   id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
-                   entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
-            FROM signals
-            WHERE category=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
-              AND bar_time IS NOT NULL
-            ORDER BY category, symbol, interval, strategy, direction, created_at DESC
-        ), latest_backtests AS (
-            SELECT DISTINCT ON (symbol, interval, strategy)
-                   symbol, interval, strategy, total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, created_at
-            FROM backtest_runs
-            WHERE category=%s
-            ORDER BY symbol, interval, strategy, created_at DESC
-        ), latest_models AS (
-            SELECT DISTINCT ON (symbol, interval)
-                   symbol, interval, roc_auc, precision_score, recall_score, created_at
-            FROM model_runs
-            WHERE category=%s
-              AND created_at >= NOW() - (%s::text || ' hours')::interval
-            ORDER BY symbol, interval, created_at DESC
-        ), latest_liq_raw AS (
-            SELECT DISTINCT ON (l.symbol) l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h,
-                   l.open_interest_value, l.is_eligible, l.captured_at AS liquidity_captured_at,
-                   (l.captured_at >= NOW() - (%s::text || ' minutes')::interval) AS liquidity_is_fresh
-            FROM liquidity_snapshots l
-            WHERE l.category=%s
-            ORDER BY l.symbol, l.captured_at DESC
-        ), latest_liq AS (
-            SELECT symbol,
-                   CASE WHEN liquidity_is_fresh THEN liquidity_score ELSE NULL END AS liquidity_score,
-                   CASE WHEN liquidity_is_fresh THEN spread_pct ELSE NULL END AS spread_pct,
-                   CASE WHEN liquidity_is_fresh THEN turnover_24h ELSE NULL END AS turnover_24h,
-                   CASE WHEN liquidity_is_fresh THEN open_interest_value ELSE NULL END AS open_interest_value,
-                   CASE WHEN liquidity_is_fresh THEN is_eligible ELSE NULL END AS is_eligible,
-                   liquidity_captured_at,
-                   CASE WHEN liquidity_captured_at IS NULL THEN 'missing'
-                        WHEN liquidity_is_fresh THEN 'fresh' ELSE 'stale' END AS liquidity_status
-            FROM latest_liq_raw
-        ), latest_quality AS (
-            SELECT category, symbol, interval, strategy, quality_status, quality_score, evidence_grade,
-                   quality_reason, diagnostics AS quality_diagnostics, updated_at AS quality_updated_at,
-                   backtest_run_id, last_backtest_at, expectancy, avg_trade_pnl, median_trade_pnl,
-                   last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
-            FROM strategy_quality
-            WHERE category=%s
-        ), latest_llm AS (
-            SELECT DISTINCT ON (signal_id)
-                   signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
-                   model AS llm_model, updated_at AS llm_updated_at, duration_ms AS llm_duration_ms,
-                   payload_hash AS llm_payload_hash
-            FROM llm_evaluations
-            ORDER BY signal_id, updated_at DESC
-        )
-        SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit,
-               s.atr, s.ml_probability, s.sentiment_score, s.rationale,
-               b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
-               q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
-               q.expectancy, q.avg_trade_pnl, q.median_trade_pnl, q.last_30d_return, q.last_90d_return, q.walk_forward_pass_rate, q.walk_forward_windows, q.walk_forward_summary,
-               m.roc_auc, m.precision_score, m.recall_score,
-               l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
-               l.liquidity_captured_at, l.liquidity_status,
-               e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
-               (
-                   COALESCE(s.confidence::float, 0) * 0.30
-                 + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.18
-                 + CASE WHEN q.quality_status = 'APPROVED' THEN 0.08 WHEN q.quality_status = 'WATCHLIST' THEN 0.03 WHEN q.quality_status = 'REJECTED' THEN -0.18 ELSE -0.04 END
-                 + CASE WHEN q.walk_forward_pass_rate IS NULL THEN 0 ELSE LEAST(GREATEST(q.walk_forward_pass_rate::float, 0), 1) * 0.05 END
-                 + LEAST(GREATEST(COALESCE(b.profit_factor::float, 1) / 2.0, 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
-                 + LEAST(GREATEST(COALESCE(b.sharpe::float, 0) / 3.0, 0), 1) * 0.06 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
-                 + LEAST(GREATEST(COALESCE(b.win_rate::float, 0), 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
-                 + LEAST(GREATEST((COALESCE(m.roc_auc::float, 0.5) - 0.5) / 0.25, 0), 1) * 0.15
-                 + LEAST(GREATEST(COALESCE(l.liquidity_score::float, 0) / 8.0, 0), 1) * 0.10
-                 + CASE WHEN COALESCE(l.is_eligible, FALSE) THEN 0.05 ELSE -0.10 END
-                 + CASE WHEN COALESCE(l.spread_pct::float, 999) <= %s THEN 0.05 ELSE -0.05 END
-                 - LEAST(GREATEST(COALESCE(b.max_drawdown::float, 0.2), 0), 1) * 0.10
-               ) AS research_score
-        FROM latest_signals s
-        LEFT JOIN latest_backtests b ON b.symbol=s.symbol AND b.interval=s.interval AND b.strategy=s.strategy
-        LEFT JOIN latest_quality q ON q.symbol=s.symbol AND q.interval=s.interval AND q.strategy=s.strategy
-        LEFT JOIN latest_models m ON m.symbol=s.symbol AND m.interval=s.interval
-        LEFT JOIN latest_liq l ON l.symbol=s.symbol
-        LEFT JOIN latest_llm e ON e.signal_id=s.id
-        ORDER BY research_score DESC NULLS LAST, s.created_at DESC
-        LIMIT %s
-        """,
-        (
-            category, settings.max_signal_age_hours,
-            category,
-            category, settings.ml_auto_train_ttl_hours,
-            settings.liquidity_snapshot_max_age_minutes, category,
-            category,
-            settings.max_spread_pct, limit,
-        ),
-    )
-    rows = consolidate_operator_queue(annotate_recommendations(annotate_and_filter_fresh_signals(rows)), limit=limit)
-    return {"ok": True, "category": category, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
-
+        rows = consolidate_operator_queue(annotate_recommendations(annotate_and_filter_fresh_signals(rows)), limit=limit)
+        return {"ok": True, "category": category, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "category": category,
+            "entry_only": entry_only,
+            "entry_interval": settings.mtf_entry_interval,
+            "signals": [],
+            "error": _read_error(exc),
+        }
 
 @router.get("/research/rank")
 def api_rank_candidates(category: str = settings.default_category, interval: str | None = None, limit: int = 30) -> dict[str, Any]:
+    intervals: list[str] = []
     try:
         category = normalize_category(category)
         interval_value = interval or (settings.mtf_entry_interval if settings.mtf_consensus_enabled else settings.default_interval)
@@ -729,6 +794,16 @@ def api_rank_candidates(category: str = settings.default_category, interval: str
         }
     except ValueError as exc:
         raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {
+            "ok": False,
+            "intervals": intervals,
+            "entry_interval": settings.mtf_entry_interval,
+            "recommendation_intervals": [settings.mtf_entry_interval] if settings.mtf_consensus_enabled else intervals,
+            "context_intervals": [settings.mtf_bias_interval, settings.mtf_regime_interval] if settings.mtf_consensus_enabled else [],
+            "items": [],
+            "error": _read_error(exc),
+        }
 
 
 @router.get("/strategies/quality")
@@ -744,6 +819,8 @@ def api_strategy_quality(category: str = settings.default_category, interval: st
         }
     except ValueError as exc:
         raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "summary": _empty_quality_summary(), "items": [], "error": _read_error(exc)}
 
 
 @router.get("/strategies/lab")
@@ -756,11 +833,13 @@ def api_strategy_lab(category: str = settings.default_category, interval: str | 
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        error = _read_error(exc)
+        return {"ok": False, **_empty_strategy_lab_payload(error), "error": error}
 
 
 @router.get("/trading-desk/diagnostics")
 def api_trading_desk_diagnostics(category: str = settings.default_category, interval: str | None = None, limit: int = 200) -> dict[str, Any]:
+    intervals: list[str] = []
     try:
         category = normalize_category(category)
         interval_value = interval or (settings.mtf_entry_interval if settings.mtf_consensus_enabled else settings.default_interval)
@@ -773,7 +852,8 @@ def api_trading_desk_diagnostics(category: str = settings.default_category, inte
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        error = _read_error(exc)
+        return {"ok": False, **_empty_trading_desk_payload(error, intervals), "error": error}
 
 
 @router.get("/strategies/quality/refresh/status")
@@ -833,8 +913,9 @@ def api_backtest_background_status() -> dict[str, Any]:
 
 @router.post("/backtest/background/run-now")
 def api_backtest_background_run_now() -> dict[str, Any]:
+    background_backtester.start(force=True)
     background_backtester.request_run()
-    return {"ok": True, "status": background_backtester.status()}
+    return {"ok": True, "accepted": True, "status": background_backtester.status()}
 
 
 @router.post("/ml/train")
@@ -887,8 +968,9 @@ def api_llm_background_status() -> dict[str, Any]:
 
 @router.post("/llm/background/run-now")
 def api_llm_background_run_now() -> dict[str, Any]:
+    background_evaluator.start(force=True)
     background_evaluator.request_run()
-    return {"ok": True, "status": background_evaluator.status()}
+    return {"ok": True, "accepted": True, "status": background_evaluator.status()}
 
 
 @router.get("/llm/evaluations/latest")
@@ -897,25 +979,29 @@ def api_llm_evaluations_latest(limit: int = 100) -> dict[str, Any]:
         return {"ok": True, "items": latest_evaluations(bounded_int(limit, "limit", 1, 500))}
     except ValueError as exc:
         raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "items": [], "error": _read_error(exc)}
 
 
 @router.get("/equity/latest")
 def latest_equity(limit: int = 10) -> dict[str, Any]:
     try:
         limit = bounded_int(limit, "limit", 1, 100)
+        runs = fetch_all(
+            """
+            SELECT id, created_at, symbol, interval, strategy, initial_equity, final_equity, total_return,
+                   max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve
+            FROM backtest_runs
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return {"ok": True, "runs": runs}
     except ValueError as exc:
         raise _bad_request(exc) from exc
-    runs = fetch_all(
-        """
-        SELECT id, created_at, symbol, interval, strategy, initial_equity, final_equity, total_return,
-               max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve
-        FROM backtest_runs
-        ORDER BY created_at DESC
-        LIMIT %s
-        """,
-        (limit,),
-    )
-    return {"ok": True, "runs": runs}
+    except Exception as exc:
+        return {"ok": False, "runs": [], "error": _read_error(exc)}
 
 
 @router.get("/news/latest")
@@ -923,16 +1009,18 @@ def latest_news(symbol: str = "BTCUSDT", limit: int = 30) -> dict[str, Any]:
     try:
         symbol = normalize_symbol(symbol)
         limit = bounded_int(limit, "limit", 1, 200)
+        rows = fetch_all(
+            """
+            SELECT source, symbol, published_at, title, url, source_domain, sentiment_score, llm_score, llm_label
+            FROM news_items
+            WHERE symbol=%s OR symbol='MARKET'
+            ORDER BY published_at DESC NULLS LAST, created_at DESC
+            LIMIT %s
+            """,
+            (symbol, limit),
+        )
+        return {"ok": True, "news": rows}
     except ValueError as exc:
         raise _bad_request(exc) from exc
-    rows = fetch_all(
-        """
-        SELECT source, symbol, published_at, title, url, source_domain, sentiment_score, llm_score, llm_label
-        FROM news_items
-        WHERE symbol=%s OR symbol='MARKET'
-        ORDER BY published_at DESC NULLS LAST, created_at DESC
-        LIMIT %s
-        """,
-        (symbol, limit),
-    )
-    return {"ok": True, "news": rows}
+    except Exception as exc:
+        return {"ok": False, "news": [], "error": _read_error(exc)}

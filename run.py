@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import subprocess
 import sys
@@ -83,7 +84,47 @@ def subprocess_env() -> dict[str, str]:
         or _parse_positive_int(file_values.get("ML_MAX_CPU_COUNT"))
     )
     env["LOKY_MAX_CPU_COUNT"] = str(configured) if configured else safe_default_loky_cpu_count()
+    # Health-checks must work in archives/read-only checkouts too. Python bytecode
+    # is not needed for diagnostics and can fail when __pycache__ is not writable.
+    env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     return env
+
+
+def python_sources() -> list[Path]:
+    """Возвращает проверяемые Python-файлы без записи __pycache__."""
+    files: set[Path] = set()
+    for root_name in ("app", "tests"):
+        root = PROJECT_ROOT / root_name
+        if root.exists():
+            files.update(
+                path
+                for path in root.rglob("*.py")
+                if "__pycache__" not in path.parts and ".pytest_cache" not in path.parts
+            )
+    for name in ("install.py", "run.py", "sitecustomize.py"):
+        path = PROJECT_ROOT / name
+        if path.exists():
+            files.add(path)
+    return sorted(files)
+
+
+def syntax_check() -> int:
+    """Проверяет синтаксис проекта без compileall и без записи в файловую систему."""
+    failures: list[str] = []
+    sources = python_sources()
+    for path in sources:
+        try:
+            ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError as exc:
+            failures.append(f"{path.relative_to(PROJECT_ROOT)}:{exc.lineno}:{exc.offset}: {exc.msg}")
+        except OSError as exc:
+            failures.append(f"{path.relative_to(PROJECT_ROOT)}: {exc}")
+    if failures:
+        print("\n".join(failures), file=sys.stderr)
+        return 1
+    print(f"Syntax OK: {len(sources)} Python files")
+    return 0
+
 
 def run_command(command: list[str]) -> int:
     printable = " ".join(command)
@@ -115,15 +156,15 @@ def command_init_db(args: argparse.Namespace) -> int:
 
 
 def command_test(args: argparse.Namespace) -> int:
-    return run_command([runtime_python(args.no_venv), "-m", "pytest", "-q"])
+    return run_command([runtime_python(args.no_venv), "-m", "pytest", "-q", "-p", "no:cacheprovider"])
 
 
 def command_check(args: argparse.Namespace) -> int:
     py = runtime_python(args.no_venv)
-    first = run_command([py, "-m", "compileall", "-q", "app", "tests", "install.py", "run.py"])
+    first = syntax_check()
     if first != 0:
         return first
-    return run_command([py, "-m", "pytest", "-q"])
+    return run_command([py, "-m", "pytest", "-q", "-p", "no:cacheprovider"])
 
 
 def command_doctor(args: argparse.Namespace) -> int:

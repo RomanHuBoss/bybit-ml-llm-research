@@ -65,8 +65,8 @@ class BacktestBackgroundRunner:
             "items": [],
         }
 
-    def start(self) -> None:
-        if not settings.backtest_auto_enabled:
+    def start(self, *, force: bool = False) -> None:
+        if not force and not settings.backtest_auto_enabled:
             return
         with self._condition:
             if self._thread and self._thread.is_alive():

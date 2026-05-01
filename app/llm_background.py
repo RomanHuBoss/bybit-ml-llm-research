@@ -77,8 +77,8 @@ class LLMBackgroundEvaluator:
         self._running = False
         self._run_requested = False
 
-    def start(self) -> None:
-        if not settings.llm_auto_eval_enabled:
+    def start(self, *, force: bool = False) -> None:
+        if not force and not settings.llm_auto_eval_enabled:
             return
         try:
             ensure_llm_schema()

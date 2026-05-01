@@ -1702,8 +1702,10 @@ function renderRawTable(list = candidates()) {
 async function refreshStatus() {
   const data = await api('/api/status');
   state.status = data;
-  $('statusBox').textContent = `DB · ${compactDateTime(data.db_time)}`;
-  $('statusBox').className = 'status ok';
+  const degraded = data.ok === false || data.db_error;
+  $('statusBox').textContent = degraded ? 'DB · error' : `DB · ${compactDateTime(data.db_time)}`;
+  $('statusBox').title = data.db_error || '';
+  $('statusBox').className = degraded ? 'status error' : 'status ok';
   $('kpiCandles').textContent = data.candles ?? '—';
   setText('lastUpdateChip', `Update ${compactDateTime(data.db_time || new Date())}`);
 }
@@ -1715,11 +1717,12 @@ async function refreshSignalStatus() {
     state.signalStatus = data.status || null;
     const status = state.signalStatus || {};
     const cycle = status.last_cycle || {};
-    const text = status.enabled
+    const active = Boolean(status.enabled || status.thread_alive || status.running);
+    const text = active
       ? `Signals · ${(status.intervals || []).join('/') || '—'} · +${cycle.signals_upserted ?? 0}`
       : 'Signals · OFF';
     $('signalStatusBox').textContent = status.last_error ? `Signals: ошибка · ${status.last_error}` : text;
-    $('signalStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
+    $('signalStatusBox').className = active && !status.last_error ? 'status ok' : 'status error';
   } catch (e) {
     $('signalStatusBox').textContent = 'Signals · error';
     $('signalStatusBox').className = 'status error';
@@ -1733,11 +1736,12 @@ async function refreshBacktestStatus() {
     state.backtestSummary = data.summary || null;
     const status = state.backtestStatus || {};
     const summary = state.backtestSummary || {};
-    const text = status.enabled
+    const active = Boolean(status.enabled || status.thread_alive || status.running);
+    const text = active
       ? `BT · ${summary.fresh_runs || 0}/${summary.total || 0} · ${compactDateTime(status.next_run_at)}`
       : 'BT · OFF';
     $('backtestStatusBox').textContent = text;
-    $('backtestStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
+    $('backtestStatusBox').className = active && !status.last_error ? 'status ok' : 'status error';
   } catch (e) {
     $('backtestStatusBox').textContent = 'BT · error';
     $('backtestStatusBox').className = 'status error';
@@ -1753,11 +1757,12 @@ async function refreshLlmStatus() {
     state.llmEvaluations = evals.items || [];
     const status = state.llmStatus || {};
     const summary = state.llmSummary || {};
-    const text = status.enabled
+    const active = Boolean(status.enabled || status.thread_alive || status.running);
+    const text = active
       ? `LLM · ${summary.ok || 0}/${summary.total || 0} · ${compactDateTime(status.next_run_at)}`
       : 'LLM · OFF';
     $('llmStatusBox').textContent = text;
-    $('llmStatusBox').className = status.enabled && !status.last_error ? 'status ok' : 'status error';
+    $('llmStatusBox').className = active && !status.last_error ? 'status ok' : 'status error';
   } catch (e) {
     $('llmStatusBox').textContent = `LLM · error`;
     $('llmStatusBox').className = 'status error';
@@ -1853,7 +1858,12 @@ async function refreshEquity() {
 
 async function refreshNews() {
   const sym = selectedCandidate()?.symbol || selectedSymbols()[0] || 'BTCUSDT';
-  const data = await api(`/api/news/latest?symbol=${encodeURIComponent(sym)}&limit=6`);
+  let data = { news: [] };
+  try {
+    data = await api(`/api/news/latest?symbol=${encodeURIComponent(sym)}&limit=6`);
+  } catch (error) {
+    log(`WARN news refresh: ${error.message}`);
+  }
   state.news = data.news || [];
   const box = $('newsList');
   if (!state.news.length) {
@@ -2194,13 +2204,18 @@ async function refreshBackgroundTick() {
   if (autoRefreshInFlight || document.body.classList.contains('is-busy')) return;
   autoRefreshInFlight = true;
   try {
-    await refreshSignalStatus();
-    await refreshBacktestStatus();
-    await refreshLlmStatus();
-    await refreshRank();
-    await refreshSignals();
-  } catch (e) {
-    log(`ERROR auto refresh: ${e.message}`);
+    const results = await Promise.allSettled([
+      refreshSignalStatus(),
+      refreshBacktestStatus(),
+      refreshLlmStatus(),
+      refreshRank(),
+      refreshSignals(),
+    ]);
+    const failed = results.filter((r) => r.status === 'rejected');
+    if (failed.length) {
+      log(`WARN auto refresh partial: ${failed.length} блока недоступны`);
+      failed.forEach((r) => log(`WARN auto refresh block: ${r.reason?.message || r.reason}`));
+    }
   } finally {
     autoRefreshInFlight = false;
   }

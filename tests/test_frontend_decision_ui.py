@@ -414,3 +414,20 @@ def test_frontend_renders_provisional_quality_mode_and_entry_approved_kpi():
     assert "entry_interval_approved" in js
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     assert "Approved 15m/all" in html
+
+
+def test_frontend_status_panels_handle_db_errors_and_forced_manual_workers():
+    frontend = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "const degraded = data.ok === false || data.db_error" in frontend
+    assert "$('statusBox').title = data.db_error || ''" in frontend
+    assert "status.enabled || status.thread_alive || status.running" in frontend
+
+
+def test_frontend_auto_refresh_is_partial_failure_tolerant():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "Promise.allSettled([" in js
+    assert "WARN auto refresh partial" in js
+    assert "WARN news refresh" in js
+    assert "state.news = data.news || []" in js

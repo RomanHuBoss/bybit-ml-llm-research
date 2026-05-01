@@ -92,3 +92,32 @@ def test_run_subprocess_env_uses_ml_max_cpu_count(monkeypatch):
     env = run.subprocess_env()
 
     assert env["LOKY_MAX_CPU_COUNT"] == "2"
+
+
+def test_run_check_uses_syntax_parser_and_pytest_without_cache(monkeypatch):
+    import argparse
+    import run
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(run, "runtime_python", lambda no_venv=False: "python")
+    monkeypatch.setattr(run, "syntax_check", lambda: 0)
+    monkeypatch.setattr(run, "run_command", lambda command: calls.append(command) or 0)
+
+    rc = run.command_check(argparse.Namespace(no_venv=False))
+
+    assert rc == 0
+    assert calls == [["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]]
+
+
+def test_run_subprocess_env_disables_bytecode_cache(monkeypatch):
+    import run
+
+    monkeypatch.delenv("LOKY_MAX_CPU_COUNT", raising=False)
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+    monkeypatch.setattr(run, "parse_env_file", lambda _path: {})
+    monkeypatch.setattr(run.os, "cpu_count", lambda: 4)
+
+    env = run.subprocess_env()
+
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"

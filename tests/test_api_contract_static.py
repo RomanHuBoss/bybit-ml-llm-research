@@ -79,3 +79,92 @@ def test_latest_signals_operator_endpoint_joins_strategy_quality_and_backtest_ev
     assert "q.walk_forward_pass_rate" in api
     assert "b.trades_count" in api
     assert "AS research_score" in api
+
+
+def test_manual_background_run_endpoints_force_start_workers():
+    api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+
+    assert "signal_refresher.start(force=True)" in api
+    assert "background_backtester.start(force=True)" in api
+    assert "background_evaluator.start(force=True)" in api
+    assert api.count('"accepted": True') >= 3
+
+
+def test_status_endpoint_degrades_instead_of_crashing_when_db_is_unavailable(monkeypatch):
+    import app.api as api
+
+    def broken_fetch_one(*_args, **_kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(api, "fetch_one", broken_fetch_one)
+
+    payload = api.status()
+
+    assert payload["ok"] is False
+    assert "db unavailable" in payload["db_error"]
+    assert payload["candles"] == 0
+
+
+def test_trading_read_endpoints_degrade_to_diagnostic_payloads(monkeypatch):
+    import app.api as api
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(api, "latest_universe", broken)
+    monkeypatch.setattr(api, "latest_liquidity", broken)
+    monkeypatch.setattr(api, "_sentiment_summary", broken)
+    monkeypatch.setattr(api, "rank_candidates_multi", broken)
+    monkeypatch.setattr(api, "latest_strategy_quality", broken)
+    monkeypatch.setattr(api, "quality_summary", broken)
+    monkeypatch.setattr(api, "strategy_lab_snapshot", broken)
+    monkeypatch.setattr(api, "latest_evaluations", broken)
+    monkeypatch.setattr(api, "fetch_all", broken)
+
+    assert api.api_latest_universe()["ok"] is False
+    assert api.api_latest_universe()["items"] == []
+    assert api.api_latest_liquidity()["ok"] is False
+    assert api.api_latest_liquidity()["items"] == []
+    assert api.api_sentiment_summary()["ok"] is False
+    assert api.api_sentiment_summary()["result"]["items"] == []
+    assert api.api_rank_candidates()["ok"] is False
+    assert api.api_rank_candidates()["items"] == []
+    assert api.api_strategy_quality()["ok"] is False
+    assert api.api_strategy_quality()["items"] == []
+    assert api.api_strategy_lab()["ok"] is False
+    assert api.api_strategy_lab()["items"] == []
+    assert api.api_trading_desk_diagnostics()["ok"] is False
+    assert api.api_trading_desk_diagnostics()["items"] == []
+    assert api.api_llm_evaluations_latest()["ok"] is False
+    assert api.api_llm_evaluations_latest()["items"] == []
+    assert api.latest_equity()["ok"] is False
+    assert api.latest_equity()["runs"] == []
+    assert api.latest_news()["ok"] is False
+    assert api.latest_news()["news"] == []
+    assert api.latest_signals()["ok"] is False
+    assert api.latest_signals()["signals"] == []
+
+
+def test_trading_read_endpoints_do_not_raise_http_500_for_db_read_failures():
+    api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+
+    for endpoint in [
+        "def api_latest_liquidity",
+        "def api_latest_universe",
+        "def api_sentiment_summary",
+        "def latest_signals",
+        "def api_rank_candidates",
+        "def api_strategy_quality",
+        "def api_strategy_lab",
+        "def api_trading_desk_diagnostics",
+        "def api_llm_evaluations_latest",
+        "def latest_equity",
+        "def latest_news",
+    ]:
+        start = api.index(endpoint)
+        stop_candidates = [api.find("\n\n@router.", start + 1), api.find("\ndef ", start + 1)]
+        stop_candidates = [x for x in stop_candidates if x != -1]
+        stop = min(stop_candidates) if stop_candidates else len(api)
+        block = api[start:stop]
+        assert "except Exception as exc:" in block
+        assert '"ok": False' in block

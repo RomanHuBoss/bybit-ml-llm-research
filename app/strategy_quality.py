@@ -285,8 +285,26 @@ def _ensure_strategy_quality_table() -> None:
         "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS walk_forward_pass_rate NUMERIC",
         "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS walk_forward_windows INTEGER",
         "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS walk_forward_summary JSONB",
+        "ALTER TABLE strategy_quality ADD COLUMN IF NOT EXISTS diagnostics JSONB",
     ):
         execute(ddl)
+    execute(
+        """
+        DELETE FROM strategy_quality a
+        USING strategy_quality b
+        WHERE a.category=b.category
+          AND a.symbol=b.symbol
+          AND a.interval=b.interval
+          AND a.strategy=b.strategy
+          AND a.ctid < b.ctid
+        """
+    )
+    execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_quality_key
+        ON strategy_quality(category, symbol, interval, strategy)
+        """
+    )
     execute(
         """
         CREATE INDEX IF NOT EXISTS idx_strategy_quality_status

@@ -71,8 +71,8 @@ class SignalAutoRefresher:
         self._cycle_no = 0
         self._last_cycle: dict[str, Any] = _empty_summary()
 
-    def start(self) -> None:
-        if not settings.signal_auto_refresh_enabled:
+    def start(self, *, force: bool = False) -> None:
+        if not force and not settings.signal_auto_refresh_enabled:
             return
         with self._condition:
             if self._thread and self._thread.is_alive():
