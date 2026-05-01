@@ -155,6 +155,7 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     trades = _finite(row.get("trades_count"), 0.0) or 0.0
     pf = _finite(row.get("profit_factor"))
     max_dd = _finite(row.get("max_drawdown"))
+    total_return = _finite(row.get("total_return"))
     win_rate = _finite(row.get("win_rate"))
     wf_rate = _finite(row.get("walk_forward_pass_rate"))
     wf_windows = int(_finite(row.get("walk_forward_windows"), 0) or 0)
@@ -237,14 +238,50 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         and mtf_status not in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}
     )
     strategy_approved = (not settings.require_strategy_approval_for_review) or quality_status == APPROVED
+    wf_not_catastrophic = (
+        wf_rate is None
+        or wf_windows < settings.strategy_walk_forward_min_windows
+        or wf_rate >= settings.provisional_review_min_walk_forward_pass_rate
+    )
+    provisional_review_allowed = (
+        bool(settings.allow_provisional_review_for_sample_only)
+        and settings.require_strategy_approval_for_review
+        and quality_status in {RESEARCH, WATCHLIST}
+        and trades >= settings.provisional_review_min_trades
+        and pf is not None
+        and pf >= settings.provisional_review_min_profit_factor
+        and (max_dd is None or max_dd <= settings.provisional_review_max_drawdown)
+        and (total_return is None or total_return >= -0.03)
+        and wf_not_catastrophic
+        and score >= settings.provisional_review_min_score
+    )
+    quality_mode = "approved" if strategy_approved else "provisional" if provisional_review_allowed else "research"
+    provisional_dd_text = "—" if max_dd is None else f"{max_dd:.2%}"
+
     if hard:
         action = "NO_TRADE"
         label = "НЕТ ВХОДА"
         level = "reject"
+        quality_mode = "blocked"
     elif core_entry_ok and strategy_approved and score >= 56:
         action = "REVIEW_ENTRY"
         label = "РУЧНАЯ ПРОВЕРКА ВХОДА"
         level = "review"
+    elif core_entry_ok and provisional_review_allowed:
+        action = "REVIEW_ENTRY"
+        label = "ПИЛОТНАЯ ПРОВЕРКА ВХОДА"
+        level = "review"
+        _add_reason(
+            evidence,
+            "provisional_review",
+            "Пилотный допуск без полного approval",
+            (
+                f"Локальная выборка еще меньше полного approval ({int(trades)}/{settings.strategy_approval_min_trades}), "
+                f"но PF {pf:.2f} >= {settings.provisional_review_min_profit_factor:.2f}, "
+                f"DD {provisional_dd_text} <= {settings.provisional_review_max_drawdown:.2%}; "
+                "это только ручная проверка, не приказ на сделку."
+            ),
+        )
     elif core_entry_ok and not strategy_approved:
         action = "RESEARCH_CANDIDATE"
         label = "ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ"
@@ -263,7 +300,13 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         max_dd=max_dd,
         quality_status=quality_status,
     )
-    trust_status = "BLOCKED" if hard else "REVIEW_ALLOWED" if action == "REVIEW_ENTRY" else "RESEARCH_ONLY" if action == "RESEARCH_CANDIDATE" else "WAIT"
+    trust_status = (
+        "BLOCKED" if hard
+        else "REVIEW_ALLOWED" if action == "REVIEW_ENTRY" and quality_mode == "approved"
+        else "PROVISIONAL_REVIEW" if action == "REVIEW_ENTRY" and quality_mode == "provisional"
+        else "RESEARCH_ONLY" if action == "RESEARCH_CANDIDATE"
+        else "WAIT"
+    )
     risk_grade = "high" if risk_score >= 70 else "elevated" if risk_score >= 45 else "controlled"
 
     return {
@@ -275,6 +318,7 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         "operator_risk_grade": risk_grade,
         "operator_trust_status": trust_status,
         "operator_confidence_band": confidence_band,
+        "operator_quality_mode": quality_mode,
         "quality_status": quality_status,
         "quality_score": int(round(quality_score)),
         "evidence_grade": quality.get("evidence_grade"),

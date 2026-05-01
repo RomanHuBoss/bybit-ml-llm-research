@@ -143,3 +143,49 @@ def test_operator_action_blocks_stale_strategy_quality_even_if_row_says_approved
     assert decision["quality_status"] == "STALE"
     assert any(item["code"] == "strategy_stale" for item in decision["operator_hard_reasons"])
     assert decision["operator_trust_status"] == "BLOCKED"
+
+
+
+def test_operator_action_allows_provisional_review_for_small_positive_sample():
+    decision = classify_operator_action(
+        base_row(
+            confidence=0.66,
+            research_score=0.78,
+            trades_count=12,
+            profit_factor=1.34,
+            max_drawdown=0.07,
+            total_return=0.05,
+            walk_forward_pass_rate=0.40,
+            walk_forward_windows=4,
+            quality_status="RESEARCH",
+            quality_score=62,
+            quality_reason="Недостаточная статистика стратегии: сделок 12; требуется минимум 40.",
+        )
+    )
+
+    assert decision["operator_action"] == "REVIEW_ENTRY"
+    assert decision["operator_label"] == "ПИЛОТНАЯ ПРОВЕРКА ВХОДА"
+    assert decision["operator_quality_mode"] == "provisional"
+    assert decision["operator_trust_status"] == "PROVISIONAL_REVIEW"
+    assert any(item["code"] == "provisional_review" for item in decision["operator_evidence_notes"])
+
+
+def test_operator_action_keeps_small_negative_sample_out_of_review():
+    decision = classify_operator_action(
+        base_row(
+            confidence=0.66,
+            research_score=0.78,
+            trades_count=12,
+            profit_factor=0.96,
+            max_drawdown=0.07,
+            total_return=0.01,
+            walk_forward_pass_rate=0.40,
+            walk_forward_windows=4,
+            quality_status="RESEARCH",
+            quality_score=58,
+        )
+    )
+
+    assert decision["operator_action"] == "RESEARCH_CANDIDATE"
+    assert decision["operator_quality_mode"] == "research"
+    assert not any(item["code"] == "provisional_review" for item in decision["operator_evidence_notes"])

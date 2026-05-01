@@ -197,6 +197,18 @@ class Settings:
     strategy_walk_forward_min_windows: int = _int("STRATEGY_WALK_FORWARD_MIN_WINDOWS", 3)
     strategy_walk_forward_min_pass_rate: float = _float("STRATEGY_WALK_FORWARD_MIN_PASS_RATE", 0.55)
     require_walk_forward_for_approval: bool = _bool("REQUIRE_WALK_FORWARD_FOR_APPROVAL", True)
+
+    # Пилотный допуск нужен для advisory-режима: если у свежего 15m-сетапа
+    # недостаточна только локальная выборка, но нет отрицательного evidence,
+    # оператор может получить не приказ на сделку, а ручную проверку входа.
+    # REJECTED/STALE/отрицательный PF/DD по-прежнему блокируют вход.
+    allow_provisional_review_for_sample_only: bool = _bool("ALLOW_PROVISIONAL_REVIEW_FOR_SAMPLE_ONLY", True)
+    provisional_review_min_trades: int = _int("PROVISIONAL_REVIEW_MIN_TRADES", 10)
+    provisional_review_min_profit_factor: float = _float("PROVISIONAL_REVIEW_MIN_PROFIT_FACTOR", 1.05)
+    provisional_review_max_drawdown: float = _float("PROVISIONAL_REVIEW_MAX_DRAWDOWN", 0.30)
+    provisional_review_min_walk_forward_pass_rate: float = _float("PROVISIONAL_REVIEW_MIN_WALK_FORWARD_PASS_RATE", 0.35)
+    provisional_review_min_score: int = _int("PROVISIONAL_REVIEW_MIN_SCORE", 60)
+
     strategy_quality_max_age_days: int = _int("STRATEGY_QUALITY_MAX_AGE_DAYS", 14)
     strategy_min_expectancy: float = _float("STRATEGY_MIN_EXPECTANCY", 0.0)
     strategy_min_recent_30d_return: float = _float("STRATEGY_MIN_RECENT_30D_RETURN", -0.03)
@@ -318,6 +330,16 @@ def _validate_settings(s: Settings) -> None:
         problems.append("STRATEGY_WALK_FORWARD_MIN_WINDOWS должен быть в диапазоне [1; STRATEGY_WALK_FORWARD_WINDOWS]")
     if not (0.0 <= s.strategy_walk_forward_min_pass_rate <= 1.0):
         problems.append("STRATEGY_WALK_FORWARD_MIN_PASS_RATE должен быть в диапазоне [0.0; 1.0]")
+    if not (5 <= s.provisional_review_min_trades <= s.strategy_approval_min_trades):
+        problems.append("PROVISIONAL_REVIEW_MIN_TRADES должен быть в диапазоне [5; STRATEGY_APPROVAL_MIN_TRADES]")
+    if not (1.0 <= s.provisional_review_min_profit_factor <= s.strategy_approval_min_profit_factor):
+        problems.append("PROVISIONAL_REVIEW_MIN_PROFIT_FACTOR должен быть в диапазоне [1.0; STRATEGY_APPROVAL_MIN_PROFIT_FACTOR]")
+    if not (s.strategy_approval_max_drawdown <= s.provisional_review_max_drawdown <= 0.80):
+        problems.append("PROVISIONAL_REVIEW_MAX_DRAWDOWN должен быть >= STRATEGY_APPROVAL_MAX_DRAWDOWN и <= 0.80")
+    if not (0.0 <= s.provisional_review_min_walk_forward_pass_rate <= s.strategy_walk_forward_min_pass_rate):
+        problems.append("PROVISIONAL_REVIEW_MIN_WALK_FORWARD_PASS_RATE должен быть в диапазоне [0.0; STRATEGY_WALK_FORWARD_MIN_PASS_RATE]")
+    if not (0 <= s.provisional_review_min_score <= 100):
+        problems.append("PROVISIONAL_REVIEW_MIN_SCORE должен быть в диапазоне [0; 100]")
     if not (1 <= s.strategy_quality_max_age_days <= 365):
         problems.append("STRATEGY_QUALITY_MAX_AGE_DAYS должен быть в диапазоне [1; 365]")
     if not (-0.50 <= s.strategy_min_expectancy <= 0.50):

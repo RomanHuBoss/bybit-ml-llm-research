@@ -602,6 +602,8 @@ def quality_summary(category: str = "linear") -> dict[str, Any]:
         """
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE quality_status='APPROVED') AS approved,
+               COUNT(*) FILTER (WHERE interval=%s AND quality_status='APPROVED') AS entry_interval_approved,
+               COUNT(*) FILTER (WHERE interval<>%s AND quality_status='APPROVED') AS context_interval_approved,
                COUNT(*) FILTER (WHERE quality_status='WATCHLIST') AS watchlist,
                COUNT(*) FILTER (WHERE quality_status='RESEARCH') AS research,
                COUNT(*) FILTER (WHERE quality_status='REJECTED') AS rejected,
@@ -613,11 +615,13 @@ def quality_summary(category: str = "linear") -> dict[str, Any]:
         FROM strategy_quality
         WHERE category=%s
         """,
-        (category,),
+        (str(settings.mtf_entry_interval).strip().upper(), str(settings.mtf_entry_interval).strip().upper(), category),
     )
     return row or {
         "total": 0,
         "approved": 0,
+        "entry_interval_approved": 0,
+        "context_interval_approved": 0,
         "watchlist": 0,
         "research": 0,
         "rejected": 0,

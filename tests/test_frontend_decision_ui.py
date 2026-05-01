@@ -404,3 +404,13 @@ def test_frontend_surfaces_missing_strategy_quality_contract_as_error():
     assert "function hasStrategyQualityContract" in js
     assert "Strategy quality не пришел из API" in js
     assert "API не передал quality_status/quality_score" in js
+
+
+
+def test_frontend_renders_provisional_quality_mode_and_entry_approved_kpi():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert "Strategy quality PROVISIONAL" in js
+    assert "operator_quality_mode" in js
+    assert "entry_interval_approved" in js
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    assert "Approved 15m/all" in html

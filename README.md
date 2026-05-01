@@ -494,3 +494,29 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_strategy_lab_v20
 Теперь `/api/signals/latest` синхронизирован с research-контуром: endpoint подтягивает последние backtest/quality/model/liquidity/LLM evidence, рассчитывает `research_score`, передает полный контракт в `annotate_recommendations()` и только после freshness/MTF/queue-stability показывает `REVIEW_ENTRY`. Если API снова не передаст `quality_status`/`quality_score`, frontend явно подсветит ошибку контракта Strategy Quality, а не замаскирует ее как обычный Research.
 
 Принятое безопасное допущение: `REVIEW_ENTRY` разрешается только при свежем `APPROVED` evidence и прохождении hard-veto. Старые legacy-строки `APPROVED`, которые не имеют актуального walk-forward/backtest evidence, не форсируются в сделку автоматически; их нужно обновить через фоновый Strategy Quality refresh/backtest. Это может уменьшать число входных рекомендаций, но защищает от ложного допуска.
+
+## V26: почему очередь могла оставаться только Research при наличии Approved в Strategy Lab
+
+Скриншот production UI показал уже не потерю API-контракта, а вторую проблему в логике допуска: `Approved` в Strategy Lab считался по всем TF, включая 60m/240m контекст, а операторская очередь строится только по `MTF_ENTRY_INTERVAL=15`. Поэтому на экране могло быть `Approved 15`, но `Trading Desk 0`: approved-строки относились к контекстным TF или к стратегиям, которые не дали свежий 15m entry-сетап.
+
+Также полный quality gate требовал `STRATEGY_APPROVAL_MIN_TRADES=40` для каждого `symbol+15m+strategy`. На живой корзине это оказалось слишком жестким для advisory-only СППР: сильный свежий сетап с 10-39 локальными сделками, нормальным PF/DD и без hard veto всегда оставался `RESEARCH_CANDIDATE`, хотя оператору нужен хотя бы ручной разбор входа.
+
+Исправление V26:
+
+- KPI Strategy Lab теперь показывает `Approved 15m/all`, чтобы не смешивать entry-допуск и контекстные 60m/240m approvals.
+- Добавлен безопасный пилотный режим `ALLOW_PROVISIONAL_REVIEW_FOR_SAMPLE_ONLY=true`.
+- Если fresh 15m-сетап прошел MTF/liquidity/spread/RR/confidence, не имеет hard veto, не является `REJECTED`/`STALE`, имеет минимум `PROVISIONAL_REVIEW_MIN_TRADES`, PF не ниже `PROVISIONAL_REVIEW_MIN_PROFIT_FACTOR`, DD не выше `PROVISIONAL_REVIEW_MAX_DRAWDOWN`, а WF не катастрофически слабый, backend может вернуть `REVIEW_ENTRY` с `operator_quality_mode=provisional` и label `ПИЛОТНАЯ ПРОВЕРКА ВХОДА`.
+- Это не полноценный `APPROVED` и не автоматическая сделка. UI обязан подсветить `PROVISIONAL_REVIEW`, а оператор обязан проверить график, стакан, риск и причину малого sample size.
+
+Новые настройки:
+
+```env
+ALLOW_PROVISIONAL_REVIEW_FOR_SAMPLE_ONLY=true
+PROVISIONAL_REVIEW_MIN_TRADES=10
+PROVISIONAL_REVIEW_MIN_PROFIT_FACTOR=1.05
+PROVISIONAL_REVIEW_MAX_DRAWDOWN=0.30
+PROVISIONAL_REVIEW_MIN_WALK_FORWARD_PASS_RATE=0.35
+PROVISIONAL_REVIEW_MIN_SCORE=60
+```
+
+Если нужен максимально консервативный режим, установите `ALLOW_PROVISIONAL_REVIEW_FOR_SAMPLE_ONLY=false`: тогда `REVIEW_ENTRY` снова будет доступен только для полного `APPROVED`.
