@@ -285,7 +285,7 @@ def test_frontend_uses_compact_badges_without_clipping_full_operator_label():
     assert "const MTF_ACTION_COMPACT_LABELS" in js
     assert "compactMtfActionLabel(s)" in js
     assert "NO_TRADE_ENTRY_CONFLICT" in js
-    assert "styles.css?v=trading-cockpit-v13" in html
+    assert "styles.css?v=trading-cockpit-v14" in html
     assert "v13 trading UI hardening" in css
     assert ".candidate .badge" in css
     assert "text-overflow: ellipsis" in css
@@ -396,3 +396,11 @@ def test_frontend_uses_extended_timeout_for_signal_build():
     assert "symbol×interval job" in js
     assert "}, signalBuildTimeoutMs());" in js
     assert "45 секунд превращали нормальный тяжелый пересчет" in js
+
+
+def test_frontend_surfaces_missing_strategy_quality_contract_as_error():
+    js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "function hasStrategyQualityContract" in js
+    assert "Strategy quality не пришел из API" in js
+    assert "API не передал quality_status/quality_score" in js

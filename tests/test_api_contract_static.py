@@ -10,7 +10,7 @@ def test_latest_signals_api_is_category_scoped_and_not_mixing_markets():
 
     assert "def latest_signals(limit: int = 50, entry_only: bool = True, category: str = settings.default_category)" in api
     assert "category = normalize_category(category)" in api
-    assert "WHERE category=%s AND interval = ANY(%s)" in api
+    assert "WHERE category=%s AND interval = ANY(%s" in api
     assert '"category": category' in api
 
 
@@ -65,3 +65,17 @@ def test_signal_build_endpoint_is_parallelized_and_reports_job_count():
     assert "thread_name_prefix=\"api-signal-build\"" in api
     assert '"workers": workers' in api
     assert '"jobs": len(jobs)' in api
+
+
+def test_latest_signals_operator_endpoint_joins_strategy_quality_and_backtest_evidence():
+    api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+
+    assert "latest_backtests AS" in api
+    assert "latest_quality AS" in api
+    assert "FROM strategy_quality" in api
+    assert "LEFT JOIN latest_quality q ON q.symbol=s.symbol AND q.interval=s.interval AND q.strategy=s.strategy" in api
+    assert "q.quality_status" in api
+    assert "q.quality_score" in api
+    assert "q.walk_forward_pass_rate" in api
+    assert "b.trades_count" in api
+    assert "AS research_score" in api

@@ -908,7 +908,12 @@ function renderLlmVerdict(s) {
   setText('llmVerdictMeta', verdict.meta);
 }
 
+function hasStrategyQualityContract(s) {
+  return s && Object.prototype.hasOwnProperty.call(s, 'quality_status') && Object.prototype.hasOwnProperty.call(s, 'quality_score');
+}
+
 function strategyQualityStatus(s) {
+  if (!hasStrategyQualityContract(s)) return 'fail';
   const status = String(s?.quality_status || '').toUpperCase();
   if (status === 'APPROVED') return 'pass';
   if (status === 'REJECTED' || status === 'STALE') return 'fail';
@@ -916,6 +921,7 @@ function strategyQualityStatus(s) {
 }
 
 function strategyQualityTitle(s) {
+  if (!hasStrategyQualityContract(s)) return 'Strategy quality не пришел из API';
   const status = String(s?.quality_status || 'RESEARCH').toUpperCase();
   const score = num(s?.quality_score, null);
   if (status === 'APPROVED') return `Strategy quality APPROVED · ${fmt(score, 0)}/100`;
@@ -992,7 +998,7 @@ function baseChecklistFor(s) {
     { key: 'spread', status: spreadStatus, title: spreadStatus === 'pass' ? 'Spread нормальный' : spreadStatus === 'warn' ? 'Spread требует контроля' : 'Spread слишком широкий', text: `Текущий spread ${hasSpread ? pctRaw(spread, 4) : '—'}. Чем шире spread, тем хуже исполнимость ручного входа по фьючерсу.` },
     { key: 'rr', status: rr && rr.ratio >= 1.55 ? 'pass' : rr && rr.ratio >= 1.15 ? 'warn' : 'fail', title: rr ? `Risk/Reward ${rr.ratio.toFixed(2)}` : 'SL/TP невалидны', text: rr ? `Риск до SL ${pct(rr.riskPct, 2)}, потенциал до TP ${pct(rr.rewardPct, 2)}.` : 'Нельзя оценить сделку без entry, SL и TP.' },
     { key: 'confidence', status: confidence >= 0.62 ? 'pass' : confidence >= 0.52 ? 'warn' : 'fail', title: `Confidence ${pct(confidence, 0)}`, text: 'Низкая уверенность не запрещает анализ, но запрещает механический вход.' },
-    { key: 'strategy_quality', status: strategyQualityStatus(s), title: strategyQualityTitle(s), text: s.quality_reason || 'Только APPROVED-стратегии могут стать REVIEW_ENTRY; остальные остаются Research/Watch.' },
+    { key: 'strategy_quality', status: strategyQualityStatus(s), title: strategyQualityTitle(s), text: hasStrategyQualityContract(s) ? (s.quality_reason || 'Только APPROVED-стратегии могут стать REVIEW_ENTRY; остальные остаются Research/Watch.') : 'API не передал quality_status/quality_score; REVIEW_ENTRY запрещен до восстановления контракта /api/signals/latest.' },
     { key: 'trust_gate', status: s.operator_trust_status === 'REVIEW_ALLOWED' ? 'pass' : s.operator_trust_status === 'BLOCKED' ? 'fail' : 'warn', title: `Trust gate: ${escapeHtml(s.operator_trust_status || 'UNKNOWN')}`, text: `Серверный risk score ${scoreFmt(s.operator_risk_score)} · grade ${escapeHtml(s.operator_risk_grade || '—')}. REVIEW_ENTRY разрешается только после снятия hard veto, approval и score-гейта.` },
     { key: 'backtest', status: backtestStatus, title: backtestEvidenceTitle(s), text: backtestStatus === 'fail' ? 'Негативный бэктест блокирует сетап или оставляет его вне входа.' : 'Малое число сделок или отсутствие свежего бэктеста больше не маскируется под рекомендацию.' },
     { key: 'ml', status: mlEvidenceStatus(s), title: mlEvidenceTitle(s), text: mlEvidenceText(s) },

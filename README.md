@@ -482,3 +482,15 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_strategy_lab_v20
 - оператор видит статус тяжелого MTF-пересчета.
 
 Рекомендация для слабого локального ПК или медленной БД: оставить `SIGNAL_BUILD_WORKERS=1..2`; для более мощного стенда можно поднять до 4, но не выше без проверки нагрузки PostgreSQL.
+
+## V25: исправление stuck-in-Research в `/api/signals/latest`
+
+В этой ревизии устранен критичный серверный разрыв между Strategy Lab и операторской витриной:
+
+- `/api/research/rank` уже ранжировал кандидатов с учетом `strategy_quality`, последних `backtest_runs`, `model_runs`, `liquidity_snapshots` и `llm_evaluations`;
+- `/api/signals/latest`, который фактически питает рабочее место оператора, ранее брал только свежие строки из `signals` и поэтому не видел `quality_status=APPROVED`, `quality_score`, `trades_count`, `profit_factor`, `walk_forward_pass_rate` и другие evidence-поля;
+- из-за этого `classify_operator_action()` безопасно считал такие строки `RESEARCH`/`NO_BACKTEST`, и система могла днями показывать максимум `RESEARCH_CANDIDATE`, даже если Strategy Lab уже содержал approved evidence.
+
+Теперь `/api/signals/latest` синхронизирован с research-контуром: endpoint подтягивает последние backtest/quality/model/liquidity/LLM evidence, рассчитывает `research_score`, передает полный контракт в `annotate_recommendations()` и только после freshness/MTF/queue-stability показывает `REVIEW_ENTRY`. Если API снова не передаст `quality_status`/`quality_score`, frontend явно подсветит ошибку контракта Strategy Quality, а не замаскирует ее как обычный Research.
+
+Принятое безопасное допущение: `REVIEW_ENTRY` разрешается только при свежем `APPROVED` evidence и прохождении hard-veto. Старые legacy-строки `APPROVED`, которые не имеют актуального walk-forward/backtest evidence, не форсируются в сделку автоматически; их нужно обновить через фоновый Strategy Quality refresh/backtest. Это может уменьшать число входных рекомендаций, но защищает от ложного допуска.

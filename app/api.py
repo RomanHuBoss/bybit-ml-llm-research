@@ -70,7 +70,7 @@ from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
 from .signal_background import signal_refresher
 from .symbols import build_universe, latest_liquidity, latest_universe, refresh_liquidity
-from .strategy_quality import latest_strategy_quality, quality_summary, refresh_strategy_quality
+from .strategy_quality import ensure_strategy_quality_storage, latest_strategy_quality, quality_summary, refresh_strategy_quality
 from .strategy_quality_background import strategy_quality_refresher
 from .strategy_lab import strategy_lab_snapshot, trading_desk_diagnostics
 from .validation import bounded_int, normalize_category, normalize_interval, normalize_intervals, normalize_symbol, normalize_symbols
@@ -485,7 +485,16 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
     if settings.mtf_consensus_enabled:
         entry_interval = str(settings.mtf_entry_interval).strip().upper()
         context_intervals = _unique_intervals([settings.mtf_entry_interval, settings.mtf_bias_interval, settings.mtf_regime_interval])
-        query_limit = max(limit * 6, 120)
+        query_limit = max(limit * 8, 120)
+        try:
+            # Без этого JOIN /api/signals/latest никогда не видел APPROVED quality-row
+            # и классифицировал любой живой сетап как RESEARCH_CANDIDATE. Это был
+            # критичный разрыв между витриной оператора и Strategy Quality Gate.
+            ensure_strategy_quality_storage()
+        except Exception:
+            # Если БД/миграция недоступны, основной запрос вернет диагностируемую
+            # ошибку. На этом уровне не скрываем отказ от пользователя.
+            pass
         rows = fetch_all(
             """
             WITH latest_signals AS (
@@ -493,9 +502,22 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                        id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
                        entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
                 FROM signals
-                WHERE category=%s AND interval = ANY(%s) AND created_at >= NOW() - (%s::text || ' hours')::interval
+                WHERE category=%s AND interval = ANY(%s::text[]) AND created_at >= NOW() - (%s::text || ' hours')::interval
                   AND bar_time IS NOT NULL
                 ORDER BY category, symbol, interval, strategy, direction, created_at DESC
+            ), latest_backtests AS (
+                SELECT DISTINCT ON (symbol, interval, strategy)
+                       symbol, interval, strategy, total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, created_at
+                FROM backtest_runs
+                WHERE category=%s AND interval = ANY(%s::text[])
+                ORDER BY symbol, interval, strategy, created_at DESC
+            ), latest_models AS (
+                SELECT DISTINCT ON (symbol, interval)
+                       symbol, interval, roc_auc, precision_score, recall_score, created_at
+                FROM model_runs
+                WHERE category=%s AND interval = ANY(%s::text[])
+                  AND created_at >= NOW() - (%s::text || ' hours')::interval
+                ORDER BY symbol, interval, created_at DESC
             ), latest_liq_raw AS (
                 SELECT DISTINCT ON (l.symbol) l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h,
                        l.open_interest_value, l.is_eligible, l.captured_at AS liquidity_captured_at,
@@ -514,17 +536,61 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                        CASE WHEN liquidity_captured_at IS NULL THEN 'missing'
                             WHEN liquidity_is_fresh THEN 'fresh' ELSE 'stale' END AS liquidity_status
                 FROM latest_liq_raw
+            ), latest_quality AS (
+                SELECT category, symbol, interval, strategy, quality_status, quality_score, evidence_grade,
+                       quality_reason, diagnostics AS quality_diagnostics, updated_at AS quality_updated_at,
+                       backtest_run_id, last_backtest_at, expectancy, avg_trade_pnl, median_trade_pnl,
+                       last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
+                FROM strategy_quality
+                WHERE category=%s AND interval = ANY(%s::text[])
+            ), latest_llm AS (
+                SELECT DISTINCT ON (signal_id)
+                       signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
+                       model AS llm_model, updated_at AS llm_updated_at, duration_ms AS llm_duration_ms,
+                       payload_hash AS llm_payload_hash
+                FROM llm_evaluations
+                ORDER BY signal_id, updated_at DESC
             )
             SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
                    s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
+                   b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
+                   q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
+                   q.expectancy, q.avg_trade_pnl, q.median_trade_pnl, q.last_30d_return, q.last_90d_return, q.walk_forward_pass_rate, q.walk_forward_windows, q.walk_forward_summary,
+                   m.roc_auc, m.precision_score, m.recall_score,
                    l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
-                   l.liquidity_captured_at, l.liquidity_status
+                   l.liquidity_captured_at, l.liquidity_status,
+                   e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
+                   (
+                       COALESCE(s.confidence::float, 0) * 0.30
+                     + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.18
+                     + CASE WHEN q.quality_status = 'APPROVED' THEN 0.08 WHEN q.quality_status = 'WATCHLIST' THEN 0.03 WHEN q.quality_status = 'REJECTED' THEN -0.18 ELSE -0.04 END
+                     + CASE WHEN q.walk_forward_pass_rate IS NULL THEN 0 ELSE LEAST(GREATEST(q.walk_forward_pass_rate::float, 0), 1) * 0.05 END
+                     + LEAST(GREATEST(COALESCE(b.profit_factor::float, 1) / 2.0, 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                     + LEAST(GREATEST(COALESCE(b.sharpe::float, 0) / 3.0, 0), 1) * 0.06 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                     + LEAST(GREATEST(COALESCE(b.win_rate::float, 0), 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                     + LEAST(GREATEST((COALESCE(m.roc_auc::float, 0.5) - 0.5) / 0.25, 0), 1) * 0.15
+                     + LEAST(GREATEST(COALESCE(l.liquidity_score::float, 0) / 8.0, 0), 1) * 0.10
+                     + CASE WHEN COALESCE(l.is_eligible, FALSE) THEN 0.05 ELSE -0.10 END
+                     + CASE WHEN COALESCE(l.spread_pct::float, 999) <= %s THEN 0.05 ELSE -0.05 END
+                     - LEAST(GREATEST(COALESCE(b.max_drawdown::float, 0.2), 0), 1) * 0.10
+                   ) AS research_score
             FROM latest_signals s
+            LEFT JOIN latest_backtests b ON b.symbol=s.symbol AND b.interval=s.interval AND b.strategy=s.strategy
+            LEFT JOIN latest_quality q ON q.symbol=s.symbol AND q.interval=s.interval AND q.strategy=s.strategy
+            LEFT JOIN latest_models m ON m.symbol=s.symbol AND m.interval=s.interval
             LEFT JOIN latest_liq l ON l.symbol=s.symbol
-            ORDER BY s.created_at DESC
+            LEFT JOIN latest_llm e ON e.signal_id=s.id
+            ORDER BY research_score DESC NULLS LAST, s.created_at DESC
             LIMIT %s
             """,
-            (category, context_intervals, settings.max_signal_age_hours, settings.liquidity_snapshot_max_age_minutes, category, query_limit),
+            (
+                category, context_intervals, settings.max_signal_age_hours,
+                category, context_intervals,
+                category, context_intervals, settings.ml_auto_train_ttl_hours,
+                settings.liquidity_snapshot_max_age_minutes, category,
+                category, context_intervals,
+                settings.max_spread_pct, query_limit,
+            ),
         )
         rows = annotate_and_filter_fresh_signals(rows)
         rows = _apply_mtf_consensus(
@@ -538,6 +604,10 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
         rows = consolidate_operator_queue(annotate_recommendations(rows), limit=limit)
         return {"ok": True, "category": category, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
 
+    try:
+        ensure_strategy_quality_storage()
+    except Exception:
+        pass
     rows = fetch_all(
         """
         WITH latest_signals AS (
@@ -548,6 +618,19 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
             WHERE category=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
               AND bar_time IS NOT NULL
             ORDER BY category, symbol, interval, strategy, direction, created_at DESC
+        ), latest_backtests AS (
+            SELECT DISTINCT ON (symbol, interval, strategy)
+                   symbol, interval, strategy, total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, created_at
+            FROM backtest_runs
+            WHERE category=%s
+            ORDER BY symbol, interval, strategy, created_at DESC
+        ), latest_models AS (
+            SELECT DISTINCT ON (symbol, interval)
+                   symbol, interval, roc_auc, precision_score, recall_score, created_at
+            FROM model_runs
+            WHERE category=%s
+              AND created_at >= NOW() - (%s::text || ' hours')::interval
+            ORDER BY symbol, interval, created_at DESC
         ), latest_liq_raw AS (
             SELECT DISTINCT ON (l.symbol) l.symbol, l.liquidity_score, l.spread_pct, l.turnover_24h,
                    l.open_interest_value, l.is_eligible, l.captured_at AS liquidity_captured_at,
@@ -566,17 +649,61 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                    CASE WHEN liquidity_captured_at IS NULL THEN 'missing'
                         WHEN liquidity_is_fresh THEN 'fresh' ELSE 'stale' END AS liquidity_status
             FROM latest_liq_raw
+        ), latest_quality AS (
+            SELECT category, symbol, interval, strategy, quality_status, quality_score, evidence_grade,
+                   quality_reason, diagnostics AS quality_diagnostics, updated_at AS quality_updated_at,
+                   backtest_run_id, last_backtest_at, expectancy, avg_trade_pnl, median_trade_pnl,
+                   last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
+            FROM strategy_quality
+            WHERE category=%s
+        ), latest_llm AS (
+            SELECT DISTINCT ON (signal_id)
+                   signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
+                   model AS llm_model, updated_at AS llm_updated_at, duration_ms AS llm_duration_ms,
+                   payload_hash AS llm_payload_hash
+            FROM llm_evaluations
+            ORDER BY signal_id, updated_at DESC
         )
         SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit,
                s.atr, s.ml_probability, s.sentiment_score, s.rationale,
+               b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
+               q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
+               q.expectancy, q.avg_trade_pnl, q.median_trade_pnl, q.last_30d_return, q.last_90d_return, q.walk_forward_pass_rate, q.walk_forward_windows, q.walk_forward_summary,
+               m.roc_auc, m.precision_score, m.recall_score,
                l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
-               l.liquidity_captured_at, l.liquidity_status
+               l.liquidity_captured_at, l.liquidity_status,
+               e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
+               (
+                   COALESCE(s.confidence::float, 0) * 0.30
+                 + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.18
+                 + CASE WHEN q.quality_status = 'APPROVED' THEN 0.08 WHEN q.quality_status = 'WATCHLIST' THEN 0.03 WHEN q.quality_status = 'REJECTED' THEN -0.18 ELSE -0.04 END
+                 + CASE WHEN q.walk_forward_pass_rate IS NULL THEN 0 ELSE LEAST(GREATEST(q.walk_forward_pass_rate::float, 0), 1) * 0.05 END
+                 + LEAST(GREATEST(COALESCE(b.profit_factor::float, 1) / 2.0, 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                 + LEAST(GREATEST(COALESCE(b.sharpe::float, 0) / 3.0, 0), 1) * 0.06 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                 + LEAST(GREATEST(COALESCE(b.win_rate::float, 0), 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+                 + LEAST(GREATEST((COALESCE(m.roc_auc::float, 0.5) - 0.5) / 0.25, 0), 1) * 0.15
+                 + LEAST(GREATEST(COALESCE(l.liquidity_score::float, 0) / 8.0, 0), 1) * 0.10
+                 + CASE WHEN COALESCE(l.is_eligible, FALSE) THEN 0.05 ELSE -0.10 END
+                 + CASE WHEN COALESCE(l.spread_pct::float, 999) <= %s THEN 0.05 ELSE -0.05 END
+                 - LEAST(GREATEST(COALESCE(b.max_drawdown::float, 0.2), 0), 1) * 0.10
+               ) AS research_score
         FROM latest_signals s
+        LEFT JOIN latest_backtests b ON b.symbol=s.symbol AND b.interval=s.interval AND b.strategy=s.strategy
+        LEFT JOIN latest_quality q ON q.symbol=s.symbol AND q.interval=s.interval AND q.strategy=s.strategy
+        LEFT JOIN latest_models m ON m.symbol=s.symbol AND m.interval=s.interval
         LEFT JOIN latest_liq l ON l.symbol=s.symbol
-        ORDER BY s.created_at DESC
+        LEFT JOIN latest_llm e ON e.signal_id=s.id
+        ORDER BY research_score DESC NULLS LAST, s.created_at DESC
         LIMIT %s
         """,
-        (category, settings.max_signal_age_hours, settings.liquidity_snapshot_max_age_minutes, category, limit),
+        (
+            category, settings.max_signal_age_hours,
+            category,
+            category, settings.ml_auto_train_ttl_hours,
+            settings.liquidity_snapshot_max_age_minutes, category,
+            category,
+            settings.max_spread_pct, limit,
+        ),
     )
     rows = consolidate_operator_queue(annotate_recommendations(annotate_and_filter_fresh_signals(rows)), limit=limit)
     return {"ok": True, "category": category, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
