@@ -298,3 +298,25 @@ def test_backtest_trade_storage_migration_failure_is_non_fatal(monkeypatch):
     assert warning is not None
     assert "backtest_trades_storage_unverified" in warning
     assert "driver unavailable" in warning
+
+
+def test_donchian_breakout_tolerates_nan_channel_boundaries():
+    import numpy as np
+    import pandas as pd
+    from app.strategies import donchian_breakout
+
+    base = {
+        "close": 120.0,
+        "atr_14": 2.0,
+        "ema_20": 115.0,
+        "ema_50": 100.0,
+        "volume_z": 2.0,
+        "micro_sentiment_score": 0.2,
+        "liquidity_state": "unknown",
+        "spread_pct": 999.0,
+        "liquidity_score": 0.0,
+        "is_eligible": pd.NA,
+    }
+
+    assert donchian_breakout(pd.Series({**base, "donchian_high": pd.NA, "donchian_low": np.nan})) is None
+    assert donchian_breakout(pd.Series({**base, "donchian_high": 110.0, "donchian_low": pd.NA})) is not None

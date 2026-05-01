@@ -59,3 +59,15 @@ def test_candidates_needing_llm_selects_missing_or_stale_evaluation(monkeypatch)
     assert selected[0]["id"] == 11
     assert "_llm_payload" in selected[0]
     assert "_llm_payload_hash" in selected[0]
+
+
+def test_ensure_llm_schema_contains_upgrade_migrations():
+    from pathlib import Path
+
+    source = Path("app/llm_background.py").read_text(encoding="utf-8")
+
+    assert "ADD COLUMN IF NOT EXISTS payload_hash" in source
+    assert "ADD COLUMN IF NOT EXISTS interval" in source
+    assert "ADD COLUMN IF NOT EXISTS symbol" in source
+    assert "DELETE FROM llm_evaluations a" in source
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_evaluations_signal_id" in source

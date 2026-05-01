@@ -47,7 +47,59 @@ ON llm_evaluations(symbol, updated_at DESC);
 def ensure_llm_schema() -> None:
     # Мягкая миграция для обновления существующих установок: после замены файлов
     # фоновой LLM-оценке не должен требоваться ручной SQL, если базовая schema уже есть.
-    execute(LLM_SCHEMA_SQL)
+    # CREATE TABLE не добавляет новые поля в уже существующую таблицу, поэтому
+    # ниже явно донакатываем колонки и уникальный ключ, которые нужны ON CONFLICT.
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_evaluations (
+            id BIGSERIAL PRIMARY KEY,
+            signal_id BIGINT REFERENCES signals(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            started_at TIMESTAMPTZ,
+            finished_at TIMESTAMPTZ,
+            category TEXT,
+            symbol TEXT NOT NULL DEFAULT '',
+            interval TEXT,
+            strategy TEXT,
+            direction TEXT,
+            model TEXT,
+            payload_hash TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            brief TEXT,
+            error TEXT,
+            duration_ms INTEGER,
+            payload JSONB
+        )
+        """
+    )
+    migrations = [
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS signal_id BIGINT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS category TEXT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS symbol TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS interval TEXT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS strategy TEXT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS direction TEXT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS model TEXT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS payload_hash TEXT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS brief TEXT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS error TEXT",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS duration_ms INTEGER",
+        "ALTER TABLE llm_evaluations ADD COLUMN IF NOT EXISTS payload JSONB",
+        "UPDATE llm_evaluations SET payload_hash = COALESCE(payload_hash, 'legacy:' || id::text) WHERE payload_hash IS NULL",
+        "ALTER TABLE llm_evaluations ALTER COLUMN payload_hash SET NOT NULL",
+        "DELETE FROM llm_evaluations a USING llm_evaluations b WHERE a.signal_id IS NOT NULL AND a.signal_id=b.signal_id AND a.id < b.id",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_evaluations_signal_id ON llm_evaluations(signal_id)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_evaluations_lookup ON llm_evaluations(status, updated_at DESC, symbol)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_evaluations_symbol_time ON llm_evaluations(symbol, updated_at DESC)",
+    ]
+    for sql in migrations:
+        execute(sql)
 
 
 class LLMBackgroundEvaluator:

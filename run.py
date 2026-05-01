@@ -87,6 +87,9 @@ def subprocess_env() -> dict[str, str]:
     # Health-checks must work in archives/read-only checkouts too. Python bytecode
     # is not needed for diagnostics and can fail when __pycache__ is not writable.
     env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    # External pytest plugins from a global Python installation can slow down or
+    # change this project's tests. Keep launcher diagnostics reproducible.
+    env.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     return env
 
 
@@ -199,12 +202,19 @@ def parse_args() -> argparse.Namespace:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    server = subparsers.add_parser("server", help="Запустить FastAPI/Frontend сервер.")
-    server.add_argument("--host", help="Host. По умолчанию APP_HOST из .env или 127.0.0.1.")
-    server.add_argument("--port", type=int, help="Port. По умолчанию APP_PORT из .env или 8000.")
-    server.add_argument("--no-reload", dest="reload", action="store_false", help="Отключить auto-reload.")
-    server.add_argument("--no-venv", action="store_true", help="Использовать текущий Python вместо .venv.")
-    server.set_defaults(func=command_server, reload=True)
+    def add_server_parser(name: str, help_text: str) -> argparse.ArgumentParser:
+        parser_obj = subparsers.add_parser(name, help=help_text)
+        parser_obj.add_argument("--host", help="Host. По умолчанию APP_HOST из .env или 127.0.0.1.")
+        parser_obj.add_argument("--port", type=int, help="Port. По умолчанию APP_PORT из .env или 8000.")
+        parser_obj.add_argument("--no-reload", dest="reload", action="store_false", help="Отключить auto-reload.")
+        parser_obj.add_argument("--no-venv", action="store_true", help="Использовать текущий Python вместо .venv.")
+        parser_obj.set_defaults(func=command_server, reload=True)
+        return parser_obj
+
+    add_server_parser("server", "Запустить FastAPI/Frontend сервер.")
+    # Backward-compatible alias: README and early release docs used `python run.py app`.
+    # Keeping it prevents a confusing CLI failure after updating only the source archive.
+    add_server_parser("app", "Alias для server: запустить FastAPI/Frontend сервер.")
 
     init_db = subparsers.add_parser("init-db", help="Применить sql/schema.sql к PostgreSQL из .env.")
     init_db.add_argument("--no-venv", action="store_true", help="Использовать текущий Python вместо .venv.")

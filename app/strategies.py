@@ -48,6 +48,11 @@ def _finite_or(value: Any, default: float) -> float:
     return default if parsed is None else parsed
 
 
+def _finite_or_bound(value: Any, fallback: float) -> float:
+    parsed = _finite(value)
+    return fallback if parsed is None else parsed
+
+
 def _boolish(value: Any, default: bool | None = None) -> bool | None:
     if value is None:
         return default
@@ -200,11 +205,13 @@ def donchian_breakout(row: pd.Series) -> StrategySignal | None:
     micro = _finite_or(row.get("micro_sentiment_score"), 0.0)
     ema20 = _finite_or(row.get("ema_20"), 0.0)
     ema50 = _finite_or(row.get("ema_50"), 0.0)
-    if close > float(row.get("donchian_high", np.inf)) and ema20 > ema50:
+    donchian_high = _finite_or_bound(row.get("donchian_high"), np.inf)
+    donchian_low = _finite_or_bound(row.get("donchian_low"), -np.inf)
+    if close > donchian_high and ema20 > ema50:
         conf = min(0.95, 0.55 + max(vol_z, 0) * 0.05 + max(_finite_or(row.get("ema20_50_gap"), 0.0), 0) * 7 + max(micro, 0) * 0.05)
         sl, tp = _risk_levels("long", close, atr)
         return StrategySignal("donchian_atr_breakout", "long", conf, close, sl, tp, atr, {"reason": "price_breaks_20_bar_high_in_uptrend", "volume_z": vol_z, "micro_sentiment": micro, **quality})
-    if close < float(row.get("donchian_low", -np.inf)) and ema20 < ema50:
+    if close < donchian_low and ema20 < ema50:
         conf = min(0.95, 0.55 + max(vol_z, 0) * 0.05 + max(-(_finite_or(row.get("ema20_50_gap"), 0.0)), 0) * 7 + max(-micro, 0) * 0.05)
         sl, tp = _risk_levels("short", close, atr)
         return StrategySignal("donchian_atr_breakout", "short", conf, close, sl, tp, atr, {"reason": "price_breaks_20_bar_low_in_downtrend", "volume_z": vol_z, "micro_sentiment": micro, **quality})

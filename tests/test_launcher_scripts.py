@@ -121,3 +121,28 @@ def test_run_subprocess_env_disables_bytecode_cache(monkeypatch):
     env = run.subprocess_env()
 
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+
+
+def test_run_accepts_legacy_app_command_alias(monkeypatch):
+    import run
+
+    monkeypatch.setattr(run, "command_server", lambda args: 0)
+    monkeypatch.setattr(run.sys, "argv", ["run.py", "app", "--no-reload", "--host", "127.0.0.1"])
+
+    args = run.parse_args()
+
+    assert args.command == "app"
+    assert args.host == "127.0.0.1"
+    assert args.reload is False
+    assert args.func(args) == 0
+
+
+def test_run_subprocess_env_disables_external_pytest_plugins(monkeypatch):
+    import run
+
+    monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+    monkeypatch.setattr(run, "parse_env_file", lambda _path: {})
+
+    env = run.subprocess_env()
+
+    assert env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
