@@ -1512,26 +1512,32 @@ function renderTicket(s) {
   }
   const rr = riskReward(s);
   const llmVerdict = llmVerdictFor(s);
-  const directionClass = s.direction === 'long' ? 'long' : s.direction === 'short' ? 'short' : '';
-  $('ticketTitle').textContent = `${s.symbol} · ${s.interval || '—'} · ${String(s.direction || 'flat').toUpperCase()} · ${STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия'}`;
+  const contract = s.recommendation || s;
+  const tradeDirection = contract.trade_direction || s.trade_direction || s.direction || 'no_trade';
+  const displayDirection = contract.display_direction || String(tradeDirection || 'NO_TRADE').toUpperCase();
+  const directionClass = tradeDirection === 'long' ? 'long' : tradeDirection === 'short' ? 'short' : 'no-trade';
+  $('ticketTitle').textContent = `${s.symbol} · ${s.interval || '—'} · ${displayDirection} · ${STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия'}`;
   $('ticketBody').className = 'ticket-body';
   $('ticketBody').innerHTML = `
     <div class="ticket-main">
-      <div class="metric direction ${directionClass}"><span>Direction</span><strong>${escapeHtml(String(s.direction || 'flat').toUpperCase())}</strong></div>
+      <div class="metric direction ${directionClass}"><span>Trade direction</span><strong>${escapeHtml(displayDirection)}</strong></div>
+      <div class="metric"><span>Action</span><strong>${escapeHtml(contract.recommended_action || s.operator_label || 'WAIT')}</strong></div>
       <div class="metric"><span>Entry</span><strong>${priceFmt(s.entry)}</strong></div>
       <div class="metric"><span>Stop-loss</span><strong>${priceFmt(s.stop_loss)}</strong></div>
       <div class="metric"><span>Take-profit</span><strong>${priceFmt(s.take_profit)}</strong></div>
-      <div class="metric"><span>Risk до SL</span><strong>${rr ? pct(rr.riskPct, 2) : '—'}</strong></div>
-      <div class="metric"><span>Потенциал до TP</span><strong>${rr ? pct(rr.rewardPct, 2) : '—'}</strong></div>
-      <div class="metric"><span>R/R</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>
-      <div class="metric"><span>Confidence</span><strong>${pct(s.confidence, 0)}</strong></div>
-      <div class="metric"><span>Risk score</span><strong>${scoreFmt(s.operator_risk_score)}</strong></div>
+      <div class="metric"><span>Risk до SL</span><strong>${pct(contract.risk_pct ?? rr?.riskPct, 2)}</strong></div>
+      <div class="metric"><span>Потенциал до TP</span><strong>${pct(contract.expected_reward_pct ?? rr?.rewardPct, 2)}</strong></div>
+      <div class="metric"><span>R/R</span><strong>${fmt(contract.risk_reward ?? rr?.ratio, 2)}</strong></div>
+      <div class="metric"><span>Confidence</span><strong>${contract.confidence_score !== undefined ? `${contract.confidence_score}/100` : pct(s.confidence, 0)}</strong></div>
+      <div class="metric"><span>Expires</span><strong>${compactDateTime(contract.expires_at || s.expires_at)}</strong></div>
+      <div class="metric"><span>Price status</span><strong>${escapeHtml(contract.price_status || s.price_status || 'unknown')}</strong></div>
       <div class="metric"><span>Trust gate</span><strong>${escapeHtml(s.operator_trust_status || '—')}</strong></div>
       <div class="metric"><span>MTF</span><strong>${escapeHtml(mtfLabel(s))}</strong></div>
       <div class="metric"><span>LLM</span><strong>${escapeHtml(llmStateText(s).replace('LLM: ', ''))}</strong></div>
     </div>
-    <div class="execution-plan">
-      <b>Исполнение:</b> только ручная проверка. Entry/SL/TP не являются торговым приказом; красный пункт отменяет сетап.
+    <div class="execution-plan recommendation-contract">
+      <b>Исполнение:</b> ${escapeHtml(contract.recommendation_explanation || 'Только ручная проверка. Entry/SL/TP не являются торговым приказом; красный пункт отменяет сетап.')}
+      <small><b>Отмена:</b> ${escapeHtml(contract.invalidation_condition || 'Сетап отменяется при hard veto, устаревании данных или уходе цены от entry-зоны.')}</small>
     </div>
     <section class="llm-detail-card ${escapeHtml(cssToken(llmVerdict.tone, 'pending'))}">
       <header><span>LLM verdict · ${escapeHtml(llmVerdict.symbol)}</span><strong>${escapeHtml(llmVerdict.recommendation)} · ${escapeHtml(llmVerdict.confidenceText)}</strong></header>

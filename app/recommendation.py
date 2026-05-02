@@ -5,6 +5,7 @@ from typing import Any
 
 from .config import settings
 from .strategy_quality import APPROVED, REJECTED, RESEARCH, STALE, WATCHLIST, effective_strategy_quality
+from .trade_contract import enrich_recommendation_row
 
 
 def _finite(value: Any, default: float | None = None) -> float | None:
@@ -332,4 +333,15 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def annotate_recommendations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{**row, **classify_operator_action(row)} for row in rows]
+    """Adds the canonical operator decision and the frontend-ready trade ticket contract.
+
+    The legacy row remains intact for backward compatibility, but every returned
+    item now also has flat recommendation fields and a nested `recommendation`
+    object. This keeps `/api/signals/latest` stable while giving the UI and new
+    `/api/recommendations/*` endpoints one validated source of truth.
+    """
+    annotated: list[dict[str, Any]] = []
+    for row in rows:
+        with_decision = {**row, **classify_operator_action(row)}
+        annotated.append(enrich_recommendation_row(with_decision))
+    return annotated

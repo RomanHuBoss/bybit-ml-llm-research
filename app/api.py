@@ -66,6 +66,7 @@ from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .operator_queue import consolidate_operator_queue
 from .recommendation import annotate_recommendations
+from .recommendation_outcomes import evaluate_due_recommendation_outcomes
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
 from .signal_background import signal_refresher
@@ -242,6 +243,102 @@ def _empty_trading_desk_payload(error: str, intervals: list[str] | None = None) 
         "items": [],
     }
 
+
+
+
+def _symbol_csv(symbols: str | None) -> list[str]:
+    if not symbols:
+        return list(settings.default_symbols)
+    return normalize_symbols([part for part in str(symbols).split(",") if part.strip()])
+
+
+def _latest_quote_rows(category: str, interval: str, symbols: list[str]) -> list[dict[str, Any]]:
+    return fetch_all(
+        """
+        WITH latest AS (
+            SELECT DISTINCT ON (symbol)
+                   category, symbol, interval, start_time AS last_price_time, close AS last_price,
+                   open, high, low, close, volume, turnover,
+                   (start_time >= NOW() - (%s::text || ' hours')::interval) AS is_recent
+            FROM candles
+            WHERE category=%s AND interval=%s AND symbol = ANY(%s::text[])
+            ORDER BY symbol, start_time DESC
+        )
+        SELECT *, CASE WHEN is_recent THEN 'fresh' ELSE 'stale' END AS data_status
+        FROM latest
+        ORDER BY symbol
+        """,
+        (settings.max_signal_age_hours, category, interval, symbols),
+    )
+
+
+def _recommendation_base_sql(where_sql: str) -> str:
+    return f"""
+    WITH latest_backtests AS (
+        SELECT DISTINCT ON (symbol, interval, strategy)
+               symbol, interval, strategy, total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, created_at
+        FROM backtest_runs
+        WHERE category=%s
+        ORDER BY symbol, interval, strategy, created_at DESC
+    ), latest_quality AS (
+        SELECT category, symbol, interval, strategy, quality_status, quality_score, evidence_grade,
+               quality_reason, diagnostics AS quality_diagnostics, updated_at AS quality_updated_at,
+               backtest_run_id, last_backtest_at, expectancy, avg_trade_pnl, median_trade_pnl,
+               last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
+        FROM strategy_quality
+        WHERE category=%s
+    ), latest_price AS (
+        SELECT DISTINCT ON (category, symbol, interval)
+               category, symbol, interval, close AS last_price, start_time AS last_price_time
+        FROM candles
+        WHERE category=%s
+        ORDER BY category, symbol, interval, start_time DESC
+    ), latest_llm AS (
+        SELECT DISTINCT ON (signal_id)
+               signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
+               model AS llm_model, updated_at AS llm_updated_at, duration_ms AS llm_duration_ms,
+               payload_hash AS llm_payload_hash
+        FROM llm_evaluations
+        ORDER BY signal_id, updated_at DESC
+    ), latest_outcome AS (
+        SELECT DISTINCT ON (signal_id)
+               signal_id, evaluated_at AS outcome_evaluated_at, outcome_status, realized_r,
+               max_favorable_excursion_r, max_adverse_excursion_r, exit_price, exit_time, notes AS outcome_notes
+        FROM recommendation_outcomes
+        ORDER BY signal_id, evaluated_at DESC
+    )
+    SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
+           s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
+           b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
+           q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
+           q.expectancy, q.avg_trade_pnl, q.median_trade_pnl, q.last_30d_return, q.last_90d_return, q.walk_forward_pass_rate, q.walk_forward_windows, q.walk_forward_summary,
+           p.last_price, p.last_price_time,
+           e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
+           o.outcome_evaluated_at, o.outcome_status, o.realized_r, o.max_favorable_excursion_r, o.max_adverse_excursion_r, o.exit_price, o.exit_time, o.outcome_notes,
+           (
+               COALESCE(s.confidence::float, 0) * 0.35
+             + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.20
+             + CASE WHEN q.quality_status = 'APPROVED' THEN 0.10 WHEN q.quality_status = 'WATCHLIST' THEN 0.04 WHEN q.quality_status = 'REJECTED' THEN -0.20 ELSE -0.05 END
+             + LEAST(GREATEST(COALESCE(b.profit_factor::float, 1) / 2.0, 0), 1) * 0.10 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+             + LEAST(GREATEST(COALESCE(b.win_rate::float, 0), 0), 1) * 0.08 * LEAST(GREATEST(COALESCE(b.trades_count::float, 0) / 50.0, 0), 1)
+             - LEAST(GREATEST(COALESCE(b.max_drawdown::float, 0.2), 0), 1) * 0.12
+           ) AS research_score
+    FROM signals s
+    LEFT JOIN latest_backtests b ON b.symbol=s.symbol AND b.interval=s.interval AND b.strategy=s.strategy
+    LEFT JOIN latest_quality q ON q.symbol=s.symbol AND q.interval=s.interval AND q.strategy=s.strategy
+    LEFT JOIN latest_price p ON p.category=s.category AND p.symbol=s.symbol AND p.interval=s.interval
+    LEFT JOIN latest_llm e ON e.signal_id=s.id
+    LEFT JOIN latest_outcome o ON o.signal_id=s.id
+    WHERE {where_sql}
+    """
+
+
+def _fetch_recommendation_row(signal_id: int, category: str | None = None) -> dict[str, Any] | None:
+    where = "s.id=%s" + (" AND s.category=%s" if category else "")
+    params: list[Any] = [category or settings.default_category, category or settings.default_category, category or settings.default_category, signal_id]
+    if category:
+        params.append(category)
+    return fetch_one(_recommendation_base_sql(where) + "\nLIMIT 1", tuple(params))
 
 def _sync_market_interval(category: str, symbol: str, interval: str, days: int, funding_rows: int) -> tuple[str, dict[str, int]]:
     # Funding не зависит от таймфрейма и уже синхронизирован один раз на symbol.
@@ -887,6 +984,190 @@ def api_strategy_quality_refresh(limit: int = settings.strategy_quality_refresh_
         raise _bad_request(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+
+
+@router.get("/instruments")
+def api_instruments(category: str = settings.default_category, mode: str | None = None, limit: int = settings.universe_limit) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        bounded_limit = bounded_int(limit, "limit", 1, 200)
+        items = latest_universe(category, mode or settings.symbol_mode, bounded_limit)
+        if not items:
+            items = [
+                {"category": category, "mode": "configured", "symbol": symbol, "rank_no": idx, "liquidity_score": None, "reason": "default_symbols"}
+                for idx, symbol in enumerate(settings.default_symbols[:bounded_limit], start=1)
+            ]
+        return {"ok": True, "category": category, "mode": mode or settings.symbol_mode, "items": items}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "category": category, "items": [], "error": _read_error(exc)}
+
+
+@router.get("/quotes/latest")
+def api_latest_quotes(symbols: str | None = None, category: str = settings.default_category, interval: str = settings.default_interval) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        interval = normalize_interval(interval)
+        symbol_list = _symbol_csv(symbols)
+        return {"ok": True, "category": category, "interval": interval, "quotes": _latest_quote_rows(category, interval, symbol_list)}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "category": category, "interval": interval, "quotes": [], "error": _read_error(exc)}
+
+
+@router.get("/recommendations/active")
+def api_active_recommendations(limit: int = 50, category: str = settings.default_category, entry_only: bool = True) -> dict[str, Any]:
+    try:
+        payload = latest_signals(limit=bounded_int(limit, "limit", 1, 500), entry_only=entry_only, category=category)
+        return {
+            "ok": bool(payload.get("ok")),
+            "category": payload.get("category", category),
+            "entry_interval": payload.get("entry_interval", settings.mtf_entry_interval),
+            "recommendations": payload.get("signals", []),
+            "error": payload.get("error"),
+        }
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "category": category, "recommendations": [], "error": _read_error(exc)}
+
+
+@router.get("/recommendations/history")
+def api_recommendation_history(symbol: str | None = None, category: str = settings.default_category, limit: int = 100) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        bounded_limit = bounded_int(limit, "limit", 1, 500)
+        where = "s.category=%s"
+        params: list[Any] = [category, category, category, category]
+        if symbol:
+            where += " AND s.symbol=%s"
+            params.append(normalize_symbol(symbol))
+        sql = _recommendation_base_sql(where) + "\nORDER BY s.created_at DESC\nLIMIT %s"
+        params.append(bounded_limit)
+        rows = fetch_all(sql, tuple(params))
+        return {"ok": True, "category": category, "recommendations": annotate_recommendations(rows)}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "category": category, "recommendations": [], "error": _read_error(exc)}
+
+
+@router.post("/recommendations/evaluate-outcomes")
+def api_evaluate_recommendation_outcomes(category: str = settings.default_category, limit: int = 250) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        bounded_limit = bounded_int(limit, "limit", 1, 5000)
+        return {"ok": True, "category": category, "result": evaluate_due_recommendation_outcomes(category, bounded_limit)}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "category": category, "result": {"evaluated": 0, "upserted": 0}, "error": _read_error(exc)}
+
+
+@router.get("/recommendations/quality")
+def api_recommendation_quality(category: str = settings.default_category, interval: str | None = None) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        interval_value = normalize_interval(interval) if interval else None
+        interval_filter = "AND s.interval=%s" if interval_value else ""
+        params: list[Any] = [category]
+        if interval_value:
+            params.append(interval_value)
+        outcome = fetch_one(
+            f"""
+            SELECT COUNT(*)::int AS evaluated,
+                   AVG(realized_r)::float AS average_r,
+                   SUM(CASE WHEN realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
+                   SUM(GREATEST(realized_r,0))::float / NULLIF(ABS(SUM(LEAST(realized_r,0)))::float,0) AS profit_factor,
+                   AVG(max_favorable_excursion_r)::float AS avg_mfe_r,
+                   AVG(max_adverse_excursion_r)::float AS avg_mae_r
+            FROM recommendation_outcomes o
+            JOIN signals s ON s.id=o.signal_id
+            WHERE s.category=%s {interval_filter}
+            """,
+            tuple(params),
+        ) or {}
+        return {
+            "ok": True,
+            "category": category,
+            "interval": interval_value,
+            "strategy_quality": quality_summary(category),
+            "recommendation_outcomes": outcome,
+        }
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "category": category, "strategy_quality": _empty_quality_summary(), "recommendation_outcomes": {}, "error": _read_error(exc)}
+
+
+@router.post("/recommendations/recalculate")
+def api_recalculate_recommendations(req: SignalBuildRequest) -> dict[str, Any]:
+    # Public trading contract alias for the existing signal builder. It preserves
+    # `/api/signals/build` but gives the UI a recommendation-oriented command name.
+    return build_signals(req)
+
+
+@router.get("/recommendations/{signal_id}")
+def api_recommendation_detail(signal_id: int, category: str = settings.default_category) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        row = _fetch_recommendation_row(int(signal_id), category)
+        if not row:
+            return {"ok": False, "recommendation": None, "error": "Recommendation not found"}
+        return {"ok": True, "recommendation": annotate_recommendations([row])[0]}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "recommendation": None, "error": _read_error(exc)}
+
+
+@router.get("/recommendations/{signal_id}/explanation")
+def api_recommendation_explanation(signal_id: int, category: str = settings.default_category) -> dict[str, Any]:
+    detail = api_recommendation_detail(signal_id, category)
+    item = detail.get("recommendation") or {}
+    return {
+        "ok": bool(detail.get("ok")),
+        "recommendation_id": signal_id,
+        "explanation": item.get("recommendation_explanation"),
+        "factors_for": item.get("factors_for", []),
+        "factors_against": item.get("factors_against", []),
+        "signal_breakdown": item.get("signal_breakdown", {}),
+        "error": detail.get("error"),
+    }
+
+
+@router.get("/system/status")
+def api_system_status() -> dict[str, Any]:
+    payload = status()
+    try:
+        latest_candle = fetch_one("SELECT MAX(start_time) AS latest_candle_at FROM candles")
+        latest_signal = fetch_one("SELECT MAX(created_at) AS latest_signal_at FROM signals")
+        payload["data_freshness"] = {"latest_candle_at": str(latest_candle["latest_candle_at"]) if latest_candle else None, "latest_signal_at": str(latest_signal["latest_signal_at"]) if latest_signal else None}
+    except Exception as exc:
+        payload["data_freshness"] = {"error": _read_error(exc)}
+    return payload
+
+
+@router.get("/system/warnings")
+def api_system_warnings(category: str = settings.default_category) -> dict[str, Any]:
+    warnings: list[dict[str, str]] = []
+    try:
+        category = normalize_category(category)
+        counts = fetch_one("SELECT COUNT(*) AS signals FROM signals WHERE category=%s", (category,)) or {"signals": 0}
+        candles = fetch_one("SELECT MAX(start_time) AS latest_candle_at FROM candles WHERE category=%s", (category,)) or {}
+        if int(counts.get("signals") or 0) == 0:
+            warnings.append({"code": "no_signals", "level": "warn", "message": "Нет рассчитанных сигналов; запустите синхронизацию рынка и пересчёт рекомендаций."})
+        if not candles.get("latest_candle_at"):
+            warnings.append({"code": "no_market_data", "level": "fail", "message": "Нет исторических свечей; рекомендации должны оставаться NO_TRADE."})
+        return {"ok": True, "category": category, "warnings": warnings}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "category": category, "warnings": warnings, "error": _read_error(exc)}
 
 
 @router.post("/backtest/run")

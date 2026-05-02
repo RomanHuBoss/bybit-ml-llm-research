@@ -1478,3 +1478,8 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
   color: var(--red);
   border-color: rgba(255, 77, 109, 0.42);
 }
+
+/* V28 canonical recommendation contract */
+.metric.direction.no-trade strong { color: var(--muted); }
+.recommendation-contract { display: grid; gap: 6px; }
+.recommendation-contract small { display: block; color: var(--muted); line-height: 1.45; }

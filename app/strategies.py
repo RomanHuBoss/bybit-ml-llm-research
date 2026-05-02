@@ -475,6 +475,43 @@ def validate_signal(sig: StrategySignal) -> tuple[bool, str | None]:
     return True, None
 
 
+
+
+
+def _signal_risk_payload(sig: StrategySignal, interval: str | None = None) -> dict[str, Any]:
+    entry = _finite(sig.entry)
+    stop = _finite(sig.stop_loss)
+    target = _finite(sig.take_profit)
+    atr = _finite(sig.atr)
+    if entry is None or stop is None or target is None or entry <= 0:
+        return {"level_status": "invalid"}
+    risk = abs(entry - stop)
+    reward = abs(target - entry)
+    rr = reward / risk if risk > 0 else None
+    direction_label = "LONG" if sig.direction == "long" else "SHORT" if sig.direction == "short" else "NO_TRADE"
+    ttl_bars = 1 if str(interval or "").strip().upper() in {"1", "3", "5", "15", "30"} else 2
+    return {
+        "level_status": "valid" if rr and rr > 0 else "invalid",
+        "risk_pct": risk / entry if risk > 0 else None,
+        "expected_reward_pct": reward / entry if reward > 0 else None,
+        "risk_reward": rr,
+        "invalidation_condition": (
+            f"{direction_label} invalidated if price reaches stop_loss={stop:.8g}, "
+            "if the market moves outside the entry zone before manual review, or if the signal expires."
+        ),
+        "ttl_bars": ttl_bars,
+        "signal_breakdown": {
+            "strategy": sig.strategy,
+            "direction": sig.direction,
+            "confidence": sig.confidence,
+            "entry": entry,
+            "stop_loss": stop,
+            "take_profit": target,
+            "atr": atr,
+            "timeframe": interval,
+        },
+    }
+
 def build_latest_signals(category: str, symbol: str, interval: str, limit: int = 2000) -> list[StrategySignal]:
     df = load_market_frame(category, symbol, interval, limit=limit)
     if df.empty or len(df) < 250:
@@ -509,6 +546,7 @@ def build_latest_signals(category: str, symbol: str, interval: str, limit: int =
             # рекомендацию с невозможным стопом, тейком или невалидным confidence.
             candidate.rationale = {**candidate.rationale, "rejected_reason": reason}
             continue
+        candidate.rationale = {**candidate.rationale, **_signal_risk_payload(candidate, interval)}
         candidate.bar_time = bar_time
         result.append(candidate)
     return result
@@ -528,6 +566,7 @@ def persist_signals(category: str, symbol: str, interval: str, signals: list[Str
             ml_probability, ml_meta = ml_cache.get(cache_key, (None, {"ml_status": "unavailable"}))
             sig.ml_probability = ml_probability
             sig.rationale = {**sig.rationale, **ml_meta}
+        sig.rationale = {**sig.rationale, **_signal_risk_payload(sig, interval)}
         rows.append(
             (
                 category,
