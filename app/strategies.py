@@ -478,6 +478,13 @@ def validate_signal(sig: StrategySignal) -> tuple[bool, str | None]:
 
 
 
+def _signal_expires_at(sig: StrategySignal, interval: str | None = None) -> datetime | None:
+    bar_time = _parse_bar_time(sig.bar_time)
+    if bar_time is None:
+        return None
+    return bar_time + _interval_to_timedelta(str(interval or "")) + timedelta(hours=max(1, int(settings.max_signal_age_hours)))
+
+
 def _signal_risk_payload(sig: StrategySignal, interval: str | None = None) -> dict[str, Any]:
     entry = _finite(sig.entry)
     stop = _finite(sig.stop_loss)
@@ -566,7 +573,9 @@ def persist_signals(category: str, symbol: str, interval: str, signals: list[Str
             ml_probability, ml_meta = ml_cache.get(cache_key, (None, {"ml_status": "unavailable"}))
             sig.ml_probability = ml_probability
             sig.rationale = {**sig.rationale, **ml_meta}
-        sig.rationale = {**sig.rationale, **_signal_risk_payload(sig, interval)}
+        expires_at = _signal_expires_at(sig, interval)
+        risk_payload = _signal_risk_payload(sig, interval)
+        sig.rationale = {**sig.rationale, **risk_payload, "expires_at": expires_at.isoformat() if expires_at else None}
         rows.append(
             (
                 category,
@@ -583,18 +592,19 @@ def persist_signals(category: str, symbol: str, interval: str, signals: list[Str
                 sig.rationale.get("sentiment") or sig.rationale.get("micro_sentiment"),
                 sig.rationale,
                 sig.bar_time,
+                expires_at,
             )
         )
     return execute_many_values(
         """
         INSERT INTO signals(category, symbol, interval, strategy, direction, confidence, entry, stop_loss, take_profit, atr,
-                            ml_probability, sentiment_score, rationale, bar_time)
+                            ml_probability, sentiment_score, rationale, bar_time, expires_at)
         VALUES %s
         ON CONFLICT (category, symbol, interval, strategy, direction, bar_time) WHERE bar_time IS NOT NULL
         DO UPDATE SET created_at=NOW(), confidence=EXCLUDED.confidence, entry=EXCLUDED.entry,
                       stop_loss=EXCLUDED.stop_loss, take_profit=EXCLUDED.take_profit, atr=EXCLUDED.atr,
                       ml_probability=EXCLUDED.ml_probability, sentiment_score=EXCLUDED.sentiment_score,
-                      rationale=EXCLUDED.rationale
+                      rationale=EXCLUDED.rationale, expires_at=EXCLUDED.expires_at
         """,
         rows,
     )

@@ -1483,3 +1483,20 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .metric.direction.no-trade strong { color: var(--muted); }
 .recommendation-contract { display: grid; gap: 6px; }
 .recommendation-contract small { display: block; color: var(--muted); line-height: 1.45; }
+
+/* v29: recommendation card contract fields */
+.candidate-metrics {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.candidate.reject .candidate-metrics { color: rgba(255, 180, 194, 0.78); }
+.candidate.review .candidate-metrics { color: rgba(169, 255, 219, 0.82); }
+@media (max-width: 680px) {
+  .candidate-metrics { white-space: normal; line-height: 1.28; }
+}

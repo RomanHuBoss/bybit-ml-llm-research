@@ -98,7 +98,7 @@ def evaluate_signal_outcome(signal: dict[str, Any], candles: list[dict[str, Any]
 def _due_signals(category: str, limit: int) -> list[dict[str, Any]]:
     return fetch_all(
         """
-        SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy,
+        SELECT s.id, s.created_at, s.bar_time, s.expires_at, s.category, s.symbol, s.interval, s.strategy,
                s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit, s.atr, s.rationale
         FROM signals s
         LEFT JOIN recommendation_outcomes o ON o.signal_id=s.id

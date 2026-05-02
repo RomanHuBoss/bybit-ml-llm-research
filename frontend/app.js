@@ -1200,9 +1200,33 @@ function algorithmDecisionFor(s) {
     return { level: 'reject', label: 'НЕТ ВХОДА', score: 0, title: 'Нет выбранного сетапа', subtitle: noSignalExplanation() };
   }
 
-  // Серверная классификация является канонической: она одинаково используется
-  // в API, таблице и главной карточке. Frontend fallback ниже нужен только для
-  // старых backend-сборок или аварийной деградации API-контракта.
+  // Серверный recommendation contract является каноническим: frontend не
+  // пересчитывает торговое решение, а только отображает уже проверенные поля.
+  const contract = s.recommendation || s;
+  const contractStatus = String(contract.recommendation_status || '').toLowerCase();
+  if (contractStatus) {
+    const statusMap = {
+      review_entry: { level: 'review', label: 'РУЧНАЯ ПРОВЕРКА ВХОДА' },
+      research_candidate: { level: 'research', label: 'ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ' },
+      wait: { level: 'watch', label: 'НАБЛЮДАТЬ' },
+      blocked: { level: 'reject', label: 'НЕТ ВХОДА' },
+      expired: { level: 'reject', label: 'ПРОСРОЧЕНО' },
+      invalid: { level: 'reject', label: 'НЕВАЛИДНО' },
+      missed_entry: { level: 'reject', label: 'NO_TRADE · ENTRY УШЁЛ' },
+    };
+    const mapped = statusMap[contractStatus] || { level: 'watch', label: contract.display_direction || 'WAIT' };
+    const score = Math.round(num(s.operator_score, contract.confidence_score ?? 0) || 0);
+    const explanation = contract.recommendation_explanation || s.operator_explanation || 'Сервер вернул контракт рекомендации без расширенного объяснения.';
+    return {
+      level: mapped.level,
+      label: contractStatus === 'review_entry' ? (s.operator_label || mapped.label) : mapped.label,
+      score,
+      title: `${s.symbol}: ${contract.recommended_action || mapped.label}`,
+      subtitle: explanation,
+    };
+  }
+
+  // Fallback ниже нужен только для старых backend-сборок или аварийной деградации API-контракта.
   if (s.operator_action) {
     const fallbackLevel = s.operator_action === 'REVIEW_ENTRY' ? 'review' : s.operator_action === 'RESEARCH_CANDIDATE' ? 'research' : s.operator_action === 'WAIT' ? 'watch' : 'reject';
     const level = cssToken(s.operator_level, fallbackLevel);
@@ -1637,12 +1661,17 @@ function renderQueue() {
     const stabilityText = bool(s.direction_conflict) ? ' · конфликт LONG/SHORT' : hasNumber(s.operator_stability_score) ? ` · stable ${pct(s.operator_stability_score, 0)}` : '';
     const riskText = hasNumber(s.operator_risk_score) ? ` · risk ${Math.round(num(s.operator_risk_score, 0))}` : '';
     const variants = variantsCount > 1 ? ` · ${variantsCount} вариантов${stabilityText}${riskText}` : `${stabilityText}${riskText}`;
+    const contract = s.recommendation || s;
+    const rr = contract.risk_reward ?? riskReward(s)?.ratio;
+    const expires = compactDateTime(contract.expires_at || s.expires_at);
+    const conf = contract.confidence_score !== undefined ? `${contract.confidence_score}%` : pct(s.confidence, 0);
     return `
       <article class="candidate ${decisionLevel} ${isSelected ? 'selected' : ''}" data-id="${escapeHtml(s.id ?? '')}" data-key="${escapeHtml(cardKey)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
         <span class="candidate-star" aria-hidden="true">☆</span>
         <div class="candidate-copy">
           <span class="symbol">${escapeHtml(s.symbol)}</span>
-          <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)} · ${escapeHtml(s.data_status || 'fresh')}</span>
+          <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)} · ${escapeHtml(contract.price_status || s.data_status || 'fresh')}</span>
+          <span class="candidate-metrics">E ${priceFmt(s.entry)} · SL ${priceFmt(s.stop_loss)} · TP ${priceFmt(s.take_profit)} · R/R ${fmt(rr, 2)} · Conf ${escapeHtml(conf)} · TTL ${escapeHtml(expires)}</span>
         </div>
         <span class="badge ${decisionLevel}" title="${label}" aria-label="${label}">${compactLabel}</span>
         <span class="candidate-score">${s.decision.score}</span>
@@ -1684,8 +1713,9 @@ function renderRawTable(list = candidates()) {
   const rows = sortedRawRows(list);
   updateRawTableSortHeaders();
   body.innerHTML = rows.map((s) => {
-    const rr = riskReward(s);
-    return `<tr class="dir-${cssToken(s.direction, 'flat')} ${bool(s.direction_conflict) ? 'conflict-row' : ''}">
+    const contract = s.recommendation || s;
+    const rr = contract.risk_reward !== undefined && contract.risk_reward !== null ? { ratio: num(contract.risk_reward, null) } : riskReward(s);
+    return `<tr class="dir-${cssToken(contract.trade_direction || s.direction, 'flat')} ${bool(s.direction_conflict) ? 'conflict-row' : ''}">
       <td>${escapeHtml(s.decision.label)}</td>
       <td>${escapeHtml(s.decision.score)}</td>
       <td>${escapeHtml(mtfLabel(s))}</td>

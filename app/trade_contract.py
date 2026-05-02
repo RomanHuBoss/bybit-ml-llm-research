@@ -69,6 +69,12 @@ def interval_to_timedelta(interval: str | None) -> timedelta:
 
 
 def recommendation_expires_at(row: dict[str, Any], *, now: datetime | None = None) -> datetime | None:
+    # Приоритет: сохраненный contract TTL в БД, затем rationale, затем расчет от bar_time.
+    # Это позволяет API, outcome evaluator и UI видеть один и тот же срок жизни
+    # рекомендации без повторной бизнес-логики на клиенте.
+    stored = parse_datetime(row.get("expires_at") or row.get("valid_until"))
+    if stored is not None:
+        return stored
     explicit = parse_datetime((row.get("rationale") or {}).get("expires_at") if isinstance(row.get("rationale"), dict) else None)
     if explicit is not None:
         return explicit
@@ -184,6 +190,10 @@ def recommendation_status(row: dict[str, Any], levels: dict[str, Any], price: di
         return "invalid"
     if price.get("is_stale"):
         return "expired"
+    if price.get("price_status") == "moved_away" and action in {"REVIEW_ENTRY", "RESEARCH_CANDIDATE"}:
+        # Цена уже ушла из зоны ручного входа. Уровни оставляем для аудита,
+        # но торговое направление для пользователя переводим в NO_TRADE.
+        return "missed_entry"
     if action == "NO_TRADE":
         return "blocked"
     if action == "REVIEW_ENTRY":
@@ -218,6 +228,8 @@ def explanation(row: dict[str, Any], status: str, trade_direction: str, levels: 
         return f"{symbol}: сетап просрочен или построен на устаревшей свече. Перед любым решением нужно пересчитать рынок и получить свежий сигнал."
     if status == "blocked":
         return f"{symbol}: NO_TRADE. Главная причина: {_reason_text(hard, 'есть hard veto')}. Entry/SL/TP оставлены только для аудита расчёта, открывать сделку нельзя."
+    if status == "missed_entry":
+        return f"{symbol}: NO_TRADE. Цена ушла от зоны entry сильнее допустимого дрейфа ({price.get('price_drift_pct'):.2%} при лимите {price.get('entry_zone_pct'):.2%}). Не догонять рынок: ждать ретеста или пересчитать рекомендацию."
     if trade_direction in {DIRECTION_LONG, DIRECTION_SHORT}:
         side = "LONG" if trade_direction == DIRECTION_LONG else "SHORT"
         base = f"{symbol} {interval}: {side}-сценарий по {strategy}. Entry {levels['entry']:.8g}, SL {levels['stop_loss']:.8g}, TP {levels['take_profit']:.8g}, R/R {rr:.2f}."
@@ -298,6 +310,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "blocked": "Пропустить",
         "expired": "Пересчитать рекомендацию",
         "invalid": "Исправить данные/уровни",
+        "missed_entry": "Не догонять цену; ждать ретест",
     }
     factors_for = _factor_items(row, "operator_evidence_notes")
     factors_against = _factor_items(row, "operator_hard_reasons") + _factor_items(row, "operator_warnings")
@@ -327,5 +340,6 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "factors_against": factors_against,
         "signal_breakdown": signal_breakdown(row, levels, price),
         "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price.get("price_status") in {"entry_zone", "extended", "unknown"},
+        "no_trade_reason": ("price_moved_away" if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
     }
     return {**row, **contract, "recommendation": contract}

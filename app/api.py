@@ -272,6 +272,28 @@ def _latest_quote_rows(category: str, interval: str, symbols: list[str]) -> list
     )
 
 
+def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {"review_entry": 0, "research_candidate": 0, "wait": 0, "blocked": 0, "expired": 0, "invalid": 0, "missed_entry": 0}
+    actionable = 0
+    stale = 0
+    moved_away = 0
+    for item in items:
+        status = str(item.get("recommendation_status") or (item.get("recommendation") or {}).get("recommendation_status") or "wait")
+        counts[status] = counts.get(status, 0) + 1
+        actionable += 1 if item.get("is_actionable") or (item.get("recommendation") or {}).get("is_actionable") else 0
+        price_status = str(item.get("price_status") or (item.get("recommendation") or {}).get("price_status") or "")
+        stale += 1 if price_status == "stale" else 0
+        moved_away += 1 if price_status == "moved_away" else 0
+    return {
+        "total": len(items),
+        "actionable": actionable,
+        "by_status": counts,
+        "stale": stale,
+        "moved_away": moved_away,
+        "contract": "recommendation_v29",
+    }
+
+
 def _recommendation_base_sql(where_sql: str) -> str:
     return f"""
     WITH latest_backtests AS (
@@ -307,7 +329,7 @@ def _recommendation_base_sql(where_sql: str) -> str:
         FROM recommendation_outcomes
         ORDER BY signal_id, evaluated_at DESC
     )
-    SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
+    SELECT s.id, s.created_at, s.bar_time, s.expires_at, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
            s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
            b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
            q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
@@ -652,7 +674,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 """
                 WITH latest_signals AS (
                     SELECT DISTINCT ON (category, symbol, interval, strategy, direction)
-                           id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
+                           id, created_at, bar_time, expires_at, category, symbol, interval, strategy, direction, confidence,
                            entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
                     FROM signals
                     WHERE category=%s AND interval = ANY(%s::text[]) AND created_at >= NOW() - (%s::text || ' hours')::interval
@@ -696,6 +718,12 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                            last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
                     FROM strategy_quality
                     WHERE category=%s AND interval = ANY(%s::text[])
+                ), latest_price AS (
+                    SELECT DISTINCT ON (category, symbol, interval)
+                           category, symbol, interval, close AS last_price, start_time AS last_price_time
+                    FROM candles
+                    WHERE category=%s AND interval = ANY(%s::text[])
+                    ORDER BY category, symbol, interval, start_time DESC
                 ), latest_llm AS (
                     SELECT DISTINCT ON (signal_id)
                            signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
@@ -704,7 +732,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                     FROM llm_evaluations
                     ORDER BY signal_id, updated_at DESC
                 )
-                SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
+                SELECT s.id, s.created_at, s.bar_time, s.expires_at, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
                        s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
                        b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
                        q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
@@ -712,6 +740,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                        m.roc_auc, m.precision_score, m.recall_score,
                        l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
                        l.liquidity_captured_at, l.liquidity_status,
+                       p.last_price, p.last_price_time,
                        e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
                        (
                            COALESCE(s.confidence::float, 0) * 0.30
@@ -732,6 +761,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 LEFT JOIN latest_quality q ON q.symbol=s.symbol AND q.interval=s.interval AND q.strategy=s.strategy
                 LEFT JOIN latest_models m ON m.symbol=s.symbol AND m.interval=s.interval
                 LEFT JOIN latest_liq l ON l.symbol=s.symbol
+                LEFT JOIN latest_price p ON p.category=s.category AND p.symbol=s.symbol AND p.interval=s.interval
                 LEFT JOIN latest_llm e ON e.signal_id=s.id
                 ORDER BY research_score DESC NULLS LAST, s.created_at DESC
                 LIMIT %s
@@ -741,6 +771,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                     category, context_intervals,
                     category, context_intervals, settings.ml_auto_train_ttl_hours,
                     settings.liquidity_snapshot_max_age_minutes, category,
+                    category, context_intervals,
                     category, context_intervals,
                     settings.max_spread_pct, query_limit,
                 ),
@@ -765,7 +796,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
             """
             WITH latest_signals AS (
                 SELECT DISTINCT ON (category, symbol, interval, strategy, direction)
-                       id, created_at, bar_time, category, symbol, interval, strategy, direction, confidence,
+                       id, created_at, bar_time, expires_at, category, symbol, interval, strategy, direction, confidence,
                        entry, stop_loss, take_profit, atr, ml_probability, sentiment_score, rationale
                 FROM signals
                 WHERE category=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
@@ -809,6 +840,12 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                        last_30d_return, last_90d_return, walk_forward_pass_rate, walk_forward_windows, walk_forward_summary
                 FROM strategy_quality
                 WHERE category=%s
+            ), latest_price AS (
+                SELECT DISTINCT ON (category, symbol, interval)
+                       category, symbol, interval, close AS last_price, start_time AS last_price_time
+                FROM candles
+                WHERE category=%s
+                ORDER BY category, symbol, interval, start_time DESC
             ), latest_llm AS (
                 SELECT DISTINCT ON (signal_id)
                        signal_id, status AS llm_status, brief AS llm_brief, error AS llm_error,
@@ -817,7 +854,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 FROM llm_evaluations
                 ORDER BY signal_id, updated_at DESC
             )
-            SELECT s.id, s.created_at, s.bar_time, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit,
+            SELECT s.id, s.created_at, s.bar_time, s.expires_at, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit,
                    s.atr, s.ml_probability, s.sentiment_score, s.rationale,
                    b.total_return, b.max_drawdown, b.sharpe, b.win_rate, b.profit_factor, b.trades_count,
                    q.quality_status, q.quality_score, q.evidence_grade, q.quality_reason, q.quality_diagnostics, q.quality_updated_at, q.backtest_run_id, q.last_backtest_at,
@@ -825,6 +862,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                    m.roc_auc, m.precision_score, m.recall_score,
                    l.liquidity_score, l.spread_pct, l.turnover_24h, l.open_interest_value, l.is_eligible,
                    l.liquidity_captured_at, l.liquidity_status,
+                   p.last_price, p.last_price_time,
                    e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
                    (
                        COALESCE(s.confidence::float, 0) * 0.30
@@ -845,6 +883,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
             LEFT JOIN latest_quality q ON q.symbol=s.symbol AND q.interval=s.interval AND q.strategy=s.strategy
             LEFT JOIN latest_models m ON m.symbol=s.symbol AND m.interval=s.interval
             LEFT JOIN latest_liq l ON l.symbol=s.symbol
+            LEFT JOIN latest_price p ON p.category=s.category AND p.symbol=s.symbol AND p.interval=s.interval
             LEFT JOIN latest_llm e ON e.signal_id=s.id
             ORDER BY research_score DESC NULLS LAST, s.created_at DESC
             LIMIT %s
@@ -854,6 +893,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 category,
                 category, settings.ml_auto_train_ttl_hours,
                 settings.liquidity_snapshot_max_age_minutes, category,
+                category,
                 category,
                 settings.max_spread_pct, limit,
             ),
@@ -1023,11 +1063,14 @@ def api_latest_quotes(symbols: str | None = None, category: str = settings.defau
 def api_active_recommendations(limit: int = 50, category: str = settings.default_category, entry_only: bool = True) -> dict[str, Any]:
     try:
         payload = latest_signals(limit=bounded_int(limit, "limit", 1, 500), entry_only=entry_only, category=category)
+        recommendations = payload.get("signals", [])
         return {
             "ok": bool(payload.get("ok")),
             "category": payload.get("category", category),
             "entry_interval": payload.get("entry_interval", settings.mtf_entry_interval),
-            "recommendations": payload.get("signals", []),
+            "recommendations": recommendations,
+            "summary": _recommendation_summary(recommendations),
+            "empty_state": None if recommendations else "Нет активных свежих рекомендаций. Это штатное состояние NO_TRADE/WAIT: синхронизируйте рынок или дождитесь нового сетапа.",
             "error": payload.get("error"),
         }
     except ValueError as exc:
