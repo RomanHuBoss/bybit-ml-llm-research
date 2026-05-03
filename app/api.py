@@ -67,6 +67,7 @@ from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .operator_queue import consolidate_operator_queue
 from .recommendation import annotate_recommendations
+from .trade_contract import RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
 from .recommendation_outcomes import evaluate_due_recommendation_outcomes
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
@@ -311,8 +312,8 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "by_status": counts,
         "stale": stale,
         "moved_away": moved_away,
-        "contract": "recommendation_v31",
-        "previous_contract": "recommendation_v29",
+        "contract": RECOMMENDATION_CONTRACT_VERSION,
+        "previous_contract": "recommendation_v31",
     }
 
 
@@ -342,11 +343,78 @@ def _market_state_for_recommendations(*, payload_ok: bool, recommendations: list
         explanation = "Есть рекомендации, прошедшие серверный advisory contract. Это не приказ на сделку: требуется ручная проверка цены, стакана, риска и условий отмены."
     return {
         "status": status,
-        "contract": "recommendation_v31",
+        "contract": RECOMMENDATION_CONTRACT_VERSION,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "summary": summary,
         "explanation": explanation,
     }
+
+
+def _quality_drawdown_payload(category: str, interval_filter: str | None = None) -> dict[str, Any]:
+    """Compute recommendation-level drawdown from realized R sequence.
+
+    This is intentionally based on completed recommendation outcomes rather than
+    strategy backtest rows so the UI can separate live/paper recommendation
+    quality from historical strategy evidence.
+    """
+    params: list[Any] = [category]
+    interval_sql = ""
+    if interval_filter:
+        interval_sql = " AND s.interval=%s"
+        params.append(interval_filter)
+    row = fetch_one(
+        f"""
+        WITH ordered AS (
+            SELECT o.evaluated_at, COALESCE(o.realized_r, 0)::float AS realized_r,
+                   SUM(COALESCE(o.realized_r, 0)::float) OVER (ORDER BY o.evaluated_at, o.signal_id) AS equity_r
+            FROM recommendation_outcomes o
+            JOIN signals s ON s.id=o.signal_id
+            WHERE s.category=%s {interval_sql}
+              AND o.outcome_status <> 'open'
+        ), curve AS (
+            SELECT evaluated_at, realized_r, equity_r,
+                   MAX(equity_r) OVER (ORDER BY evaluated_at) AS peak_r
+            FROM ordered
+        )
+        SELECT COUNT(*)::int AS evaluated,
+               COALESCE(MIN(equity_r - peak_r), 0)::float AS max_drawdown_r,
+               COALESCE(SUM(realized_r), 0)::float AS cumulative_r,
+               AVG(realized_r)::float AS expectancy_r
+        FROM curve
+        """,
+        tuple(params),
+    ) or {}
+    evaluated = int(row.get("evaluated") or 0)
+    return {
+        "evaluated": evaluated,
+        "max_drawdown_r": float(row.get("max_drawdown_r") or 0.0),
+        "cumulative_r": float(row.get("cumulative_r") or 0.0),
+        "expectancy_r": row.get("expectancy_r"),
+        "explanation": (
+            "Недостаточно завершённых рекомендаций для устойчивой оценки drawdown."
+            if evaluated < 30 else
+            "Drawdown рассчитан по последовательности завершённых рекомендаций в единицах R."
+        ),
+    }
+
+
+def _quality_outcome_status_counts(category: str, interval_filter: str | None = None) -> list[dict[str, Any]]:
+    params: list[Any] = [category]
+    interval_sql = ""
+    if interval_filter:
+        interval_sql = " AND s.interval=%s"
+        params.append(interval_filter)
+    return fetch_all(
+        f"""
+        SELECT o.outcome_status, COUNT(*)::int AS count
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s {interval_sql}
+        GROUP BY o.outcome_status
+        ORDER BY count DESC, o.outcome_status
+        """,
+        tuple(params),
+    )
 
 
 def _quality_segment_rows(category: str, interval_filter: str | None = None) -> dict[str, Any]:
@@ -1309,11 +1377,16 @@ def api_active_recommendations(limit: int = 50, category: str = settings.default
             recommendations=recommendations,
             error=payload.get("error"),
         )
+        decision_snapshot = None if recommendations else no_trade_decision_snapshot(
+            reason=market_state["explanation"],
+            category=payload.get("category", category),
+        )
         return {
             "ok": bool(payload.get("ok")),
             "category": payload.get("category", category),
             "entry_interval": payload.get("entry_interval", settings.mtf_entry_interval),
             "recommendations": recommendations,
+            "decision_snapshot": decision_snapshot,
             "summary": market_state["summary"],
             "market_state": market_state,
             "empty_state": None if recommendations else market_state["explanation"],
@@ -1324,7 +1397,7 @@ def api_active_recommendations(limit: int = 50, category: str = settings.default
     except Exception as exc:
         error = _read_error(exc)
         market_state = _market_state_for_recommendations(payload_ok=False, recommendations=[], error=error)
-        return {"ok": False, "category": category, "recommendations": [], "summary": market_state["summary"], "market_state": market_state, "empty_state": market_state["explanation"], "error": error}
+        return {"ok": False, "category": category, "recommendations": [], "decision_snapshot": no_trade_decision_snapshot(reason=market_state["explanation"], category=category), "summary": market_state["summary"], "market_state": market_state, "empty_state": market_state["explanation"], "error": error}
 
 
 @router.get("/recommendations/history")
@@ -1397,6 +1470,8 @@ def api_recommendation_quality(category: str = settings.default_category, interv
             "strategy_quality": quality_summary(category),
             "recommendation_outcomes": outcome,
             "quality_assessment": assessment,
+            "recommendation_drawdown": _quality_drawdown_payload(category, interval_value),
+            "outcome_status_counts": _quality_outcome_status_counts(category, interval_value),
             "segments": _quality_segment_rows(category, interval_value),
         }
     except ValueError as exc:

@@ -38,7 +38,7 @@ def test_latest_signal_api_joins_current_price_for_entry_drift_gate():
     assert "LEFT JOIN latest_price p ON p.category=s.category AND p.symbol=s.symbol AND p.interval=s.interval" in api
     assert "s.expires_at" in api
     assert "_recommendation_summary(recommendations)" in api
-    assert "recommendation_v29" in api
+    assert "RECOMMENDATION_CONTRACT_VERSION" in api
 
 
 def test_schema_v29_adds_market_data_and_ttl_constraints():

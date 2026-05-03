@@ -9,6 +9,7 @@ from .config import settings
 DIRECTION_LONG = "long"
 DIRECTION_SHORT = "short"
 DIRECTION_NO_TRADE = "no_trade"
+RECOMMENDATION_CONTRACT_VERSION = "recommendation_v34"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
 NON_ENTRY_ACTIONS = {"NO_TRADE", "WAIT"}
 
@@ -485,6 +486,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
     invalidation = invalidation_condition(trade_direction, levels, expires_at) if levels.get("valid") else "Вход запрещён: уровни сделки не прошли серверную проверку."
     sizing = execution_plan(levels)
     contract = {
+        "contract_version": RECOMMENDATION_CONTRACT_VERSION,
         "recommendation_id": row.get("id"),
         "recommendation_status": status,
         "recommended_action": action_map.get(status, "Ждать"),
@@ -519,3 +521,71 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "no_trade_reason": ("price_moved_away" if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
     }
     return {**row, **contract, "recommendation": contract}
+
+
+
+def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_of: datetime | None = None) -> dict[str, Any]:
+    """Canonical empty-state recommendation contract for the UI.
+
+    It is not persisted as a signal because there is no instrument/entry/SL/TP to
+    evaluate. The point is to make NO_TRADE explicit instead of forcing the
+    frontend to infer it from an empty array.
+    """
+    as_of = as_of or datetime.now(timezone.utc)
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    return {
+        "contract_version": RECOMMENDATION_CONTRACT_VERSION,
+        "recommendation_id": None,
+        "category": category or settings.default_category,
+        "recommendation_status": "blocked",
+        "recommended_action": "Пропустить / ждать новый расчёт",
+        "trade_direction": DIRECTION_NO_TRADE,
+        "display_direction": "NO_TRADE",
+        "confidence_score": 0,
+        "expires_at": None,
+        "valid_until": None,
+        "entry": None,
+        "stop_loss": None,
+        "take_profit": None,
+        "risk_pct": None,
+        "expected_reward_pct": None,
+        "risk_reward": None,
+        "net_risk_reward": None,
+        "price_status": "no_setup",
+        "last_price": None,
+        "last_price_time": None,
+        "invalidation_condition": "Нет валидного торгового сетапа: вход запрещён до появления свежей рекомендации с entry, SL, TP и сроком актуальности.",
+        "recommendation_explanation": reason,
+        "factors_for": [],
+        "factors_against": [
+            {"code": "no_active_recommendation", "title": "Нет активной рекомендации", "detail": reason}
+        ],
+        "statistics_confidence": {
+            "level": "none",
+            "trades_count": 0,
+            "walk_forward_windows": 0,
+            "profit_factor": None,
+            "win_rate": None,
+            "expectancy": None,
+            "max_drawdown": None,
+            "explanation": "NO_TRADE не оценивается как сделка; статистика появится после завершённых рекомендаций.",
+        },
+        "timeframes_used": [],
+        "indicator_values": {},
+        "trading_signals": [],
+        "next_actions": [
+            {"action": "recalculate", "label": "Пересчитать рекомендации", "detail": "Синхронизировать рынок и построить сигналы заново."},
+            {"action": "skip", "label": "Не открывать сделку", "detail": "Пустой список рекомендаций является защитным состоянием, а не ошибкой UI."},
+        ],
+        "signal_breakdown": {
+            "raw_indicators": {},
+            "trading_signal": "NO_TRADE",
+            "final_gate": "blocked",
+            "price": {"price_status": "no_setup"},
+            "quality": {"quality_status": "NO_ACTIVE_RECOMMENDATION"},
+        },
+        "is_actionable": False,
+        "no_trade_reason": "no_active_recommendation",
+        "as_of": to_iso(as_of),
+    }

@@ -28,6 +28,7 @@ const state = {
   rawSort: { key: 'score', dir: 'desc' },
   lastOperatorAction: null,
   marketState: null,
+  decisionSnapshot: null,
   similarHistory: null,
   similarHistorySignalId: null,
   similarHistoryLoading: false,
@@ -1020,6 +1021,29 @@ function baseChecklistFor(s) {
   ];
 }
 
+function noTradeSnapshotHtml() {
+  const snapshot = state.decisionSnapshot || {};
+  const explanation = snapshot.recommendation_explanation || noSignalExplanation();
+  const next = Array.isArray(snapshot.next_actions) ? snapshot.next_actions : [];
+  const blockers = Array.isArray(snapshot.factors_against) ? snapshot.factors_against : [];
+  return `
+    <article class="no-trade-contract" aria-label="NO_TRADE состояние">
+      <div class="no-trade-contract__head">
+        <span class="badge reject">NO_TRADE</span>
+        <strong>${escapeHtml(snapshot.recommended_action || 'Пропустить / ждать новый расчёт')}</strong>
+      </div>
+      <p>${escapeHtml(explanation)}</p>
+      <div class="no-trade-contract__grid">
+        <div><span>Контракт</span><b>${escapeHtml(snapshot.contract_version || state.marketState?.contract || 'recommendation')}</b></div>
+        <div><span>Price status</span><b>${escapeHtml(snapshot.price_status || state.marketState?.status || 'no_setup')}</b></div>
+        <div><span>Confidence</span><b>${escapeHtml(String(snapshot.confidence_score ?? 0))}/100</b></div>
+      </div>
+      ${blockers.length ? `<ul class="no-trade-contract__reasons">${blockers.slice(0, 4).map((item) => `<li><b>${escapeHtml(item.title || item.code || 'Блокер')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ul>` : ''}
+      ${next.length ? `<div class="no-trade-contract__actions">${next.slice(0, 3).map((item) => `<span title="${escapeHtml(item.detail || '')}">${escapeHtml(item.label || item.action || 'Действие')}</span>`).join('')}</div>` : ''}
+    </article>`;
+}
+
+
 function noSignalExplanation() {
   const market = state.marketState || {};
   if (market.explanation) {
@@ -1811,8 +1835,12 @@ function renderQueue() {
   const queue = $('candidateQueue');
   const filtered = state.filter === 'all' ? list : list.filter((s) => s.decision.level === state.filter);
   if (!filtered.length) {
-    queue.className = 'candidate-queue empty-state';
-    queue.textContent = list.length ? 'В этом фильтре нет кандидатов.' : noSignalExplanation();
+    queue.className = list.length ? 'candidate-queue empty-state' : 'candidate-queue empty-state no-trade-state';
+    if (list.length) {
+      queue.textContent = 'В этом фильтре нет кандидатов.';
+    } else {
+      queue.innerHTML = noTradeSnapshotHtml();
+    }
     renderDecision();
     renderRawTable(list);
     return;
@@ -2009,12 +2037,14 @@ async function refreshSignals() {
   try {
     const data = await api(`/api/recommendations/active?category=${encodeURIComponent($('category').value)}&limit=80&entry_only=true`);
     state.marketState = data.market_state || null;
+    state.decisionSnapshot = data.decision_snapshot || null;
     state.signals = data.recommendations || [];
     state.entryInterval = data.entry_interval || state.entryInterval || '15';
   } catch (error) {
     log(`WARN recommendations/active unavailable, fallback to signals/latest: ${error.message}`);
     const data = await api(`/api/signals/latest?category=${encodeURIComponent($('category').value)}&limit=80&entry_only=true`);
     state.marketState = { status: 'fallback', explanation: 'Основной recommendation endpoint недоступен; UI показывает legacy signals/latest без расширенного market_state.' };
+    state.decisionSnapshot = null;
     state.signals = data.signals || [];
   }
   preserveSelectedCandidate();
