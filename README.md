@@ -180,7 +180,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V32
+## Recommendation API V37
 
 Канонические endpoints для витрины оператора:
 
@@ -191,6 +191,15 @@ Hard-veto срабатывает при:
 - `POST /api/recommendations/{signal_id}/operator-action` — аудит действий оператора: пропуск, ожидание подтверждения, ручной разбор, закрытие как неактуальной.
 
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
+
+
+### Recommendation API V37 additions
+
+- `contract_version = recommendation_v37`.
+- `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
+- `price_actionability.is_price_actionable=true` возможен только в `entry_zone`; состояние `extended` означает ждать ретест, а не догонять цену.
+- `net_risk_reward` после fee/slippage участвует в review gate; слабый net R/R переводит сетап в hard/warn guardrail.
+- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v37`, если миграция применена.
 
 ## Frontend
 
@@ -565,7 +574,7 @@ psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v30_recommendatio
 
 ## V35 — active recommendation integrity
 
-Текущий контракт рекомендаций: `recommendation_v36`.
+Текущий контракт рекомендаций: `recommendation_v37`.
 
 Ключевое изменение V35: активная выдача больше не показывает directional-сигналы, которые уже завершены outcome-evaluator или закрыты оператором. `/api/recommendations/active` требует `expires_at > NOW()` и исключает terminal outcomes. Метрики `/api/recommendations/quality` считаются только по завершённым рекомендациям (`outcome_status <> 'open'`), поэтому `winrate`, `profit_factor`, `average R`, MFE/MAE и confidence buckets не искажаются открытыми строками.
 

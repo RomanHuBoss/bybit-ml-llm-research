@@ -9,7 +9,7 @@ from .config import settings
 DIRECTION_LONG = "long"
 DIRECTION_SHORT = "short"
 DIRECTION_NO_TRADE = "no_trade"
-RECOMMENDATION_CONTRACT_VERSION = "recommendation_v36"
+RECOMMENDATION_CONTRACT_VERSION = "recommendation_v37"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
 NON_ENTRY_ACTIONS = {"NO_TRADE", "WAIT"}
 
@@ -132,7 +132,7 @@ def price_freshness(row: dict[str, Any], expires_at: datetime | None, levels: di
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    if expires_at is not None and expires_at < now:
+    if expires_at is not None and expires_at <= now:
         stale = True
     else:
         stale = str(row.get("data_status") or row.get("freshness_status") or "").lower() in {"stale", "expired"} or row.get("fresh") is False
@@ -207,7 +207,9 @@ def price_actionability(
         reasons.append("price_unknown")
     elif price_status == "moved_away":
         reasons.append("price_moved_away")
-    elif price_status not in {"entry_zone", "extended"}:
+    elif price_status == "extended":
+        reasons.append("price_extended_wait_retest")
+    elif price_status != "entry_zone":
         reasons.append(f"price_{price_status}")
     if status != "review_entry":
         reasons.append(f"status_{status}")
@@ -257,6 +259,9 @@ def execution_plan(levels: dict[str, Any]) -> dict[str, Any]:
     quantity = notional / entry if notional > 0 else None
     net_reward = (reward_pct - fee_drag_pct) if reward_pct is not None else None
     net_rr = (net_reward / risk_pct) if net_reward is not None and risk_pct > 0 else None
+    sizing_status = "capped" if notional < raw_notional else "risk_based"
+    if net_rr is not None and net_rr <= 1.0:
+        sizing_status = "fee_adjusted_unattractive"
     return {
         "risk_amount_usdt": risk_amount,
         "position_notional_usdt": notional,
@@ -266,7 +271,7 @@ def execution_plan(levels: dict[str, Any]) -> dict[str, Any]:
         "fee_slippage_roundtrip_pct": fee_drag_pct,
         "net_expected_reward_pct": net_reward,
         "net_risk_reward": net_rr,
-        "sizing_status": "capped" if notional < raw_notional else "risk_based",
+        "sizing_status": sizing_status,
     }
 
 
@@ -537,6 +542,12 @@ def trading_signals(row: dict[str, Any]) -> list[dict[str, str]]:
 
 def next_actions(status: str, trade_direction: str, price: dict[str, Any]) -> list[dict[str, str]]:
     if status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT}:
+        if str(price.get("price_status") or "unknown") != "entry_zone":
+            return [
+                {"action": "wait_confirmation", "label": "Ждать ретест entry-зоны", "detail": "Цена уже не в точной зоне входа; не догонять рынок, дождаться возврата к entry или пересчитать."},
+                {"action": "close_invalidated", "label": "Закрыть как неактуальную", "detail": "Использовать, если цена не возвращается в допустимое окно до истечения TTL."},
+                {"action": "skip", "label": "Пропустить", "detail": "Пропуск безопаснее входа вне серверного price gate."},
+            ]
         return [
             {"action": "manual_review", "label": "Открыть ручной разбор", "detail": "Проверить стакан, spread, актуальность entry и размер позиции до любой сделки."},
             {"action": "wait_confirmation", "label": "Ждать подтверждения", "detail": "Использовать при неполном MTF/сомнительной цене; рекомендация остается advisory-only."},
@@ -606,11 +617,60 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "trading_signals": trading_signals(row),
         "next_actions": next_actions(status, trade_direction, price),
         "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing},
-        "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price_gate.get("is_price_actionable") is True,
+        "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price_gate.get("is_price_actionable") is True and (sizing.get("net_risk_reward") is None or sizing.get("net_risk_reward") > 1.0),
         "no_trade_reason": ("price_moved_away" if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
     }
+    health = contract_health(contract)
+    contract["contract_health"] = health
+    if health.get("level") == "error" and contract.get("recommendation_status") == "review_entry":
+        contract["is_actionable"] = False
+        contract["recommended_action"] = "Ждать / не входить до устранения contract guardrail"
     return {**row, **contract, "recommendation": contract}
 
+
+
+def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
+    """Machine-readable integrity report for the outbound recommendation contract.
+
+    This is intentionally calculated after enrichment, right before the API/UI boundary.
+    It catches drift between database rows, backend calculations and frontend rendering
+    without letting the browser infer missing guardrails by itself.
+    """
+    required = (
+        "recommendation_id", "recommendation_status", "trade_direction", "confidence_score",
+        "expires_at", "risk_pct", "expected_reward_pct", "risk_reward",
+        "recommendation_explanation", "price_actionability", "signal_breakdown",
+    )
+    problems: list[dict[str, str]] = []
+    status = str(contract.get("recommendation_status") or "").lower()
+    direction = str(contract.get("trade_direction") or "").lower()
+    for key in required:
+        if contract.get(key) in (None, "") and status in {"review_entry", "research_candidate"}:
+            problems.append({"code": f"missing_{key}", "level": "error", "message": f"Contract field {key} is required for directional recommendations."})
+    confidence = finite(contract.get("confidence_score"))
+    if confidence is None or confidence < 0 or confidence > 100:
+        problems.append({"code": "confidence_score_range", "level": "error", "message": "confidence_score must be in [0,100] and is not a win probability."})
+    rr = finite(contract.get("risk_reward"))
+    net_rr = finite(contract.get("net_risk_reward"))
+    if status == "review_entry" and direction in {DIRECTION_LONG, DIRECTION_SHORT}:
+        if rr is None or rr <= 0:
+            problems.append({"code": "invalid_risk_reward", "level": "error", "message": "Review entry requires positive risk_reward."})
+        if net_rr is None:
+            problems.append({"code": "missing_net_risk_reward", "level": "warn", "message": "Net R/R after fee and slippage is unavailable."})
+        elif net_rr <= 1.0:
+            problems.append({"code": "net_risk_reward_low", "level": "error", "message": "Net R/R after fee and slippage is not attractive enough for review entry."})
+        price_gate = contract.get("price_actionability") if isinstance(contract.get("price_actionability"), dict) else {}
+        if price_gate.get("is_price_actionable") is not True:
+            problems.append({"code": str(price_gate.get("reason") or "price_gate_blocked"), "level": "error", "message": "Review entry is not actionable unless server price gate is green."})
+    if direction == DIRECTION_NO_TRADE and contract.get("is_actionable") is True:
+        problems.append({"code": "no_trade_marked_actionable", "level": "error", "message": "NO_TRADE cannot be actionable."})
+    level = "error" if any(p["level"] == "error" for p in problems) else "warn" if problems else "ok"
+    return {
+        "level": level,
+        "ok": level != "error",
+        "problems": problems,
+        "checked_version": RECOMMENDATION_CONTRACT_VERSION,
+    }
 
 
 def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_of: datetime | None = None) -> dict[str, Any]:
@@ -623,7 +683,7 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
     as_of = as_of or datetime.now(timezone.utc)
     if as_of.tzinfo is None:
         as_of = as_of.replace(tzinfo=timezone.utc)
-    return {
+    contract = {
         "contract_version": RECOMMENDATION_CONTRACT_VERSION,
         "recommendation_id": None,
         "category": category or settings.default_category,
@@ -692,3 +752,5 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "no_trade_reason": "no_active_recommendation",
         "as_of": to_iso(as_of),
     }
+    contract["contract_health"] = contract_health(contract)
+    return contract

@@ -147,6 +147,17 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     elif rr < 1.45:
         _add_reason(warnings, "rr_moderate", "Risk/Reward умеренный", f"R/R {rr:.2f}; для уверенного сетапа желательно >= 1.45.")
 
+    if rr is not None and entry_v and entry_v > 0 and stop_v is not None and take_v is not None:
+        risk_pct_v = abs(entry_v - stop_v) / entry_v
+        reward_pct_v = abs(take_v - entry_v) / entry_v
+        fee_drag_pct = max(0.0, 2.0 * float(settings.fee_rate) + 2.0 * float(settings.slippage_rate))
+        net_reward_pct = reward_pct_v - fee_drag_pct
+        net_rr = net_reward_pct / risk_pct_v if risk_pct_v > 0 else None
+        if net_rr is None or net_rr <= 1.0:
+            _add_reason(hard, "net_rr_low", "Net R/R после комиссий слишком низкий", f"После fee/slippage net R/R {net_rr or 0:.2f}; вход не должен проходить review gate.")
+        elif net_rr < 1.25:
+            _add_reason(warnings, "net_rr_moderate", "Net R/R после комиссий умеренный", f"После fee/slippage net R/R {net_rr:.2f}; нужен уменьшенный риск или лучший entry.")
+
     confidence = _finite(row.get("confidence"), 0.0) or 0.0
     if confidence < 0.52:
         _add_reason(hard, "confidence_low", "Confidence ниже входного минимума", f"Confidence {confidence:.2f} < 0.52.")

@@ -365,10 +365,11 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "allowed_price_statuses": ["entry_zone", "extended", "moved_away", "stale", "unknown", "no_setup"],
         "required_recommendation_fields": [
             "symbol", "trade_direction", "entry", "stop_loss", "take_profit",
-            "risk_pct", "expected_reward_pct", "risk_reward", "confidence_score",
+            "risk_pct", "expected_reward_pct", "risk_reward", "net_risk_reward", "confidence_score",
             "expires_at", "recommendation_explanation", "signal_breakdown",
-            "price_actionability",
+            "price_actionability", "contract_health",
         ],
+        "price_gate_policy": "entry_zone_only_for_actionable_review",
         "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction on the client",
     }
 
@@ -1409,6 +1410,24 @@ def api_latest_quotes(symbols: str | None = None, category: str = settings.defau
         return {"ok": False, "category": category, "interval": interval, "quotes": [], "error": _read_error(exc)}
 
 
+def _recommendation_contract_guardrail_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    problems: list[dict[str, Any]] = []
+    for item in items:
+        contract = item.get("recommendation") if isinstance(item.get("recommendation"), dict) else item
+        health = contract.get("contract_health") if isinstance(contract, dict) else None
+        if not isinstance(health, dict):
+            problems.append({"recommendation_id": item.get("id"), "code": "missing_contract_health", "level": "warn", "message": "Contract health payload is absent."})
+            continue
+        for problem in health.get("problems") or []:
+            problems.append({"recommendation_id": item.get("id") or contract.get("recommendation_id"), **problem})
+    return {
+        "ok": not any(p.get("level") == "error" for p in problems),
+        "errors": sum(1 for p in problems if p.get("level") == "error"),
+        "warnings": sum(1 for p in problems if p.get("level") == "warn"),
+        "problems": problems[:20],
+    }
+
+
 @router.get("/recommendations/active")
 def api_active_recommendations(limit: int = 50, category: str = settings.default_category, entry_only: bool = True) -> dict[str, Any]:
     try:
@@ -1424,14 +1443,15 @@ def api_active_recommendations(limit: int = 50, category: str = settings.default
             reason=market_state["explanation"],
             category=payload.get("category", category),
         )
+        contract_guardrails = _recommendation_contract_guardrail_summary(recommendations)
         return {
             "ok": bool(payload.get("ok")),
             "category": payload.get("category", category),
             "entry_interval": payload.get("entry_interval", settings.mtf_entry_interval),
             "recommendations": recommendations,
             "decision_snapshot": decision_snapshot,
-            "summary": market_state["summary"],
-            "market_state": market_state,
+            "summary": {**market_state["summary"], "contract_guardrails": contract_guardrails},
+            "market_state": {**market_state, "contract_guardrails": contract_guardrails},
             "empty_state": None if recommendations else market_state["explanation"],
             "error": payload.get("error"),
         }
@@ -1652,6 +1672,26 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
             warnings.append({"code": "no_signals", "level": "warn", "message": "Нет рассчитанных сигналов; запустите синхронизацию рынка и пересчёт рекомендаций."})
         if not candles.get("latest_candle_at"):
             warnings.append({"code": "no_market_data", "level": "fail", "message": "Нет исторических свечей; рекомендации должны оставаться NO_TRADE."})
+        try:
+            integrity = fetch_all(
+                """
+                SELECT issue_code, severity, COUNT(*)::int AS count
+                FROM v_recommendation_integrity_audit_v37
+                WHERE category=%s
+                GROUP BY issue_code, severity
+                ORDER BY severity DESC, count DESC, issue_code
+                LIMIT 20
+                """,
+                (category,),
+            )
+            for item in integrity:
+                warnings.append({
+                    "code": f"recommendation_integrity_{item.get('issue_code')}",
+                    "level": "fail" if item.get("severity") == "error" else "warn",
+                    "message": f"Integrity audit: {item.get('issue_code')} × {item.get('count')}",
+                })
+        except Exception:
+            pass
         return {"ok": True, "category": category, "warnings": warnings}
     except ValueError as exc:
         raise _bad_request(exc) from exc

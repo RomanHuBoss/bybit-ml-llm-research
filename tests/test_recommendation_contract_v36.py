@@ -27,7 +27,7 @@ def test_v36_price_actionability_blocks_moved_away_price():
     )
     contract = item["recommendation"]
 
-    assert contract["contract_version"] == "recommendation_v36"
+    assert contract["contract_version"] == "recommendation_v37"
     assert contract["recommendation_status"] == "missed_entry"
     assert contract["trade_direction"] == "no_trade"
     assert contract["price_actionability"]["is_price_actionable"] is False
@@ -64,7 +64,7 @@ def test_v36_price_actionability_allows_fresh_review_entry_inside_entry_window()
 def test_v36_no_trade_snapshot_contains_price_gate():
     snap = no_trade_decision_snapshot(reason="Нет активных рекомендаций", category="linear", as_of=NOW)
 
-    assert snap["contract_version"] == "recommendation_v36"
+    assert snap["contract_version"] == "recommendation_v37"
     assert snap["trade_direction"] == "no_trade"
     assert snap["price_actionability"]["status"] == "blocked"
     assert snap["price_actionability"]["reason"] == "no_active_recommendation"
@@ -97,8 +97,10 @@ def test_v36_schema_and_migration_publish_contract_view():
     schema = (ROOT / "sql" / "schema.sql").read_text(encoding="utf-8")
     migration = (ROOT / "sql" / "migrations" / "20260503_v36_frontend_contract_source_and_price_actionability.sql").read_text(encoding="utf-8")
 
-    for source in (schema, migration):
-        assert "v_recommendation_contract_v36" in source
-        assert "recommendation_v36" in source
-        assert "idx_signals_active_source_v36" in source
-        assert "recommendations_active" in source
+    assert "v_recommendation_contract_v36" in migration
+    assert "recommendation_v36" in migration
+    assert "v_recommendation_contract_v36" in schema
+    assert "v_recommendation_contract_v37" in schema
+    assert "recommendation_v37" in schema
+    assert "idx_signals_active_source_v36" in schema
+    assert "recommendations_active" in schema

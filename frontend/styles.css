@@ -1718,3 +1718,23 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .execution-map.price-blocked {
   border-color: rgba(255, 77, 109, 0.28);
 }
+
+.contract-health {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.74);
+}
+.contract-health.ok { border-color: rgba(0, 227, 140, 0.28); background: var(--green-soft); }
+.contract-health.warn { border-color: rgba(245, 185, 66, 0.30); background: var(--amber-soft); }
+.contract-health.error { border-color: rgba(255, 77, 109, 0.32); background: var(--red-soft); }
+.contract-health b { letter-spacing: 0.05em; }
+.contract-health ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.contract-health li span { display: block; color: var(--muted); font-size: 12px; }
+.ticket-operator-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  filter: grayscale(0.35);
+}

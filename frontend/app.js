@@ -1638,6 +1638,16 @@ function outcomeContractHtml(outcome) {
   </div>`;
 }
 
+function contractHealthHtml(health) {
+  if (!health) return '<p class="muted-line">Contract health не передан сервером.</p>';
+  const level = cssToken(health.level || (health.ok ? 'ok' : 'warn'), 'warn');
+  const problems = Array.isArray(health.problems) ? health.problems : [];
+  if (!problems.length) {
+    return `<div class="contract-health ${level}"><b>OK</b><span>Серверный контракт согласован: уровни, TTL, price gate и net R/R прошли проверку.</span></div>`;
+  }
+  return `<div class="contract-health ${level}"><b>${escapeHtml(String(health.level || 'warn').toUpperCase())}</b><ul>${problems.slice(0, 6).map((p) => `<li><strong>${escapeHtml(p.code || p.level || 'guardrail')}</strong><span>${escapeHtml(p.message || '')}</span></li>`).join('')}</ul></div>`;
+}
+
 function nextActionsHtml(items) {
   if (!Array.isArray(items) || !items.length) return '<p class="muted-line">Следующее действие не передано.</p>';
   return `<ol>${items.map((item) => `<li><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
@@ -1802,12 +1812,13 @@ function renderTicket(s) {
       <section class="detail-card"><b>Таймфреймы</b>${timeframeListHtml(contract.timeframes_used || [])}</section>
       <section class="detail-card"><b>Выборка качества</b>${statisticsConfidenceHtml(contract.statistics_confidence)}</section>
       <section class="detail-card"><b>Исход рекомендации</b>${outcomeContractHtml(contract.outcome)}</section>
+      <section class="detail-card"><b>Guardrails контракта</b>${contractHealthHtml(contract.contract_health)}</section>
       <section class="detail-card wide"><b>История похожих сигналов</b>${similarHistoryHtml(state.similarHistory, s.id)}</section>
       <section class="detail-card wide"><b>Индикаторы</b>${indicatorValuesHtml(contract.indicator_values || {})}</section>
       <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>
     </div>
     <div class="ticket-operator-actions" aria-label="Действия оператора">
-      <button type="button" class="secondary small" data-busy-lock="true" data-operator-action="manual_review">Взять в разбор</button>
+      <button type="button" class="secondary small" data-busy-lock="true" data-operator-action="manual_review" ${contract.is_actionable ? '' : 'disabled title="Manual review доступен только при зелёном server price gate и contract_health=ok"'}>Взять в разбор</button>
       <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="wait_confirmation">Ждать подтверждения</button>
       <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="skip">Пропустить</button>
       <button type="button" class="danger small" data-busy-lock="true" data-operator-action="close_invalidated">Закрыть как неактуальную</button>

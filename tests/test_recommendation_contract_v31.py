@@ -38,14 +38,15 @@ def test_v31_recommendation_contract_contains_operational_explanation_blocks():
     assert contract["timeframes_used"][0]["interval"] == "15"
     assert contract["indicator_values"]["rsi"] == 31.5
     assert contract["trading_signals"][0]["name"] == "rsi_rebound"
-    assert contract["next_actions"][0]["action"] == "manual_review"
+    assert contract["next_actions"][0]["action"] == "wait_confirmation"
+    assert contract["price_actionability"]["reason"] == "price_unknown"
 
 
 def test_v31_market_state_explains_no_trade_without_ui_guessing():
     state = _market_state_for_recommendations(payload_ok=True, recommendations=[])
 
     assert state["status"] == "no_trade"
-    assert state["contract"] == "recommendation_v36"
+    assert state["contract"] == "recommendation_v37"
     assert "NO_TRADE" in state["explanation"]
 
 
