@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
@@ -61,7 +61,7 @@ from .backtest_background import background_backtester, backtest_background_summ
 from .bybit_client import sync_candles, sync_funding, sync_market_bundle, sync_open_interest
 from .concurrency import bounded_worker_count
 from .config import settings
-from .db import fetch_all, fetch_one
+from .db import execute, fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .operator_queue import consolidate_operator_queue
@@ -202,6 +202,14 @@ class UniverseRequest(BaseModel):
     refresh: bool = True
 
 
+class OperatorActionRequest(BaseModel):
+    action: Literal["skip", "wait_confirmation", "manual_review", "close_invalidated", "paper_opened"]
+    notes: str | None = Field(default=None, max_length=2000)
+    observed_price: float | None = Field(default=None, gt=0)
+
+
+
+
 def _bad_request(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
@@ -292,6 +300,79 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "moved_away": moved_away,
         "contract": "recommendation_v29",
     }
+
+
+def _quality_segment_rows(category: str, interval_filter: str | None = None) -> dict[str, Any]:
+    params: list[Any] = [category]
+    interval_sql = ""
+    if interval_filter:
+        interval_sql = " AND s.interval=%s"
+        params.append(interval_filter)
+    by_symbol = fetch_all(
+        f"""
+        SELECT s.symbol, COUNT(*)::int AS evaluated,
+               AVG(o.realized_r)::float AS average_r,
+               SUM(CASE WHEN o.realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
+               SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor,
+               AVG(o.max_favorable_excursion_r)::float AS avg_mfe_r,
+               AVG(o.max_adverse_excursion_r)::float AS avg_mae_r
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s {interval_sql}
+        GROUP BY s.symbol
+        ORDER BY evaluated DESC, average_r DESC NULLS LAST
+        LIMIT 50
+        """,
+        tuple(params),
+    )
+    by_strategy = fetch_all(
+        f"""
+        SELECT s.interval, s.strategy, COUNT(*)::int AS evaluated,
+               AVG(o.realized_r)::float AS average_r,
+               SUM(CASE WHEN o.realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
+               SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor,
+               AVG(o.max_favorable_excursion_r)::float AS avg_mfe_r,
+               AVG(o.max_adverse_excursion_r)::float AS avg_mae_r
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s {interval_sql}
+        GROUP BY s.interval, s.strategy
+        ORDER BY evaluated DESC, average_r DESC NULLS LAST
+        LIMIT 80
+        """,
+        tuple(params),
+    )
+    by_confidence = fetch_all(
+        f"""
+        SELECT CASE
+                 WHEN s.confidence < 0.55 THEN '<55%'
+                 WHEN s.confidence < 0.65 THEN '55-65%'
+                 WHEN s.confidence < 0.75 THEN '65-75%'
+                 ELSE '>=75%'
+               END AS confidence_bucket,
+               COUNT(*)::int AS evaluated,
+               AVG(o.realized_r)::float AS average_r,
+               SUM(CASE WHEN o.realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
+               SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s {interval_sql}
+        GROUP BY confidence_bucket
+        ORDER BY confidence_bucket
+        """,
+        tuple(params),
+    )
+    return {"by_symbol": by_symbol, "by_strategy": by_strategy, "by_confidence_bucket": by_confidence}
+
+
+def _operator_action_status(action: str) -> str:
+    return {
+        "skip": "skipped_by_operator",
+        "wait_confirmation": "waiting_confirmation",
+        "manual_review": "manual_review_started",
+        "close_invalidated": "invalidated_by_operator",
+        "paper_opened": "paper_opened",
+    }.get(action, "operator_action_logged")
 
 
 def _recommendation_base_sql(where_sql: str) -> str:
@@ -1140,6 +1221,7 @@ def api_recommendation_quality(category: str = settings.default_category, interv
             "interval": interval_value,
             "strategy_quality": quality_summary(category),
             "recommendation_outcomes": outcome,
+            "segments": _quality_segment_rows(category, interval_value),
         }
     except ValueError as exc:
         raise _bad_request(exc) from exc
@@ -1181,6 +1263,59 @@ def api_recommendation_explanation(signal_id: int, category: str = settings.defa
         "signal_breakdown": item.get("signal_breakdown", {}),
         "error": detail.get("error"),
     }
+
+
+@router.post("/recommendations/{signal_id}/operator-action")
+def api_recommendation_operator_action(signal_id: int, req: OperatorActionRequest, category: str = settings.default_category) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        row = _fetch_recommendation_row(int(signal_id), category)
+        if not row:
+            return {"ok": False, "recommendation_id": signal_id, "error": "Recommendation not found"}
+        annotated = annotate_recommendations([row])[0]
+        contract = annotated.get("recommendation") or annotated
+        payload = {
+            "recommendation_status": contract.get("recommendation_status"),
+            "trade_direction": contract.get("trade_direction"),
+            "risk_reward": contract.get("risk_reward"),
+            "net_risk_reward": contract.get("net_risk_reward"),
+            "price_status": contract.get("price_status"),
+            "expires_at": contract.get("expires_at"),
+        }
+        execute(
+            """
+            INSERT INTO recommendation_operator_actions(
+                signal_id, action, operator_note, observed_price, recommendation_status, payload
+            ) VALUES (%s,%s,%s,%s,%s,%s)
+            """,
+            (int(signal_id), req.action, req.notes, req.observed_price, contract.get("recommendation_status"), payload),
+        )
+        if req.action == "close_invalidated":
+            execute(
+                """
+                INSERT INTO recommendation_outcomes(
+                    signal_id, outcome_status, exit_time, exit_price, realized_r,
+                    max_favorable_excursion_r, max_adverse_excursion_r, bars_observed, notes
+                ) VALUES (%s,'invalidated',NOW(),%s,0,0,0,0,%s)
+                ON CONFLICT (signal_id) DO UPDATE SET
+                    evaluated_at=NOW(), outcome_status='invalidated', exit_time=NOW(),
+                    exit_price=EXCLUDED.exit_price, realized_r=0,
+                    max_favorable_excursion_r=0, max_adverse_excursion_r=0,
+                    notes=EXCLUDED.notes
+                """,
+                (int(signal_id), req.observed_price, {"source": "operator_action", "action": req.action, "note": req.notes}),
+            )
+        return {
+            "ok": True,
+            "recommendation_id": signal_id,
+            "action": req.action,
+            "status": _operator_action_status(req.action),
+            "recommendation_status": contract.get("recommendation_status"),
+        }
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "recommendation_id": signal_id, "action": req.action, "error": _read_error(exc)}
 
 
 @router.get("/system/status")

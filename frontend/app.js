@@ -26,6 +26,7 @@ const state = {
   recommendationIntervals: ['15'],
   contextIntervals: ['60', '240'],
   rawSort: { key: 'score', dir: 'desc' },
+  lastOperatorAction: null,
 };
 
 const STRATEGY_LABELS = {
@@ -359,6 +360,12 @@ function priceFmt(value) {
   if (Math.abs(n) >= 1000) return n.toLocaleString([], { maximumFractionDigits: 2 });
   if (Math.abs(n) >= 1) return n.toLocaleString([], { maximumFractionDigits: 4 });
   return n.toLocaleString([], { maximumSignificantDigits: 6 });
+}
+
+function moneyFmt(value) {
+  const n = num(value);
+  if (n === null) return '—';
+  return `${n.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} USDT`;
 }
 
 function volumeFmt(value) {
@@ -1552,6 +1559,9 @@ function renderTicket(s) {
       <div class="metric"><span>Risk до SL</span><strong>${pct(contract.risk_pct ?? rr?.riskPct, 2)}</strong></div>
       <div class="metric"><span>Потенциал до TP</span><strong>${pct(contract.expected_reward_pct ?? rr?.rewardPct, 2)}</strong></div>
       <div class="metric"><span>R/R</span><strong>${fmt(contract.risk_reward ?? rr?.ratio, 2)}</strong></div>
+      <div class="metric"><span>Net R/R</span><strong>${fmt(contract.net_risk_reward, 2)}</strong><small>после fee/slippage</small></div>
+      <div class="metric"><span>Risk amount</span><strong>${moneyFmt(contract.position_sizing?.risk_amount_usdt)}</strong></div>
+      <div class="metric"><span>Position cap</span><strong>${moneyFmt(contract.position_sizing?.position_notional_usdt)}</strong><small>${escapeHtml(contract.position_sizing?.sizing_status || '—')}</small></div>
       <div class="metric"><span>Confidence</span><strong>${contract.confidence_score !== undefined ? `${contract.confidence_score}/100` : pct(s.confidence, 0)}</strong></div>
       <div class="metric"><span>Expires</span><strong>${compactDateTime(contract.expires_at || s.expires_at)}</strong></div>
       <div class="metric"><span>Price status</span><strong>${escapeHtml(contract.price_status || s.price_status || 'unknown')}</strong></div>
@@ -1563,6 +1573,13 @@ function renderTicket(s) {
       <b>Исполнение:</b> ${escapeHtml(contract.recommendation_explanation || 'Только ручная проверка. Entry/SL/TP не являются торговым приказом; красный пункт отменяет сетап.')}
       <small><b>Отмена:</b> ${escapeHtml(contract.invalidation_condition || 'Сетап отменяется при hard veto, устаревании данных или уходе цены от entry-зоны.')}</small>
     </div>
+    <div class="ticket-operator-actions" aria-label="Действия оператора">
+      <button type="button" class="secondary small" data-operator-action="manual_review">Взять в разбор</button>
+      <button type="button" class="ghost small" data-operator-action="wait_confirmation">Ждать подтверждения</button>
+      <button type="button" class="ghost small" data-operator-action="skip">Пропустить</button>
+      <button type="button" class="danger small" data-operator-action="close_invalidated">Закрыть как неактуальную</button>
+    </div>
+    <div class="operator-action-status">${escapeHtml(state.lastOperatorAction || 'Действия сохраняются в recommendation_operator_actions; закрытие как неактуальной фиксирует outcome=invalidated.')}</div>
     <section class="llm-detail-card ${escapeHtml(cssToken(llmVerdict.tone, 'pending'))}">
       <header><span>LLM verdict · ${escapeHtml(llmVerdict.symbol)}</span><strong>${escapeHtml(llmVerdict.recommendation)} · ${escapeHtml(llmVerdict.confidenceText)}</strong></header>
       <p>${escapeHtml(llmVerdict.rationale || llmVerdict.summary)}</p>
@@ -2171,6 +2188,20 @@ function bindControls() {
       await refreshLlmStatus();
       await refreshNews();
       return { ok: true, selected: selectedCandidate()?.symbol || null };
+    });
+  });
+
+  document.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-operator-action]');
+    if (!button) return;
+    const action = button.dataset.operatorAction;
+    await runOperation(`Действие оператора: ${action}`, async () => {
+      const result = await postOperatorAction(action);
+      if (action === 'close_invalidated') {
+        await refreshRank();
+        await refreshSignals();
+      }
+      return result;
     });
   });
 

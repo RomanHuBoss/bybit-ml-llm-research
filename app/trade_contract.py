@@ -163,6 +163,49 @@ def price_freshness(row: dict[str, Any], expires_at: datetime | None, levels: di
     }
 
 
+def execution_plan(levels: dict[str, Any]) -> dict[str, Any]:
+    """Position-sizing helper for advisory UI.
+
+    It never sends orders and intentionally caps notional by settings. The result
+    is a deterministic display contract so frontend does not reimplement risk
+    arithmetic with different rounding or hidden assumptions.
+    """
+    entry = finite(levels.get("entry"))
+    risk_pct = finite(levels.get("risk_pct"))
+    reward_pct = finite(levels.get("expected_reward_pct"))
+    risk_amount = max(0.0, float(settings.start_equity_usdt) * float(settings.risk_per_trade))
+    fee_drag_pct = max(0.0, 2.0 * float(settings.fee_rate) + 2.0 * float(settings.slippage_rate))
+    if entry is None or entry <= 0 or risk_pct is None or risk_pct <= 0:
+        return {
+            "risk_amount_usdt": risk_amount,
+            "position_notional_usdt": None,
+            "estimated_quantity": None,
+            "margin_at_max_leverage_usdt": None,
+            "max_leverage": float(settings.max_leverage),
+            "fee_slippage_roundtrip_pct": fee_drag_pct,
+            "net_expected_reward_pct": None,
+            "net_risk_reward": None,
+            "sizing_status": "invalid_levels",
+        }
+    raw_notional = risk_amount / risk_pct
+    cap = min(float(settings.max_position_notional_usdt), float(settings.start_equity_usdt) * float(settings.max_leverage))
+    notional = max(0.0, min(raw_notional, cap))
+    quantity = notional / entry if notional > 0 else None
+    net_reward = (reward_pct - fee_drag_pct) if reward_pct is not None else None
+    net_rr = (net_reward / risk_pct) if net_reward is not None and risk_pct > 0 else None
+    return {
+        "risk_amount_usdt": risk_amount,
+        "position_notional_usdt": notional,
+        "estimated_quantity": quantity,
+        "margin_at_max_leverage_usdt": notional / float(settings.max_leverage) if settings.max_leverage > 0 else None,
+        "max_leverage": float(settings.max_leverage),
+        "fee_slippage_roundtrip_pct": fee_drag_pct,
+        "net_expected_reward_pct": net_reward,
+        "net_risk_reward": net_rr,
+        "sizing_status": "capped" if notional < raw_notional else "risk_based",
+    }
+
+
 def invalidation_condition(direction: str, levels: dict[str, Any], expires_at: datetime | None) -> str:
     entry = levels.get("entry")
     stop = levels.get("stop_loss")
@@ -316,6 +359,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
     factors_against = _factor_items(row, "operator_hard_reasons") + _factor_items(row, "operator_warnings")
     explanation_text = explanation(row, status, trade_direction, levels, price)
     invalidation = invalidation_condition(trade_direction, levels, expires_at) if levels.get("valid") else "Вход запрещён: уровни сделки не прошли серверную проверку."
+    sizing = execution_plan(levels)
     contract = {
         "recommendation_id": row.get("id"),
         "recommendation_status": status,
@@ -328,6 +372,9 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "risk_pct": levels.get("risk_pct"),
         "expected_reward_pct": levels.get("expected_reward_pct"),
         "risk_reward": levels.get("risk_reward"),
+        "net_risk_reward": sizing.get("net_risk_reward"),
+        "fee_slippage_roundtrip_pct": sizing.get("fee_slippage_roundtrip_pct"),
+        "position_sizing": sizing,
         "level_validation": {"valid": levels.get("valid"), "reason": levels.get("reason")},
         "price_status": price.get("price_status"),
         "price_drift_pct": price.get("price_drift_pct"),
@@ -338,7 +385,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "recommendation_explanation": explanation_text,
         "factors_for": factors_for,
         "factors_against": factors_against,
-        "signal_breakdown": signal_breakdown(row, levels, price),
+        "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing},
         "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price.get("price_status") in {"entry_zone", "extended", "unknown"},
         "no_trade_reason": ("price_moved_away" if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
     }

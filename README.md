@@ -520,3 +520,33 @@ PROVISIONAL_REVIEW_MIN_SCORE=60
 ```
 
 Если нужен максимально консервативный режим, установите `ALLOW_PROVISIONAL_REVIEW_FOR_SAMPLE_ONLY=false`: тогда `REVIEW_ENTRY` снова будет доступен только для полного `APPROVED`.
+
+## V30: recommendation operator actions and fee-adjusted contract
+
+This revision extends the advisory recommendation contract without adding live order execution.
+
+New backend-owned fields are returned inside each recommendation:
+
+- `position_sizing.risk_amount_usdt`;
+- `position_sizing.position_notional_usdt`;
+- `position_sizing.estimated_quantity`;
+- `position_sizing.margin_at_max_leverage_usdt`;
+- `fee_slippage_roundtrip_pct`;
+- `net_risk_reward`.
+
+The frontend displays these values directly and does not recalculate position sizing.
+
+A new operator audit endpoint records what the user decided to do with a recommendation:
+
+```text
+POST /api/recommendations/{signal_id}/operator-action
+```
+
+Allowed actions: `skip`, `wait_confirmation`, `manual_review`, `close_invalidated`, `paper_opened`.
+Closing a recommendation as invalidated also writes an `invalidated` row to `recommendation_outcomes`, so it is reflected in future quality statistics.
+
+Apply the repeatable migration when updating an existing database:
+
+```bash
+psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v30_recommendation_operator_actions_and_quality.sql
+```
