@@ -565,7 +565,7 @@ psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v30_recommendatio
 
 ## V35 — active recommendation integrity
 
-Текущий контракт рекомендаций: `recommendation_v35`.
+Текущий контракт рекомендаций: `recommendation_v36`.
 
 Ключевое изменение V35: активная выдача больше не показывает directional-сигналы, которые уже завершены outcome-evaluator или закрыты оператором. `/api/recommendations/active` требует `expires_at > NOW()` и исключает terminal outcomes. Метрики `/api/recommendations/quality` считаются только по завершённым рекомендациям (`outcome_status <> 'open'`), поэтому `winrate`, `profit_factor`, `average R`, MFE/MAE и confidence buckets не искажаются открытыми строками.
 
@@ -582,3 +582,28 @@ node --check frontend/app.js
 ```
 
 В sandbox-проверке: `196 passed`.
+
+
+## V36 — frontend contract source and price actionability
+
+Ключевое изменение V36: торговый экран больше не использует research-rank как первичный источник карточек, если доступен `/api/recommendations/active`. Rank остаётся fallback-источником только при пустом или недоступном активном contract endpoint. Это устраняет рассинхрон, когда backend уже построил проверенный recommendation contract, а frontend показывал соседний исследовательский payload.
+
+Новые contract-поля:
+
+- `price_actionability` — серверный verdict по текущей цене (`actionable` / `blocked`) с причинами блокировки;
+- `entry_window` — допустимое окно вокруг entry, рассчитанное backend на базе ATR/entry;
+- `confidence_semantics` — явное указание, что `confidence_score` является инженерным скорингом, а не вероятностью прибыли.
+
+Новый endpoint:
+
+```text
+GET /api/recommendations/contract
+```
+
+Он публикует текущую версию contract, обязательные поля, допустимые статусы и правило фронта: отображать серверный contract, не пересчитывать финальную рекомендацию на клиенте.
+
+Apply the repeatable migration when updating an existing database:
+
+```bash
+psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v36_frontend_contract_source_and_price_actionability.sql
+```

@@ -9,7 +9,7 @@ from .config import settings
 DIRECTION_LONG = "long"
 DIRECTION_SHORT = "short"
 DIRECTION_NO_TRADE = "no_trade"
-RECOMMENDATION_CONTRACT_VERSION = "recommendation_v35"
+RECOMMENDATION_CONTRACT_VERSION = "recommendation_v36"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
 NON_ENTRY_ACTIONS = {"NO_TRADE", "WAIT"}
 
@@ -161,6 +161,69 @@ def price_freshness(row: dict[str, Any], expires_at: datetime | None, levels: di
         "price_drift_pct": drift_pct,
         "entry_zone_pct": entry_zone_pct,
         "is_stale": stale,
+    }
+
+
+def price_actionability(
+    price: dict[str, Any],
+    status: str,
+    levels: dict[str, Any],
+    expires_at: datetime | None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Server-side gate that tells the UI whether the current price is still usable.
+
+    The frontend must not infer tradability from raw direction/entry/SL/TP.  This
+    payload is the canonical actionability decision: valid levels, non-expired
+    TTL and current price inside the server-defined entry window are required.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    entry = finite(levels.get("entry"))
+    last_price = finite(price.get("last_price"))
+    zone_pct = finite(price.get("entry_zone_pct"), 0.0025) or 0.0025
+    entry_window = None
+    if entry is not None and entry > 0:
+        entry_window = {
+            "low": entry * (1.0 - zone_pct),
+            "high": entry * (1.0 + zone_pct),
+            "pct": zone_pct,
+        }
+
+    reasons: list[str] = []
+    if not levels.get("valid"):
+        reasons.append(str(levels.get("reason") or "invalid_levels"))
+    if expires_at is None:
+        reasons.append("missing_expiry")
+    elif expires_at < now:
+        reasons.append("expired")
+    if price.get("is_stale"):
+        reasons.append("stale_data")
+    price_status = str(price.get("price_status") or "unknown")
+    if price_status == "unknown":
+        reasons.append("price_unknown")
+    elif price_status == "moved_away":
+        reasons.append("price_moved_away")
+    elif price_status not in {"entry_zone", "extended"}:
+        reasons.append(f"price_{price_status}")
+    if status != "review_entry":
+        reasons.append(f"status_{status}")
+
+    is_actionable = not reasons
+    return {
+        "status": "actionable" if is_actionable else "blocked",
+        "is_price_actionable": is_actionable,
+        "reason": None if is_actionable else reasons[0],
+        "reasons": reasons,
+        "last_price": last_price,
+        "price_status": price_status,
+        "price_drift_pct": price.get("price_drift_pct"),
+        "entry_window": entry_window,
+        "expires_at": to_iso(expires_at),
+        "checked_at": to_iso(now),
     }
 
 
@@ -506,6 +569,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
     explanation_text = explanation(row, status, trade_direction, levels, price)
     invalidation = invalidation_condition(trade_direction, levels, expires_at) if levels.get("valid") else "Вход запрещён: уровни сделки не прошли серверную проверку."
     sizing = execution_plan(levels)
+    price_gate = price_actionability(price, status, levels, expires_at, now=now)
     contract = {
         "contract_version": RECOMMENDATION_CONTRACT_VERSION,
         "recommendation_id": row.get("id"),
@@ -528,6 +592,9 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "entry_zone_pct": price.get("entry_zone_pct"),
         "last_price": price.get("last_price"),
         "last_price_time": price.get("last_price_time"),
+        "price_actionability": price_gate,
+        "entry_window": price_gate.get("entry_window"),
+        "confidence_semantics": "engineering_score_not_win_probability",
         "invalidation_condition": invalidation,
         "recommendation_explanation": explanation_text,
         "factors_for": factors_for,
@@ -539,7 +606,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "trading_signals": trading_signals(row),
         "next_actions": next_actions(status, trade_direction, price),
         "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing},
-        "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price.get("price_status") in {"entry_zone", "extended"},
+        "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price_gate.get("is_price_actionable") is True,
         "no_trade_reason": ("price_moved_away" if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
     }
     return {**row, **contract, "recommendation": contract}
@@ -577,6 +644,20 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "price_status": "no_setup",
         "last_price": None,
         "last_price_time": None,
+        "price_actionability": {
+            "status": "blocked",
+            "is_price_actionable": False,
+            "reason": "no_active_recommendation",
+            "reasons": ["no_active_recommendation"],
+            "last_price": None,
+            "price_status": "no_setup",
+            "price_drift_pct": None,
+            "entry_window": None,
+            "expires_at": None,
+            "checked_at": to_iso(as_of),
+        },
+        "entry_window": None,
+        "confidence_semantics": "engineering_score_not_win_probability",
         "invalidation_condition": "Нет валидного торгового сетапа: вход запрещён до появления свежей рекомендации с entry, SL, TP и сроком актуальности.",
         "recommendation_explanation": reason,
         "factors_for": [],

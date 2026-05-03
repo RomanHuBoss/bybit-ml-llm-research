@@ -108,7 +108,7 @@ def test_frontend_renders_canonical_recommendation_contract_fields():
     css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
     for fragment in [
-        "const contract = s.recommendation || s",
+        "const contract = contractFor(s)",
         "contract.trade_direction",
         "contract.recommended_action",
         "contract.expires_at",

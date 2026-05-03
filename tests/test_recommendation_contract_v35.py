@@ -23,8 +23,8 @@ def test_v35_contract_version_and_terminal_outcome_payload():
     )
     contract = item["recommendation"]
 
-    assert RECOMMENDATION_CONTRACT_VERSION == "recommendation_v35"
-    assert contract["contract_version"] == "recommendation_v35"
+    assert RECOMMENDATION_CONTRACT_VERSION == "recommendation_v36"
+    assert contract["contract_version"] == "recommendation_v36"
     assert contract["outcome"]["status"] == "hit_take_profit"
     assert contract["outcome"]["is_terminal"] is True
     assert contract["outcome"]["realized_r"] == 1.8

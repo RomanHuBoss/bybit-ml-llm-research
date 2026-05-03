@@ -313,7 +313,7 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "stale": stale,
         "moved_away": moved_away,
         "contract": RECOMMENDATION_CONTRACT_VERSION,
-        "previous_contract": "recommendation_v34",
+        "previous_contract": "recommendation_v35",
     }
 
 
@@ -347,6 +347,29 @@ def _market_state_for_recommendations(*, payload_ok: bool, recommendations: list
         "as_of": datetime.now(timezone.utc).isoformat(),
         "summary": summary,
         "explanation": explanation,
+    }
+
+
+def _recommendation_contract_metadata() -> dict[str, Any]:
+    return {
+        "version": RECOMMENDATION_CONTRACT_VERSION,
+        "active_endpoint": "/api/recommendations/active",
+        "detail_endpoint": "/api/recommendations/{signal_id}",
+        "history_endpoint": "/api/recommendations/history",
+        "quality_endpoint": "/api/recommendations/quality",
+        "frontend_source_of_truth": "recommendations_active",
+        "fallback_source": "rank_candidates_only_when_active_endpoint_empty_or_unavailable",
+        "confidence_semantics": "confidence_score is an engineering setup score, not an exact win probability",
+        "allowed_directions": ["long", "short", "no_trade"],
+        "allowed_statuses": ["review_entry", "research_candidate", "wait", "blocked", "expired", "invalid", "missed_entry"],
+        "allowed_price_statuses": ["entry_zone", "extended", "moved_away", "stale", "unknown", "no_setup"],
+        "required_recommendation_fields": [
+            "symbol", "trade_direction", "entry", "stop_loss", "take_profit",
+            "risk_pct", "expected_reward_pct", "risk_reward", "confidence_score",
+            "expires_at", "recommendation_explanation", "signal_breakdown",
+            "price_actionability",
+        ],
+        "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction on the client",
     }
 
 
@@ -787,6 +810,7 @@ def status() -> dict[str, Any]:
             "market_microstructure": settings.use_market_sentiment,
             "cryptopanic": bool(settings.use_cryptopanic and settings.cryptopanic_token),
         },
+        "recommendation_contract": _recommendation_contract_metadata(),
         "live_trading": False,
     }
 
@@ -1505,6 +1529,11 @@ def api_recalculate_recommendations(req: SignalBuildRequest) -> dict[str, Any]:
     # Public trading contract alias for the existing signal builder. It preserves
     # `/api/signals/build` but gives the UI a recommendation-oriented command name.
     return build_signals(req)
+
+
+@router.get("/recommendations/contract")
+def api_recommendation_contract() -> dict[str, Any]:
+    return {"ok": True, "contract": _recommendation_contract_metadata()}
 
 
 @router.get("/recommendations/{signal_id}")

@@ -394,19 +394,40 @@ function riskRewardFmt(rr) {
   return rr && Number.isFinite(rr.ratio) ? rr.ratio.toFixed(2) : '—';
 }
 
+function contractFor(s) {
+  return s?.recommendation && typeof s.recommendation === 'object' ? s.recommendation : (s || {});
+}
+
+function contractValue(s, key) {
+  const contract = contractFor(s);
+  return contract?.[key] ?? s?.[key];
+}
+
+function tradeDirectionFor(s) {
+  const direction = contractValue(s, 'trade_direction') || s?.trade_direction || s?.direction || 'no_trade';
+  return String(direction).toLowerCase();
+}
+
+function confidenceScoreFor(s) {
+  const serverScore = num(contractValue(s, 'confidence_score'), null);
+  if (serverScore !== null) return Math.round(Math.max(0, Math.min(100, serverScore)));
+  const raw = num(s?.confidence, null);
+  return raw === null ? null : Math.round(Math.max(0, Math.min(100, raw * 100)));
+}
+
 function currentPrice(s) {
   // API не всегда отдаёт отдельный last_price. Для decision-панели безопаснее
   // показать известный reference price, чем подставлять ноль и создавать ложную точность.
-  return num(s?.last_price, null)
+  return num(contractValue(s, 'last_price'), null)
     ?? num(s?.mark_price, null)
     ?? num(s?.close, null)
-    ?? num(s?.entry, null);
+    ?? num(contractValue(s, 'entry'), null);
 }
 
 function expectedMoveText(s) {
-  const entry = num(s?.entry, null);
-  const target = num(s?.take_profit, null);
-  const direction = String(s?.direction || '').toLowerCase();
+  const entry = num(contractValue(s, 'entry'), null);
+  const target = num(contractValue(s, 'take_profit'), null);
+  const direction = tradeDirectionFor(s);
   if (!entry || !target || !['long', 'short'].includes(direction)) return 'move —';
   const move = direction === 'long' ? (target - entry) / entry : (entry - target) / entry;
   return `до TP ${pct(move, 2)}`;
@@ -434,13 +455,13 @@ function renderDecisionTelemetry(s, d) {
   }
   const veto = hardVetoSummary(s);
   const rr = riskReward(s);
-  const fresh = s.fresh === true ? 'fresh' : s.fresh === false ? 'stale' : (s.data_status || 'unknown');
+  const fresh = contractValue(s, 'price_status') || (s.fresh === true ? 'fresh' : s.fresh === false ? 'stale' : (s.data_status || 'unknown'));
   panel.className = `decision-telemetry ${cssToken(d?.level, 'reject')} ${cssToken(veto.tone, 'neutral')}`;
   setText('telemetryPrice', priceFmt(currentPrice(s)));
   setText('telemetryMove', `${expectedMoveText(s)} · ATR ${priceFmt(s.atr)}`);
-  setText('telemetryEntry', priceFmt(s.entry));
-  setText('telemetryStop', priceFmt(s.stop_loss));
-  setText('telemetryTake', priceFmt(s.take_profit));
+  setText('telemetryEntry', priceFmt(contractValue(s, 'entry')));
+  setText('telemetryStop', priceFmt(contractValue(s, 'stop_loss')));
+  setText('telemetryTake', priceFmt(contractValue(s, 'take_profit')));
   setText('telemetryFreshness', fresh === 'fresh' ? 'fresh' : fresh === 'stale' ? 'stale' : String(fresh));
   setText('telemetryDataStatus', `${ageText(s.bar_closed_at || s.created_at)} · liq ${s.liquidity_status || 'unknown'}`);
   setText('telemetryVeto', d?.level === 'review' && veto.tone !== 'error' ? 'clear' : veto.label);
@@ -456,7 +477,7 @@ function updateTopContext(s) {
 function renderDecisionMeters(s, d) {
   const rr = riskReward(s);
   const levelIssue = levelsProblem(s);
-  const confidence = num(s?.confidence, null);
+  const confidenceScore = confidenceScoreFor(s);
   const serverRisk = num(s?.operator_risk_score, null);
   const riskValue = s ? (serverRisk !== null ? Math.round(Math.max(0, Math.min(100, serverRisk))) : Math.round(Math.min(100, Math.max(0,
     (levelIssue ? 35 : 0)
@@ -466,10 +487,10 @@ function renderDecisionMeters(s, d) {
     + (decisionFor(s).level === 'reject' ? 18 : decisionFor(s).level === 'watch' ? 8 : 0)
   )))) : 0;
   const rrValue = rr ? Math.min(100, Math.round((rr.ratio / 3) * 100)) : 0;
-  setText('confidenceMeterValue', confidence === null ? '—' : pct(confidence, 0));
+  setText('confidenceMeterValue', confidenceScore === null ? '—' : `${confidenceScore}%`);
   setText('riskMeterValue', s ? `${riskValue}/100` : '—');
   setText('rrMeterValue', rr ? rr.ratio.toFixed(2) : '—');
-  setMeter('.confidence-meter', 'confidenceMeterBar', confidence === null ? 0 : confidence * 100, confidence >= 0.62 ? 'good' : confidence >= 0.54 ? 'warn' : 'bad');
+  setMeter('.confidence-meter', 'confidenceMeterBar', confidenceScore === null ? 0 : confidenceScore, confidenceScore !== null && confidenceScore >= 62 ? 'good' : confidenceScore !== null && confidenceScore >= 54 ? 'warn' : 'bad');
   setMeter('.risk-meter', 'riskMeterBar', riskValue, riskValue <= 35 ? 'good' : riskValue <= 62 ? 'warn' : 'bad');
   setMeter('.risk-reward-card', 'rrMeterBar', rrValue, rr && rr.ratio >= 1.55 ? 'good' : rr && rr.ratio >= 1.15 ? 'warn' : 'bad');
 }
@@ -484,14 +505,17 @@ function renderExecutionMap(s) {
   }
   const rr = riskReward(s);
   const levelIssue = levelsProblem(s);
-  const direction = String(s.direction || 'flat').toUpperCase();
-  box.className = `execution-map ${cssToken(s.direction, 'neutral')} ${levelIssue ? 'invalid-levels' : ''}`;
+  const direction = tradeDirectionFor(s);
+  const displayDirection = contractValue(s, 'display_direction') || direction.toUpperCase();
+  const priceGate = contractValue(s, 'price_actionability') || {};
+  box.className = `execution-map ${cssToken(direction, 'neutral')} ${levelIssue ? 'invalid-levels' : ''} ${priceGate.is_price_actionable === false ? 'price-blocked' : ''}`;
   box.innerHTML = `
-    <div class="execution-level entry"><span>Entry · ${escapeHtml(direction)}</span><strong>${priceFmt(s.entry)}</strong></div>
-    <div class="execution-level stop"><span>Stop-loss</span><strong>${priceFmt(s.stop_loss)}</strong></div>
-    <div class="execution-level take"><span>Take-profit</span><strong>${priceFmt(s.take_profit)}</strong></div>
+    <div class="execution-level entry"><span>Entry · ${escapeHtml(displayDirection)}</span><strong>${priceFmt(contractValue(s, 'entry'))}</strong></div>
+    <div class="execution-level stop"><span>Stop-loss</span><strong>${priceFmt(contractValue(s, 'stop_loss'))}</strong></div>
+    <div class="execution-level take"><span>Take-profit</span><strong>${priceFmt(contractValue(s, 'take_profit'))}</strong></div>
     <div class="execution-level rr"><span>Risk / Reward</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>
-    ${levelIssue ? `<div class="execution-level invalid"><span>Проверка уровней</span><strong>${escapeHtml(levelsProblemText(levelIssue))}</strong></div>` : ''}`;
+    ${levelIssue ? `<div class="execution-level invalid"><span>Проверка уровней</span><strong>${escapeHtml(levelsProblemText(levelIssue))}</strong></div>` : ''}
+    ${priceGate.reason ? `<div class="execution-level invalid"><span>Price gate</span><strong>${escapeHtml(priceGate.reason)}</strong></div>` : ''}`;
 }
 
 function showOperationStatus(message, tone = 'neutral') {
@@ -545,10 +569,13 @@ function enrichedSignal(signal) {
 }
 
 function levelsProblem(s) {
-  const entry = num(s?.entry);
-  const stop = num(s?.stop_loss);
-  const target = num(s?.take_profit);
-  const direction = String(s?.direction || '').toLowerCase();
+  const contract = contractFor(s);
+  if (contract.level_validation?.valid === true) return null;
+  if (contract.level_validation?.valid === false) return contract.level_validation.reason || 'invalid_levels';
+  const entry = num(contractValue(s, 'entry'));
+  const stop = num(contractValue(s, 'stop_loss'));
+  const target = num(contractValue(s, 'take_profit'));
+  const direction = tradeDirectionFor(s);
   if (entry === null || stop === null || target === null || entry <= 0) return 'missing_levels';
   if (direction === 'long' && !(stop < entry && entry < target)) return 'long_levels_not_ordered';
   if (direction === 'short' && !(target < entry && entry < stop)) return 'short_levels_not_ordered';
@@ -557,11 +584,19 @@ function levelsProblem(s) {
 }
 
 function riskReward(s) {
-  // UI не должен показывать красивый R/R, если SL/TP перепутаны относительно LONG/SHORT.
+  // Основной источник математики — серверный recommendation contract.
+  const contract = contractFor(s);
+  const serverRatio = num(contract.risk_reward, null);
+  const serverRisk = num(contract.risk_pct, null);
+  const serverReward = num(contract.expected_reward_pct, null);
+  if (contract.level_validation?.valid !== false && serverRatio !== null && serverRatio > 0 && serverRisk !== null && serverRisk > 0 && serverReward !== null && serverReward > 0) {
+    return { ratio: serverRatio, riskPct: serverRisk, rewardPct: serverReward, source: 'server_contract' };
+  }
+  // Legacy fallback только для старых /signals/latest при отказе основного endpoint.
   if (levelsProblem(s)) return null;
-  const entry = num(s?.entry);
-  const stop = num(s?.stop_loss);
-  const target = num(s?.take_profit);
+  const entry = num(contractValue(s, 'entry'));
+  const stop = num(contractValue(s, 'stop_loss'));
+  const target = num(contractValue(s, 'take_profit'));
   const risk = Math.abs(entry - stop);
   const reward = Math.abs(target - entry);
   if (risk <= 0 || reward <= 0) return null;
@@ -569,6 +604,7 @@ function riskReward(s) {
     ratio: reward / risk,
     riskPct: risk / entry,
     rewardPct: reward / entry,
+    source: 'legacy_fallback',
   };
 }
 
@@ -578,6 +614,7 @@ function levelsProblemText(code) {
     long_levels_not_ordered: 'для LONG требуется SL < entry < TP',
     short_levels_not_ordered: 'для SHORT требуется TP < entry < SL',
     invalid_direction: 'направление не является LONG/SHORT',
+    invalid_levels: 'сервер отклонил уровни сделки',
   }[code] || 'уровни не прошли проверку';
 }
 
@@ -1242,7 +1279,7 @@ function algorithmDecisionFor(s) {
 
   // Серверный recommendation contract является каноническим: frontend не
   // пересчитывает торговое решение, а только отображает уже проверенные поля.
-  const contract = s.recommendation || s;
+  const contract = contractFor(s);
   const contractStatus = String(contract.recommendation_status || '').toLowerCase();
   if (contractStatus) {
     const statusMap = {
@@ -1503,12 +1540,14 @@ function dedupeCandidatesByMarket(items) {
   return Array.from(bestByMarket.values());
 }
 
+function activeRecommendationSource() {
+  // Канонический источник для торгового экрана — /api/recommendations/active.
+  // Research rank используется только как fallback, если активный контракт пуст или недоступен.
+  return state.signals.length ? state.signals.map(enrichedSignal) : state.rank.map(withLlmFields);
+}
+
 function candidates() {
-  // rank is the canonical operator queue: it already contains MTF, liquidity,
-  // backtest, ML and LLM joins. Raw /signals/latest is only a fallback while
-  // rank is unavailable; otherwise it can show "MTF: не рассчитан" for rows
-  // that simply were not enriched on the frontend side.
-  const source = state.rank.length ? state.rank.map(withLlmFields) : state.signals.map(enrichedSignal);
+  const source = activeRecommendationSource();
   const mapped = source
     .filter(isEntryRecommendation)
     .map((item) => ({ ...withLlmFields(item), decision: decisionFor(item) }));
@@ -1723,8 +1762,8 @@ function renderTicket(s) {
   }
   const rr = riskReward(s);
   const llmVerdict = llmVerdictFor(s);
-  const contract = s.recommendation || s;
-  const tradeDirection = contract.trade_direction || s.trade_direction || s.direction || 'no_trade';
+  const contract = contractFor(s);
+  const tradeDirection = tradeDirectionFor(s);
   const displayDirection = contract.display_direction || String(tradeDirection || 'NO_TRADE').toUpperCase();
   const directionClass = tradeDirection === 'long' ? 'long' : tradeDirection === 'short' ? 'short' : 'no-trade';
   $('ticketTitle').textContent = `${s.symbol} · ${s.interval || '—'} · ${displayDirection} · ${STRATEGY_LABELS[s.strategy] || s.strategy || 'стратегия'}`;
@@ -1733,9 +1772,9 @@ function renderTicket(s) {
     <div class="ticket-main">
       <div class="metric direction ${directionClass}"><span>Trade direction</span><strong>${escapeHtml(displayDirection)}</strong></div>
       <div class="metric"><span>Action</span><strong>${escapeHtml(contract.recommended_action || s.operator_label || 'WAIT')}</strong></div>
-      <div class="metric"><span>Entry</span><strong>${priceFmt(s.entry)}</strong></div>
-      <div class="metric"><span>Stop-loss</span><strong>${priceFmt(s.stop_loss)}</strong></div>
-      <div class="metric"><span>Take-profit</span><strong>${priceFmt(s.take_profit)}</strong></div>
+      <div class="metric"><span>Entry</span><strong>${priceFmt(contractValue(s, 'entry'))}</strong></div>
+      <div class="metric"><span>Stop-loss</span><strong>${priceFmt(contractValue(s, 'stop_loss'))}</strong></div>
+      <div class="metric"><span>Take-profit</span><strong>${priceFmt(contractValue(s, 'take_profit'))}</strong></div>
       <div class="metric"><span>Risk до SL</span><strong>${pct(contract.risk_pct ?? rr?.riskPct, 2)}</strong></div>
       <div class="metric"><span>Потенциал до TP</span><strong>${pct(contract.expected_reward_pct ?? rr?.rewardPct, 2)}</strong></div>
       <div class="metric"><span>R/R</span><strong>${fmt(contract.risk_reward ?? rr?.ratio, 2)}</strong></div>
@@ -1752,6 +1791,10 @@ function renderTicket(s) {
     <div class="execution-plan recommendation-contract">
       <b>Исполнение:</b> ${escapeHtml(contract.recommendation_explanation || 'Только ручная проверка. Entry/SL/TP не являются торговым приказом; красный пункт отменяет сетап.')}
       <small><b>Отмена:</b> ${escapeHtml(contract.invalidation_condition || 'Сетап отменяется при hard veto, устаревании данных или уходе цены от entry-зоны.')}</small>
+    </div>
+    <div class="price-actionability ${escapeHtml(cssToken(contract.price_actionability?.status, 'blocked'))}">
+      <b>Price gate:</b> ${escapeHtml(contract.price_actionability?.is_price_actionable ? 'цена в допустимой зоне' : (contract.price_actionability?.reason || 'вход заблокирован'))}
+      <small>Окно entry: ${priceFmt(contract.entry_window?.low)} — ${priceFmt(contract.entry_window?.high)} · last ${priceFmt(contract.price_actionability?.last_price ?? contract.last_price)}</small>
     </div>
     <div class="recommendation-detail-grid">
       <section class="detail-card"><b>Почему появилось</b>${factorListHtml(contract.factors_for || [])}</section>
@@ -1861,7 +1904,7 @@ function renderQueue() {
   const selected = selectedCandidate();
   const selectedId = selected?.id;
   const selectedKey = candidateKey(selected);
-  const rawTotal = state.rank.length ? state.rank.filter(isEntryRecommendation).length : state.signals.filter(isEntryRecommendation).length;
+  const rawTotal = activeRecommendationSource().filter(isEntryRecommendation).length;
   queue.innerHTML = filtered.map((s) => {
     const isSelected = (selectedId !== undefined && selectedId !== null && Number(s.id) === Number(selectedId)) || candidateKey(s) === selectedKey;
     const cardKey = candidateKey(s);
@@ -1872,7 +1915,7 @@ function renderQueue() {
     const stabilityText = bool(s.direction_conflict) ? ' · конфликт LONG/SHORT' : hasNumber(s.operator_stability_score) ? ` · stable ${pct(s.operator_stability_score, 0)}` : '';
     const riskText = hasNumber(s.operator_risk_score) ? ` · risk ${Math.round(num(s.operator_risk_score, 0))}` : '';
     const variants = variantsCount > 1 ? ` · ${variantsCount} вариантов${stabilityText}${riskText}` : `${stabilityText}${riskText}`;
-    const contract = s.recommendation || s;
+    const contract = contractFor(s);
     const rr = contract.risk_reward ?? riskReward(s)?.ratio;
     const expires = compactDateTime(contract.expires_at || s.expires_at);
     const conf = contract.confidence_score !== undefined ? `${contract.confidence_score}%` : pct(s.confidence, 0);
@@ -1882,7 +1925,7 @@ function renderQueue() {
         <div class="candidate-copy">
           <span class="symbol">${escapeHtml(s.symbol)}</span>
           <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)} · ${escapeHtml(contract.price_status || s.data_status || 'fresh')}</span>
-          <span class="candidate-metrics">E ${priceFmt(s.entry)} · SL ${priceFmt(s.stop_loss)} · TP ${priceFmt(s.take_profit)} · R/R ${fmt(rr, 2)} · Conf ${escapeHtml(conf)} · TTL ${escapeHtml(expires)}</span>
+          <span class="candidate-metrics">E ${priceFmt(contractValue(s, 'entry'))} · SL ${priceFmt(contractValue(s, 'stop_loss'))} · TP ${priceFmt(contractValue(s, 'take_profit'))} · R/R ${fmt(rr, 2)} · Conf ${escapeHtml(conf)} · TTL ${escapeHtml(expires)}</span>
         </div>
         <span class="badge ${decisionLevel}" title="${label}" aria-label="${label}">${compactLabel}</span>
         <span class="candidate-score">${s.decision.score}</span>
@@ -1925,7 +1968,7 @@ function renderRawTable(list = candidates()) {
   const rows = sortedRawRows(list);
   updateRawTableSortHeaders();
   body.innerHTML = rows.map((s) => {
-    const contract = s.recommendation || s;
+    const contract = contractFor(s);
     const rr = contract.risk_reward !== undefined && contract.risk_reward !== null ? { ratio: num(contract.risk_reward, null) } : riskReward(s);
     return `<tr class="dir-${cssToken(contract.trade_direction || s.direction, 'flat')} ${bool(s.direction_conflict) ? 'conflict-row' : ''}">
       <td>${escapeHtml(s.decision.label)}</td>
@@ -1933,9 +1976,9 @@ function renderRawTable(list = candidates()) {
       <td>${escapeHtml(mtfLabel(s))}</td>
       <td>${escapeHtml(s.symbol)}</td>
       <td>${escapeHtml(s.interval || '—')}</td>
-      <td>${escapeHtml(String(s.direction || 'flat').toUpperCase())}</td>
+      <td>${escapeHtml(String(contract.display_direction || contract.trade_direction || s.direction || 'flat').toUpperCase())}</td>
       <td>${escapeHtml(s.strategy || '—')}</td>
-      <td>${pct(s.confidence, 0)}</td>
+      <td>${confidenceScoreFor(s) === null ? '—' : `${confidenceScoreFor(s)}%`}</td>
       <td>${rr ? rr.ratio.toFixed(2) : '—'}</td>
       <td>${fmt(s.profit_factor, 2)}</td>
       <td>${pct(s.max_drawdown, 1)}</td>
