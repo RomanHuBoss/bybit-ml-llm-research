@@ -340,6 +340,130 @@ def signal_breakdown(row: dict[str, Any], levels: dict[str, Any], price: dict[st
     }
 
 
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return []
+    return [value]
+
+
+def statistics_confidence(row: dict[str, Any]) -> dict[str, Any]:
+    trades = finite(row.get("trades_count"), 0.0) or 0.0
+    wf_windows = finite(row.get("walk_forward_windows"), 0.0) or 0.0
+    quality = str(row.get("quality_status") or "RESEARCH").upper()
+    if trades >= 100 and wf_windows >= 3 and quality == "APPROVED":
+        level = "high"
+    elif trades >= 30 and quality in {"APPROVED", "WATCHLIST"}:
+        level = "medium"
+    elif trades > 0:
+        level = "low"
+    else:
+        level = "none"
+    if level in {"none", "low"}:
+        explanation = f"Историческая выборка по похожим сигналам мала: {int(trades)} сделок. Это снижает статистическую уверенность и не должно маскироваться фразой 'бэктест слабый'."
+    elif level == "medium":
+        explanation = f"Историческая выборка умеренная: {int(trades)} сделок; качество стратегии и качество конкретного сигнала учитываются раздельно."
+    else:
+        explanation = f"Историческая выборка достаточная для рабочего контроля: {int(trades)} сделок и walk-forward окон {int(wf_windows)}."
+    return {
+        "level": level,
+        "trades_count": int(trades),
+        "walk_forward_windows": int(wf_windows),
+        "profit_factor": finite(row.get("profit_factor")),
+        "win_rate": finite(row.get("win_rate")),
+        "expectancy": finite(row.get("expectancy")),
+        "max_drawdown": finite(row.get("max_drawdown")),
+        "explanation": explanation,
+    }
+
+
+def timeframes_used(row: dict[str, Any]) -> list[dict[str, Any]]:
+    rationale = row.get("rationale") if isinstance(row.get("rationale"), dict) else {}
+    raw = _as_list(rationale.get("timeframes_used") or rationale.get("timeframes") or row.get("timeframes_used"))
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            tf = str(item.get("interval") or item.get("timeframe") or "").strip()
+            if tf:
+                out.append({"interval": tf, "role": str(item.get("role") or "context"), "status": str(item.get("status") or "used")})
+        else:
+            tf = str(item).strip()
+            if tf:
+                out.append({"interval": tf, "role": "context", "status": "used"})
+    current = str(row.get("interval") or "").strip()
+    if current and not any(item.get("interval") == current for item in out):
+        out.insert(0, {"interval": current, "role": "entry", "status": "used"})
+    for key, role in (("mtf_bias_interval", "bias"), ("mtf_regime_interval", "regime")):
+        value = row.get(key) or rationale.get(key)
+        if value and not any(item.get("interval") == str(value) for item in out):
+            out.append({"interval": str(value), "role": role, "status": "used"})
+    return out
+
+
+def indicator_values(row: dict[str, Any]) -> dict[str, Any]:
+    rationale = row.get("rationale") if isinstance(row.get("rationale"), dict) else {}
+    source = rationale.get("indicators") if isinstance(rationale.get("indicators"), dict) else rationale
+    allowed = (
+        "rsi", "ema_fast", "ema_slow", "ema_20", "ema_50", "ema_200", "atr", "adx",
+        "bb_width", "bb_position", "funding_rate", "open_interest", "volume_zscore",
+        "trend_score", "volatility_score", "sentiment_score", "ml_probability",
+    )
+    out: dict[str, Any] = {}
+    for key in allowed:
+        value = row.get(key, source.get(key) if isinstance(source, dict) else None)
+        parsed = finite(value)
+        if parsed is not None:
+            out[key] = parsed
+    if finite(row.get("atr")) is not None:
+        out.setdefault("atr", finite(row.get("atr")))
+    if finite(row.get("sentiment_score")) is not None:
+        out.setdefault("sentiment_score", finite(row.get("sentiment_score")))
+    if finite(row.get("ml_probability")) is not None:
+        out.setdefault("ml_probability", finite(row.get("ml_probability")))
+    return out
+
+
+def trading_signals(row: dict[str, Any]) -> list[dict[str, str]]:
+    rationale = row.get("rationale") if isinstance(row.get("rationale"), dict) else {}
+    raw = rationale.get("signal_breakdown") or rationale.get("votes") or row.get("trading_signals") or []
+    out: list[dict[str, str]] = []
+    if isinstance(raw, dict):
+        raw = raw.items()
+    for item in list(raw)[:12] if isinstance(raw, list) else list(raw)[:12]:
+        if isinstance(item, dict):
+            out.append({
+                "name": str(item.get("name") or item.get("code") or item.get("title") or "signal"),
+                "direction": str(item.get("direction") or row.get("direction") or "flat"),
+                "timeframe": str(item.get("timeframe") or item.get("interval") or row.get("interval") or ""),
+                "impact": str(item.get("impact") or item.get("weight") or item.get("score") or ""),
+                "explanation": str(item.get("explanation") or item.get("detail") or item.get("text") or ""),
+            })
+        elif isinstance(item, tuple) and len(item) == 2:
+            out.append({"name": str(item[0]), "direction": str(row.get("direction") or "flat"), "timeframe": str(row.get("interval") or ""), "impact": str(item[1]), "explanation": ""})
+        else:
+            out.append({"name": str(item), "direction": str(row.get("direction") or "flat"), "timeframe": str(row.get("interval") or ""), "impact": "", "explanation": ""})
+    if not out:
+        out.append({"name": str(row.get("strategy") or "strategy"), "direction": str(row.get("direction") or "flat"), "timeframe": str(row.get("interval") or ""), "impact": str(row.get("confidence") or ""), "explanation": "Финальная рекомендация собрана из серверной стратегии, MTF, качества данных и risk gate."})
+    return out
+
+
+def next_actions(status: str, trade_direction: str, price: dict[str, Any]) -> list[dict[str, str]]:
+    if status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT}:
+        return [
+            {"action": "manual_review", "label": "Открыть ручной разбор", "detail": "Проверить стакан, spread, актуальность entry и размер позиции до любой сделки."},
+            {"action": "wait_confirmation", "label": "Ждать подтверждения", "detail": "Использовать при неполном MTF/сомнительной цене; рекомендация остается advisory-only."},
+            {"action": "close_invalidated", "label": "Закрыть как неактуальную", "detail": "Использовать при уходе цены, hard veto или истечении TTL."},
+        ]
+    if status == "missed_entry":
+        return [{"action": "wait_confirmation", "label": "Не догонять цену", "detail": "Ждать ретеста entry-зоны или пересчитать рекомендации."}]
+    if status in {"expired", "invalid"}:
+        return [{"action": "recalculate", "label": "Пересчитать", "detail": "Старый/невалидный контракт нельзя использовать для входа."}]
+    return [{"action": "skip", "label": "Пропустить", "detail": "NO_TRADE является нормальным защитным состоянием системы."}]
+
+
 def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     levels = validate_trade_levels(row.get("direction"), row.get("entry"), row.get("stop_loss"), row.get("take_profit"))
     expires_at = recommendation_expires_at(row, now=now)
@@ -385,6 +509,11 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "recommendation_explanation": explanation_text,
         "factors_for": factors_for,
         "factors_against": factors_against,
+        "statistics_confidence": statistics_confidence(row),
+        "timeframes_used": timeframes_used(row),
+        "indicator_values": indicator_values(row),
+        "trading_signals": trading_signals(row),
+        "next_actions": next_actions(status, trade_direction, price),
         "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing},
         "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price.get("price_status") in {"entry_zone", "extended", "unknown"},
         "no_trade_reason": ("price_moved_away" if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),

@@ -27,6 +27,7 @@ const state = {
   contextIntervals: ['60', '240'],
   rawSort: { key: 'score', dir: 'desc' },
   lastOperatorAction: null,
+  marketState: null,
 };
 
 const STRATEGY_LABELS = {
@@ -1016,6 +1017,10 @@ function baseChecklistFor(s) {
 }
 
 function noSignalExplanation() {
+  const market = state.marketState || {};
+  if (market.explanation) {
+    return market.explanation;
+  }
   const desk = state.tradingDiagnostics || {};
   if (desk.desk_status === 'NO_REVIEW' && desk.total_candidates > 0) {
     const quality = desk.by_quality || {};
@@ -1534,6 +1539,32 @@ function renderDecision() {
   syncEquitySelectionNote(s);
 }
 
+function factorListHtml(items) {
+  if (!Array.isArray(items) || !items.length) return '<p class="muted-line">Нет явных факторов в серверном контракте.</p>';
+  return `<ul>${items.slice(0, 8).map((item) => `<li><b>${escapeHtml(item.title || item.code || 'factor')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ul>`;
+}
+
+function timeframeListHtml(items) {
+  if (!Array.isArray(items) || !items.length) return '<p class="muted-line">Таймфреймы не переданы.</p>';
+  return `<div class="tf-pill-row">${items.map((item) => `<span class="tf-pill">${escapeHtml(item.interval || '—')} · ${escapeHtml(item.role || 'context')} · ${escapeHtml(item.status || 'used')}</span>`).join('')}</div>`;
+}
+
+function statisticsConfidenceHtml(stats) {
+  if (!stats) return '<p class="muted-line">Статистика качества пока недоступна.</p>';
+  return `<p><b>${escapeHtml(String(stats.level || 'unknown').toUpperCase())}</b> · ${fmt(stats.trades_count, 0)} сделок · PF ${fmt(stats.profit_factor, 2)} · WR ${pct(stats.win_rate, 0)} · DD ${pct(stats.max_drawdown, 1)}</p><small>${escapeHtml(stats.explanation || 'Confidence не является вероятностью прибыли.')}</small>`;
+}
+
+function indicatorValuesHtml(values) {
+  const entries = Object.entries(values || {}).filter(([, value]) => value !== null && value !== undefined);
+  if (!entries.length) return '<p class="muted-line">Сырые индикаторы не переданы; см. signal_breakdown.</p>';
+  return `<div class="indicator-chip-row">${entries.slice(0, 16).map(([key, value]) => `<span class="indicator-chip">${escapeHtml(key)} ${fmt(value, 4)}</span>`).join('')}</div>`;
+}
+
+function nextActionsHtml(items) {
+  if (!Array.isArray(items) || !items.length) return '<p class="muted-line">Следующее действие не передано.</p>';
+  return `<ol>${items.map((item) => `<li><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
+}
+
 function renderTicket(s) {
   if (!s) {
     $('ticketTitle').textContent = 'Сетап не выбран';
@@ -1572,6 +1603,14 @@ function renderTicket(s) {
     <div class="execution-plan recommendation-contract">
       <b>Исполнение:</b> ${escapeHtml(contract.recommendation_explanation || 'Только ручная проверка. Entry/SL/TP не являются торговым приказом; красный пункт отменяет сетап.')}
       <small><b>Отмена:</b> ${escapeHtml(contract.invalidation_condition || 'Сетап отменяется при hard veto, устаревании данных или уходе цены от entry-зоны.')}</small>
+    </div>
+    <div class="recommendation-detail-grid">
+      <section class="detail-card"><b>Почему появилось</b>${factorListHtml(contract.factors_for || [])}</section>
+      <section class="detail-card warn"><b>Что против сделки</b>${factorListHtml(contract.factors_against || [])}</section>
+      <section class="detail-card"><b>Таймфреймы</b>${timeframeListHtml(contract.timeframes_used || [])}</section>
+      <section class="detail-card"><b>Выборка качества</b>${statisticsConfidenceHtml(contract.statistics_confidence)}</section>
+      <section class="detail-card wide"><b>Индикаторы</b>${indicatorValuesHtml(contract.indicator_values || {})}</section>
+      <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>
     </div>
     <div class="ticket-operator-actions" aria-label="Действия оператора">
       <button type="button" class="secondary small" data-operator-action="manual_review">Взять в разбор</button>
@@ -1850,8 +1889,17 @@ async function refreshRank() {
 }
 
 async function refreshSignals() {
-  const data = await api(`/api/signals/latest?category=${encodeURIComponent($('category').value)}&limit=80&entry_only=true`);
-  state.signals = data.signals || [];
+  try {
+    const data = await api(`/api/recommendations/active?category=${encodeURIComponent($('category').value)}&limit=80&entry_only=true`);
+    state.marketState = data.market_state || null;
+    state.signals = data.recommendations || [];
+    state.entryInterval = data.entry_interval || state.entryInterval || '15';
+  } catch (error) {
+    log(`WARN recommendations/active unavailable, fallback to signals/latest: ${error.message}`);
+    const data = await api(`/api/signals/latest?category=${encodeURIComponent($('category').value)}&limit=80&entry_only=true`);
+    state.marketState = { status: 'fallback', explanation: 'Основной recommendation endpoint недоступен; UI показывает legacy signals/latest без расширенного market_state.' };
+    state.signals = data.signals || [];
+  }
   preserveSelectedCandidate();
   renderQueue();
 }

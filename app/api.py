@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DeferredAPIRouter:
@@ -151,7 +152,19 @@ def _sentiment_summary(*args, **kwargs):
     return sentiment_summary(*args, **kwargs)
 
 
-class MarketSyncRequest(BaseModel):
+
+
+class StrictAPIModel(BaseModel):
+    """Base class for externally supplied API bodies.
+
+    Unknown fields are rejected so frontend/backend drift is visible immediately
+    instead of being silently ignored by Pydantic.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class MarketSyncRequest(StrictAPIModel):
     category: str = settings.default_category
     symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols), min_length=1)
     interval: str = settings.default_interval
@@ -159,7 +172,7 @@ class MarketSyncRequest(BaseModel):
     days: int = Field(default=90, ge=1, le=settings.max_sync_days)
 
 
-class SentimentSyncRequest(BaseModel):
+class SentimentSyncRequest(StrictAPIModel):
     symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols), min_length=1)
     days: int = Field(default=settings.sentiment_lookback_days, ge=1, le=60)
     use_llm: bool = False
@@ -168,14 +181,14 @@ class SentimentSyncRequest(BaseModel):
     intervals: list[str] | None = None
 
 
-class SignalBuildRequest(BaseModel):
+class SignalBuildRequest(StrictAPIModel):
     category: str = settings.default_category
     symbols: list[str] = Field(default_factory=lambda: list(settings.default_symbols), min_length=1)
     interval: str = settings.default_interval
     intervals: list[str] | None = None
 
 
-class BacktestRequest(BaseModel):
+class BacktestRequest(StrictAPIModel):
     category: str = settings.default_category
     symbol: str = "BTCUSDT"
     interval: str = settings.default_interval
@@ -183,26 +196,26 @@ class BacktestRequest(BaseModel):
     limit: int = Field(default=5000, ge=300, le=100000)
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(StrictAPIModel):
     category: str = settings.default_category
     symbol: str = "BTCUSDT"
     interval: str = settings.default_interval
     horizon_bars: int = Field(default=12, ge=1, le=240)
 
 
-class BriefRequest(BaseModel):
+class BriefRequest(StrictAPIModel):
     signal_id: int | None = None
     payload: dict[str, Any] | None = None
 
 
-class UniverseRequest(BaseModel):
+class UniverseRequest(StrictAPIModel):
     category: str = settings.default_category
     mode: str = settings.symbol_mode
     limit: int = Field(default=settings.universe_limit, ge=1, le=100)
     refresh: bool = True
 
 
-class OperatorActionRequest(BaseModel):
+class OperatorActionRequest(StrictAPIModel):
     action: Literal["skip", "wait_confirmation", "manual_review", "close_invalidated", "paper_opened"]
     notes: str | None = Field(default=None, max_length=2000)
     observed_price: float | None = Field(default=None, gt=0)
@@ -298,7 +311,41 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "by_status": counts,
         "stale": stale,
         "moved_away": moved_away,
-        "contract": "recommendation_v29",
+        "contract": "recommendation_v31",
+        "previous_contract": "recommendation_v29",
+    }
+
+
+
+
+def _market_state_for_recommendations(*, payload_ok: bool, recommendations: list[dict[str, Any]], error: str | None = None) -> dict[str, Any]:
+    """Explain active recommendation state without forcing UI to infer NO_TRADE from an empty list."""
+
+    summary = _recommendation_summary(recommendations)
+    if error:
+        status = "api_error"
+        explanation = f"Recommendation API degraded: {error}. Новые входы запрещены до восстановления backend/DB."
+    elif not payload_ok:
+        status = "unavailable"
+        explanation = "Recommendation API недоступен. Вход по умолчанию запрещён; проверьте PostgreSQL, миграции и фоновые задачи."
+    elif not recommendations:
+        status = "no_trade"
+        explanation = "Нет активных свежих рекомендаций. Это штатное NO_TRADE/WAIT-состояние: рынок может быть без валидного сетапа, данные могут ожидать синхронизацию или quality gate не дал REVIEW_ENTRY."
+    elif summary.get("actionable", 0) <= 0:
+        status = "no_actionable_trade"
+        explanation = "Сетапы есть, но ни один не прошёл серверный contract до actionable REVIEW_ENTRY. Оператор должен смотреть причины блокировки, а не открывать сделку."
+    elif summary.get("stale", 0) > 0:
+        status = "partially_stale"
+        explanation = "Часть рекомендаций построена на устаревшей цене. Перед входом требуется пересчёт или ручная проверка актуальности."
+    else:
+        status = "active"
+        explanation = "Есть рекомендации, прошедшие серверный advisory contract. Это не приказ на сделку: требуется ручная проверка цены, стакана, риска и условий отмены."
+    return {
+        "status": status,
+        "contract": "recommendation_v31",
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "summary": summary,
+        "explanation": explanation,
     }
 
 
@@ -1143,21 +1190,30 @@ def api_latest_quotes(symbols: str | None = None, category: str = settings.defau
 @router.get("/recommendations/active")
 def api_active_recommendations(limit: int = 50, category: str = settings.default_category, entry_only: bool = True) -> dict[str, Any]:
     try:
+        category = normalize_category(category)
         payload = latest_signals(limit=bounded_int(limit, "limit", 1, 500), entry_only=entry_only, category=category)
         recommendations = payload.get("signals", [])
+        market_state = _market_state_for_recommendations(
+            payload_ok=bool(payload.get("ok")),
+            recommendations=recommendations,
+            error=payload.get("error"),
+        )
         return {
             "ok": bool(payload.get("ok")),
             "category": payload.get("category", category),
             "entry_interval": payload.get("entry_interval", settings.mtf_entry_interval),
             "recommendations": recommendations,
-            "summary": _recommendation_summary(recommendations),
-            "empty_state": None if recommendations else "Нет активных свежих рекомендаций. Это штатное состояние NO_TRADE/WAIT: синхронизируйте рынок или дождитесь нового сетапа.",
+            "summary": market_state["summary"],
+            "market_state": market_state,
+            "empty_state": None if recommendations else market_state["explanation"],
             "error": payload.get("error"),
         }
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:
-        return {"ok": False, "category": category, "recommendations": [], "error": _read_error(exc)}
+        error = _read_error(exc)
+        market_state = _market_state_for_recommendations(payload_ok=False, recommendations=[], error=error)
+        return {"ok": False, "category": category, "recommendations": [], "summary": market_state["summary"], "market_state": market_state, "empty_state": market_state["explanation"], "error": error}
 
 
 @router.get("/recommendations/history")
@@ -1215,12 +1271,21 @@ def api_recommendation_quality(category: str = settings.default_category, interv
             """,
             tuple(params),
         ) or {}
+        evaluated = int(outcome.get("evaluated") or 0) if isinstance(outcome, dict) else 0
+        statistical_confidence = "low" if evaluated < 30 else "medium" if evaluated < 100 else "high"
+        assessment = {
+            "evaluated": evaluated,
+            "statistical_confidence": statistical_confidence,
+            "sample_warning": None if evaluated >= 30 else "Историческая выборка мала: качество стратегии и качество конкретного сигнала разделяются, риск должен быть снижен.",
+            "metric_semantics": "winrate/average_r/profit_factor описывают завершённые рекомендации; confidence_score не является вероятностью прибыли.",
+        }
         return {
             "ok": True,
             "category": category,
             "interval": interval_value,
             "strategy_quality": quality_summary(category),
             "recommendation_outcomes": outcome,
+            "quality_assessment": assessment,
             "segments": _quality_segment_rows(category, interval_value),
         }
     except ValueError as exc:
