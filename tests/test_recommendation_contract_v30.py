@@ -77,10 +77,13 @@ def test_frontend_has_operator_action_buttons_and_displays_backend_sizing():
     js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
+    assert "async function postOperatorAction(action)" in js
+    assert "function operatorActionPayload(action, candidate)" in js
     assert "data-operator-action=\"manual_review\"" in js
     assert "data-operator-action=\"wait_confirmation\"" in js
     assert "data-operator-action=\"close_invalidated\"" in js
-    assert "postOperatorAction" in js
+    assert "/api/recommendations/${encodeURIComponent(payload.signalId)}/operator-action" in js
+    assert "state.lastOperatorAction" in js
     assert "position_sizing?.risk_amount_usdt" in js
     assert "position_sizing?.position_notional_usdt" in js
     assert "Net R/R" in js

@@ -1565,6 +1565,54 @@ function nextActionsHtml(items) {
   return `<ol>${items.map((item) => `<li><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
 }
 
+function operatorActionPayload(action, candidate) {
+  if (!candidate || candidate.id === undefined || candidate.id === null || candidate.id === '') {
+    throw new Error('Не выбран сетап с серверным id. Обновите очередь рекомендаций и выберите карточку заново.');
+  }
+  const contract = candidate.recommendation || candidate;
+  const observedPrice = num(contract.last_price ?? candidate.last_price ?? candidate.current_price ?? candidate.close, null);
+  const status = contract.recommendation_status || candidate.recommendation_status || 'unknown';
+  const direction = contract.trade_direction || candidate.direction || 'no_trade';
+  return {
+    signalId: Number(candidate.id),
+    body: {
+      action,
+      observed_price: observedPrice,
+      notes: [
+        `ui_action=${action}`,
+        `symbol=${candidate.symbol || 'unknown'}`,
+        `interval=${candidate.interval || 'unknown'}`,
+        `status=${status}`,
+        `direction=${direction}`,
+        `price_status=${contract.price_status || candidate.price_status || 'unknown'}`,
+      ].join('; '),
+    },
+  };
+}
+
+async function postOperatorAction(action) {
+  const allowedActions = new Set(['skip', 'wait_confirmation', 'manual_review', 'close_invalidated', 'paper_opened']);
+  if (!allowedActions.has(action)) throw new Error(`Неизвестное действие оператора: ${action}`);
+  const candidate = selectedCandidate();
+  const payload = operatorActionPayload(action, candidate);
+  const category = encodeURIComponent($('category')?.value || 'linear');
+  const result = await api(`/api/recommendations/${encodeURIComponent(payload.signalId)}/operator-action?category=${category}`, {
+    method: 'POST',
+    body: JSON.stringify(payload.body),
+  });
+  if (!result?.ok) throw new Error(result?.error || 'Сервер не сохранил действие оператора.');
+  const actionLabels = {
+    skip: 'пропуск сохранён',
+    wait_confirmation: 'ожидание подтверждения сохранено',
+    manual_review: 'ручной разбор начат',
+    close_invalidated: 'рекомендация закрыта как неактуальная',
+    paper_opened: 'paper-сделка отмечена',
+  };
+  state.lastOperatorAction = `${compactDateTime(new Date().toISOString())}: ${actionLabels[action] || result.status || action}`;
+  renderTicket(selectedCandidate());
+  return result;
+}
+
 function renderTicket(s) {
   if (!s) {
     $('ticketTitle').textContent = 'Сетап не выбран';
@@ -1613,10 +1661,10 @@ function renderTicket(s) {
       <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>
     </div>
     <div class="ticket-operator-actions" aria-label="Действия оператора">
-      <button type="button" class="secondary small" data-operator-action="manual_review">Взять в разбор</button>
-      <button type="button" class="ghost small" data-operator-action="wait_confirmation">Ждать подтверждения</button>
-      <button type="button" class="ghost small" data-operator-action="skip">Пропустить</button>
-      <button type="button" class="danger small" data-operator-action="close_invalidated">Закрыть как неактуальную</button>
+      <button type="button" class="secondary small" data-busy-lock="true" data-operator-action="manual_review">Взять в разбор</button>
+      <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="wait_confirmation">Ждать подтверждения</button>
+      <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="skip">Пропустить</button>
+      <button type="button" class="danger small" data-busy-lock="true" data-operator-action="close_invalidated">Закрыть как неактуальную</button>
     </div>
     <div class="operator-action-status">${escapeHtml(state.lastOperatorAction || 'Действия сохраняются в recommendation_operator_actions; закрытие как неактуальной фиксирует outcome=invalidated.')}</div>
     <section class="llm-detail-card ${escapeHtml(cssToken(llmVerdict.tone, 'pending'))}">

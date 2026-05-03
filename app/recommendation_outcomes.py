@@ -105,7 +105,7 @@ def _due_signals(category: str, limit: int) -> list[dict[str, Any]]:
         WHERE s.category=%s
           AND s.direction IN ('long','short')
           AND s.bar_time IS NOT NULL
-          AND o.signal_id IS NULL
+          AND (o.signal_id IS NULL OR o.outcome_status='open')
           AND s.bar_time < NOW()
         ORDER BY s.created_at DESC
         LIMIT %s
