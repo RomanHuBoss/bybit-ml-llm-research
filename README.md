@@ -180,6 +180,18 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
+## Recommendation API V32
+
+Канонические endpoints для витрины оператора:
+
+- `GET /api/recommendations/active` — активные серверно проверенные рекомендации с `entry`, `stop_loss`, `take_profit`, `risk_reward`, `confidence_score`, `expires_at`, объяснением и price-status.
+- `GET /api/recommendations/{signal_id}` — полный контракт одной рекомендации.
+- `GET /api/recommendations/{signal_id}/explanation` — краткое объяснение факторов за/против без UI-догадок.
+- `GET /api/recommendations/{signal_id}/similar-history` — история завершённых похожих рекомендаций по тому же `symbol + interval + strategy + direction`, включая realized R, MFE/MAE, winrate, PF и предупреждение о малой выборке.
+- `POST /api/recommendations/{signal_id}/operator-action` — аудит действий оператора: пропуск, ожидание подтверждения, ручной разбор, закрытие как неактуальной.
+
+История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
+
 ## Frontend
 
 Интерфейс реализован как dark-mode trading cockpit:

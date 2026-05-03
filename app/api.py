@@ -412,6 +412,117 @@ def _quality_segment_rows(category: str, interval_filter: str | None = None) -> 
     return {"by_symbol": by_symbol, "by_strategy": by_strategy, "by_confidence_bucket": by_confidence}
 
 
+def _sample_confidence_label(sample_size: int) -> str:
+    if sample_size >= 100:
+        return "high"
+    if sample_size >= 30:
+        return "medium"
+    if sample_size > 0:
+        return "low"
+    return "none"
+
+
+def _similar_recommendation_history(signal_id: int, category: str, limit: int = 30) -> dict[str, Any]:
+    """Return outcome history for the same symbol/TF/strategy/direction as a recommendation.
+
+    This is deliberately separate from the final recommendation score: the UI must
+    explain whether historical evidence is broad enough without treating it as the
+    probability that the current signal will win.
+    """
+    bounded_limit = bounded_int(limit, "limit", 1, 200)
+    base = fetch_one(
+        """
+        SELECT id, category, symbol, interval, strategy, direction, confidence, bar_time
+        FROM signals
+        WHERE id=%s AND category=%s
+        """,
+        (int(signal_id), category),
+    )
+    if not base:
+        return {
+            "ok": False,
+            "recommendation_id": int(signal_id),
+            "summary": {},
+            "items": [],
+            "error": "Recommendation not found",
+        }
+    params = (category, base.get("symbol"), base.get("interval"), base.get("strategy"), base.get("direction"))
+    summary = fetch_one(
+        """
+        SELECT COUNT(*)::int AS evaluated,
+               AVG(o.realized_r)::float AS average_r,
+               SUM(CASE WHEN o.realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
+               SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor,
+               AVG(o.max_favorable_excursion_r)::float AS avg_mfe_r,
+               AVG(o.max_adverse_excursion_r)::float AS avg_mae_r,
+               MAX(o.evaluated_at) AS last_evaluated_at
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s
+          AND s.symbol=%s
+          AND s.interval=%s
+          AND s.strategy=%s
+          AND s.direction=%s
+          AND o.outcome_status <> 'open'
+        """,
+        params,
+    ) or {}
+    items = fetch_all(
+        """
+        SELECT s.id AS signal_id, s.bar_time, s.created_at, s.confidence,
+               s.entry, s.stop_loss, s.take_profit, s.risk_reward,
+               o.outcome_status, o.exit_time, o.exit_price, o.realized_r,
+               o.max_favorable_excursion_r, o.max_adverse_excursion_r,
+               o.bars_observed, o.evaluated_at
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s
+          AND s.symbol=%s
+          AND s.interval=%s
+          AND s.strategy=%s
+          AND s.direction=%s
+          AND o.outcome_status <> 'open'
+        ORDER BY COALESCE(o.exit_time, o.evaluated_at, s.bar_time) DESC NULLS LAST
+        LIMIT %s
+        """,
+        (*params, bounded_limit),
+    )
+    evaluated = int((summary or {}).get("evaluated") or 0)
+    confidence_level = _sample_confidence_label(evaluated)
+    if evaluated < 30:
+        explanation = (
+            f"Похожих завершённых рекомендаций: {evaluated}. Этого мало для высокой статистической уверенности; "
+            "используйте историю только как контекст и снижайте риск."
+        )
+    elif evaluated < 100:
+        explanation = (
+            f"Похожих завершённых рекомендаций: {evaluated}. Выборка умеренная: можно учитывать PF/average R, "
+            "но текущий сигнал всё равно проверяется отдельно."
+        )
+    else:
+        explanation = (
+            f"Похожих завершённых рекомендаций: {evaluated}. Выборка достаточная для рабочего контроля качества, "
+            "но не является гарантией результата текущей сделки."
+        )
+    return {
+        "ok": True,
+        "recommendation_id": int(signal_id),
+        "match": {
+            "symbol": base.get("symbol"),
+            "interval": base.get("interval"),
+            "strategy": base.get("strategy"),
+            "direction": base.get("direction"),
+        },
+        "summary": {
+            **dict(summary or {}),
+            "statistical_confidence": confidence_level,
+            "explanation": explanation,
+            "metric_semantics": "История похожих сигналов описывает прошлые завершённые рекомендации и не является вероятностью прибыли текущего сигнала.",
+        },
+        "items": items,
+    }
+
+
 def _operator_action_status(action: str) -> str:
     return {
         "skip": "skipped_by_operator",
@@ -1328,6 +1439,17 @@ def api_recommendation_explanation(signal_id: int, category: str = settings.defa
         "signal_breakdown": item.get("signal_breakdown", {}),
         "error": detail.get("error"),
     }
+
+
+@router.get("/recommendations/{signal_id}/similar-history")
+def api_recommendation_similar_history(signal_id: int, category: str = settings.default_category, limit: int = 30) -> dict[str, Any]:
+    try:
+        category = normalize_category(category)
+        return _similar_recommendation_history(int(signal_id), category, limit)
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except Exception as exc:
+        return {"ok": False, "recommendation_id": signal_id, "summary": {}, "items": [], "error": _read_error(exc)}
 
 
 @router.post("/recommendations/{signal_id}/operator-action")

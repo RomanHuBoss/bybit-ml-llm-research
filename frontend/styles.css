@@ -1571,3 +1571,31 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
   .recommendation-detail-grid { grid-template-columns: 1fr; }
   .detail-card.wide { grid-column: auto; }
 }
+
+/* V32 similar-signal outcome history inside recommendation details */
+.similar-history-table-wrap {
+  margin-top: 10px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+}
+.similar-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.similar-history-table th,
+.similar-history-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  text-align: left;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.similar-history-table th {
+  position: sticky;
+  top: 0;
+  color: var(--muted);
+  background: rgba(2, 6, 23, 0.88);
+}

@@ -28,6 +28,10 @@ const state = {
   rawSort: { key: 'score', dir: 'desc' },
   lastOperatorAction: null,
   marketState: null,
+  similarHistory: null,
+  similarHistorySignalId: null,
+  similarHistoryLoading: false,
+  similarHistoryError: null,
 };
 
 const STRATEGY_LABELS = {
@@ -1565,6 +1569,68 @@ function nextActionsHtml(items) {
   return `<ol>${items.map((item) => `<li><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
 }
 
+function similarHistoryHtml(history, signalId) {
+  if (state.similarHistoryLoading && Number(state.similarHistorySignalId) === Number(signalId)) {
+    return '<p class="muted-line">Загружаю историю похожих сигналов…</p>';
+  }
+  if (state.similarHistoryError && Number(state.similarHistorySignalId) === Number(signalId)) {
+    return `<p class="muted-line">История похожих сигналов недоступна: ${escapeHtml(state.similarHistoryError)}</p>`;
+  }
+  if (!history || Number(history.recommendation_id) !== Number(signalId)) {
+    return '<p class="muted-line">История будет загружена после выбора карточки.</p>';
+  }
+  const summary = history.summary || {};
+  const items = Array.isArray(history.items) ? history.items : [];
+  const header = `<p><b>${escapeHtml(String(summary.statistical_confidence || 'none').toUpperCase())}</b> · ${fmt(summary.evaluated, 0)} случаев · avg R ${fmt(summary.average_r, 2)} · PF ${fmt(summary.profit_factor, 2)} · WR ${pct(summary.winrate, 0)}</p><small>${escapeHtml(summary.explanation || summary.metric_semantics || 'История похожих сигналов не является вероятностью прибыли.')}</small>`;
+  if (!items.length) return `${header}<p class="muted-line">Завершённых похожих рекомендаций пока нет.</p>`;
+  return `${header}
+    <div class="similar-history-table-wrap">
+      <table class="similar-history-table">
+        <thead><tr><th>Дата</th><th>Исход</th><th>R</th><th>MFE</th><th>MAE</th><th>Conf</th></tr></thead>
+        <tbody>${items.slice(0, 12).map((row) => `<tr>
+          <td>${escapeHtml(compactDateTime(row.exit_time || row.evaluated_at || row.bar_time))}</td>
+          <td>${escapeHtml(row.outcome_status || '—')}</td>
+          <td>${fmt(row.realized_r, 2)}</td>
+          <td>${fmt(row.max_favorable_excursion_r, 2)}</td>
+          <td>${fmt(row.max_adverse_excursion_r, 2)}</td>
+          <td>${pct(row.confidence, 0)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+async function refreshSimilarHistoryForCandidate(candidate = selectedCandidate()) {
+  const signalId = Number(candidate?.id);
+  if (!Number.isFinite(signalId)) {
+    state.similarHistory = null;
+    state.similarHistorySignalId = null;
+    state.similarHistoryError = null;
+    state.similarHistoryLoading = false;
+    return null;
+  }
+  if (Number(state.similarHistorySignalId) === signalId && state.similarHistory && !state.similarHistoryError) {
+    return state.similarHistory;
+  }
+  state.similarHistorySignalId = signalId;
+  state.similarHistoryLoading = true;
+  state.similarHistoryError = null;
+  renderTicket(candidate);
+  try {
+    const category = encodeURIComponent($('category')?.value || 'linear');
+    const data = await api(`/api/recommendations/${encodeURIComponent(signalId)}/similar-history?category=${category}&limit=30`);
+    state.similarHistory = data;
+    if (!data?.ok) state.similarHistoryError = data?.error || 'сервер вернул пустой ответ';
+    return data;
+  } catch (error) {
+    state.similarHistory = null;
+    state.similarHistoryError = error.message;
+    return null;
+  } finally {
+    state.similarHistoryLoading = false;
+    renderTicket(selectedCandidate());
+  }
+}
+
 function operatorActionPayload(action, candidate) {
   if (!candidate || candidate.id === undefined || candidate.id === null || candidate.id === '') {
     throw new Error('Не выбран сетап с серверным id. Обновите очередь рекомендаций и выберите карточку заново.');
@@ -1657,6 +1723,7 @@ function renderTicket(s) {
       <section class="detail-card warn"><b>Что против сделки</b>${factorListHtml(contract.factors_against || [])}</section>
       <section class="detail-card"><b>Таймфреймы</b>${timeframeListHtml(contract.timeframes_used || [])}</section>
       <section class="detail-card"><b>Выборка качества</b>${statisticsConfidenceHtml(contract.statistics_confidence)}</section>
+      <section class="detail-card wide"><b>История похожих сигналов</b>${similarHistoryHtml(state.similarHistory, s.id)}</section>
       <section class="detail-card wide"><b>Индикаторы</b>${indicatorValuesHtml(contract.indicator_values || {})}</section>
       <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>
     </div>
@@ -1796,6 +1863,7 @@ function renderQueue() {
       state.selectedKey = candidateKey(chosen) || key || state.selectedKey;
       renderQueue();
       renderDecision();
+      refreshSimilarHistoryForCandidate(chosen).catch((error) => log(`WARN similar history: ${error.message}`));
       refreshNews().catch((error) => log(`WARN refresh selected news: ${error.message}`));
     };
     card.addEventListener('click', select);
@@ -1934,6 +2002,7 @@ async function refreshRank() {
   state.rank = data.items || [];
   preserveSelectedCandidate();
   renderQueue();
+  refreshSimilarHistoryForCandidate(selectedCandidate()).catch((error) => log(`WARN similar history: ${error.message}`));
 }
 
 async function refreshSignals() {
@@ -1950,6 +2019,7 @@ async function refreshSignals() {
   }
   preserveSelectedCandidate();
   renderQueue();
+  refreshSimilarHistoryForCandidate(selectedCandidate()).catch((error) => log(`WARN similar history: ${error.message}`));
 }
 
 function drawEquity(curve) {
