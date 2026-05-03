@@ -9,7 +9,7 @@ from .config import settings
 DIRECTION_LONG = "long"
 DIRECTION_SHORT = "short"
 DIRECTION_NO_TRADE = "no_trade"
-RECOMMENDATION_CONTRACT_VERSION = "recommendation_v34"
+RECOMMENDATION_CONTRACT_VERSION = "recommendation_v35"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
 NON_ENTRY_ACTIONS = {"NO_TRADE", "WAIT"}
 
@@ -252,6 +252,27 @@ def user_trade_direction(row: dict[str, Any], status: str) -> str:
     if status in {"review_entry", "research_candidate"} and raw in {DIRECTION_LONG, DIRECTION_SHORT}:
         return raw
     return DIRECTION_NO_TRADE
+
+
+def outcome_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Canonical completed-recommendation state for history/detail views.
+
+    Active recommendation endpoints exclude terminal outcomes; history and detail
+    still need to show exactly why a prior recommendation is no longer tradable.
+    """
+    status = str(row.get("outcome_status") or "").strip().lower()
+    terminal = status in {"hit_take_profit", "hit_stop_loss", "expired", "invalidated", "closed_manual"}
+    return {
+        "status": status or None,
+        "is_terminal": terminal,
+        "evaluated_at": to_iso(parse_datetime(row.get("outcome_evaluated_at"))),
+        "exit_time": to_iso(parse_datetime(row.get("exit_time"))),
+        "exit_price": finite(row.get("exit_price")),
+        "realized_r": finite(row.get("realized_r")),
+        "max_favorable_excursion_r": finite(row.get("max_favorable_excursion_r")),
+        "max_adverse_excursion_r": finite(row.get("max_adverse_excursion_r")),
+        "notes": row.get("outcome_notes"),
+    }
 
 
 def explanation(row: dict[str, Any], status: str, trade_direction: str, levels: dict[str, Any], price: dict[str, Any]) -> str:
@@ -512,6 +533,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "factors_for": factors_for,
         "factors_against": factors_against,
         "statistics_confidence": statistics_confidence(row),
+        "outcome": outcome_payload(row),
         "timeframes_used": timeframes_used(row),
         "indicator_values": indicator_values(row),
         "trading_signals": trading_signals(row),

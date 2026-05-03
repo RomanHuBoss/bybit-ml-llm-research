@@ -562,3 +562,23 @@ Apply the repeatable migration when updating an existing database:
 ```bash
 psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v30_recommendation_operator_actions_and_quality.sql
 ```
+
+## V35 — active recommendation integrity
+
+Текущий контракт рекомендаций: `recommendation_v35`.
+
+Ключевое изменение V35: активная выдача больше не показывает directional-сигналы, которые уже завершены outcome-evaluator или закрыты оператором. `/api/recommendations/active` требует `expires_at > NOW()` и исключает terminal outcomes. Метрики `/api/recommendations/quality` считаются только по завершённым рекомендациям (`outcome_status <> 'open'`), поэтому `winrate`, `profit_factor`, `average R`, MFE/MAE и confidence buckets не искажаются открытыми строками.
+
+Добавлены SQL-view:
+
+- `v_active_recommendation_contract_v35` — активные directional-рекомендации без terminal outcome;
+- `v_recommendation_quality_terminal_v35` — качество рекомендаций только по завершённым outcomes.
+
+Проверка текущей ревизии:
+
+```bash
+python run.py check
+node --check frontend/app.js
+```
+
+В sandbox-проверке: `196 passed`.

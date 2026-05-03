@@ -98,16 +98,15 @@ def test_run_check_uses_syntax_parser_and_pytest_without_cache(monkeypatch):
     import argparse
     import run
 
-    calls: list[list[str]] = []
+    calls: list[str] = []
 
-    monkeypatch.setattr(run, "runtime_python", lambda no_venv=False: "python")
     monkeypatch.setattr(run, "syntax_check", lambda: 0)
-    monkeypatch.setattr(run, "run_command", lambda command: calls.append(command) or 0)
+    monkeypatch.setattr(run, "run_pytest_suite", lambda: calls.append("pytest") or 0)
 
     rc = run.command_check(argparse.Namespace(no_venv=False))
 
     assert rc == 0
-    assert calls == [["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]]
+    assert calls == ["pytest"]
 
 
 def test_run_subprocess_env_disables_bytecode_cache(monkeypatch):

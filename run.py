@@ -135,6 +135,20 @@ def run_command(command: list[str]) -> int:
     return subprocess.run(command, cwd=str(PROJECT_ROOT), check=False, env=subprocess_env()).returncode
 
 
+def run_pytest_suite() -> int:
+    """Run pytest in-process so launcher diagnostics exit cleanly.
+
+    The source tests disable external plugins via subprocess_env for child
+    commands; this in-process path mirrors the same arguments and avoids a
+    teardown hang observed when wrapping pytest in another Python subprocess.
+    """
+    os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    import pytest
+
+    return int(pytest.main(["-q", "-p", "no:cacheprovider"]))
+
+
 def command_server(args: argparse.Namespace) -> int:
     host = args.host or env_value("APP_HOST", "127.0.0.1")
     port = str(args.port or env_value("APP_PORT", "8000"))
@@ -159,15 +173,14 @@ def command_init_db(args: argparse.Namespace) -> int:
 
 
 def command_test(args: argparse.Namespace) -> int:
-    return run_command([runtime_python(args.no_venv), "-m", "pytest", "-q", "-p", "no:cacheprovider"])
+    return run_pytest_suite()
 
 
 def command_check(args: argparse.Namespace) -> int:
-    py = runtime_python(args.no_venv)
     first = syntax_check()
     if first != 0:
         return first
-    return run_command([py, "-m", "pytest", "-q", "-p", "no:cacheprovider"])
+    return run_pytest_suite()
 
 
 def command_doctor(args: argparse.Namespace) -> int:

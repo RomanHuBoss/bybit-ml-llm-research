@@ -1588,6 +1588,17 @@ function indicatorValuesHtml(values) {
   return `<div class="indicator-chip-row">${entries.slice(0, 16).map(([key, value]) => `<span class="indicator-chip">${escapeHtml(key)} ${fmt(value, 4)}</span>`).join('')}</div>`;
 }
 
+function outcomeContractHtml(outcome) {
+  if (!outcome || !outcome.status) {
+    return '<p class="muted-line">Исход ещё не зафиксирован. Активная рекомендация оценивается после TP/SL, invalidation или expiry.</p>';
+  }
+  const terminal = outcome.is_terminal ? 'terminal' : 'open';
+  return `<div class="outcome-contract ${escapeHtml(cssToken(terminal, 'open'))}">
+    <p><b>${escapeHtml(String(outcome.status).toUpperCase())}</b> · R ${fmt(outcome.realized_r, 2)} · exit ${priceFmt(outcome.exit_price)}</p>
+    <small>Evaluated ${escapeHtml(compactDateTime(outcome.evaluated_at))} · exit time ${escapeHtml(compactDateTime(outcome.exit_time))} · MFE ${fmt(outcome.max_favorable_excursion_r, 2)} · MAE ${fmt(outcome.max_adverse_excursion_r, 2)}</small>
+  </div>`;
+}
+
 function nextActionsHtml(items) {
   if (!Array.isArray(items) || !items.length) return '<p class="muted-line">Следующее действие не передано.</p>';
   return `<ol>${items.map((item) => `<li><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
@@ -1747,6 +1758,7 @@ function renderTicket(s) {
       <section class="detail-card warn"><b>Что против сделки</b>${factorListHtml(contract.factors_against || [])}</section>
       <section class="detail-card"><b>Таймфреймы</b>${timeframeListHtml(contract.timeframes_used || [])}</section>
       <section class="detail-card"><b>Выборка качества</b>${statisticsConfidenceHtml(contract.statistics_confidence)}</section>
+      <section class="detail-card"><b>Исход рекомендации</b>${outcomeContractHtml(contract.outcome)}</section>
       <section class="detail-card wide"><b>История похожих сигналов</b>${similarHistoryHtml(state.similarHistory, s.id)}</section>
       <section class="detail-card wide"><b>Индикаторы</b>${indicatorValuesHtml(contract.indicator_values || {})}</section>
       <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>

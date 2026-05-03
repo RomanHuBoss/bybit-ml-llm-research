@@ -1680,3 +1680,17 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
     grid-template-columns: 1fr;
   }
 }
+
+.outcome-contract {
+  display: grid;
+  gap: 4px;
+}
+.outcome-contract p {
+  margin: 0;
+}
+.outcome-contract small {
+  color: var(--muted);
+}
+.outcome-contract.terminal b {
+  color: var(--text);
+}

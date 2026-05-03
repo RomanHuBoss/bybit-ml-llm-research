@@ -313,7 +313,7 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "stale": stale,
         "moved_away": moved_away,
         "contract": RECOMMENDATION_CONTRACT_VERSION,
-        "previous_contract": "recommendation_v31",
+        "previous_contract": "recommendation_v34",
     }
 
 
@@ -434,6 +434,7 @@ def _quality_segment_rows(category: str, interval_filter: str | None = None) -> 
         FROM recommendation_outcomes o
         JOIN signals s ON s.id=o.signal_id
         WHERE s.category=%s {interval_sql}
+          AND o.outcome_status <> 'open'
         GROUP BY s.symbol
         ORDER BY evaluated DESC, average_r DESC NULLS LAST
         LIMIT 50
@@ -451,6 +452,7 @@ def _quality_segment_rows(category: str, interval_filter: str | None = None) -> 
         FROM recommendation_outcomes o
         JOIN signals s ON s.id=o.signal_id
         WHERE s.category=%s {interval_sql}
+          AND o.outcome_status <> 'open'
         GROUP BY s.interval, s.strategy
         ORDER BY evaluated DESC, average_r DESC NULLS LAST
         LIMIT 80
@@ -472,6 +474,7 @@ def _quality_segment_rows(category: str, interval_filter: str | None = None) -> 
         FROM recommendation_outcomes o
         JOIN signals s ON s.id=o.signal_id
         WHERE s.category=%s {interval_sql}
+          AND o.outcome_status <> 'open'
         GROUP BY confidence_bucket
         ORDER BY confidence_bucket
         """,
@@ -986,6 +989,14 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                     FROM signals
                     WHERE category=%s AND interval = ANY(%s::text[]) AND created_at >= NOW() - (%s::text || ' hours')::interval
                       AND bar_time IS NOT NULL
+                      AND expires_at IS NOT NULL
+                      AND expires_at > NOW()
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM recommendation_outcomes ro
+                          WHERE ro.signal_id = signals.id
+                            AND ro.outcome_status <> 'open'
+                      )
                     ORDER BY category, symbol, interval, strategy, direction, created_at DESC
                 ), latest_backtests AS (
                     SELECT DISTINCT ON (symbol, interval, strategy)
@@ -1108,6 +1119,14 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 FROM signals
                 WHERE category=%s AND created_at >= NOW() - (%s::text || ' hours')::interval
                   AND bar_time IS NOT NULL
+                  AND expires_at IS NOT NULL
+                  AND expires_at > NOW()
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM recommendation_outcomes ro
+                      WHERE ro.signal_id = signals.id
+                        AND ro.outcome_status <> 'open'
+                  )
                 ORDER BY category, symbol, interval, strategy, direction, created_at DESC
             ), latest_backtests AS (
                 SELECT DISTINCT ON (symbol, interval, strategy)
@@ -1452,6 +1471,7 @@ def api_recommendation_quality(category: str = settings.default_category, interv
             FROM recommendation_outcomes o
             JOIN signals s ON s.id=o.signal_id
             WHERE s.category=%s {interval_filter}
+              AND o.outcome_status <> 'open'
             """,
             tuple(params),
         ) or {}
