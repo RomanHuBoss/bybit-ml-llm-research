@@ -3,13 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.trade_contract import enrich_recommendation_row
-from tests.test_recommendation_contract_v28 import base_row
+from tests.test_recommendation_contract_v28 import TEST_NOW, base_row
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_price_moved_away_turns_review_entry_into_no_trade_contract():
-    item = enrich_recommendation_row(base_row(last_price=110.0, last_price_time="2026-05-02T00:15:00+00:00"))
+    item = enrich_recommendation_row(base_row(last_price=110.0, last_price_time="2026-05-02T00:15:00+00:00"), now=TEST_NOW)
 
     assert item["recommendation_status"] == "missed_entry"
     assert item["trade_direction"] == "no_trade"

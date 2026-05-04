@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from app.trade_contract import enrich_recommendation_row
-from tests.test_recommendation_contract_v28 import base_row
+from tests.test_recommendation_contract_v28 import TEST_NOW, base_row
 
 
 def test_v32_unknown_price_is_not_actionable_even_for_review_entry():
-    item = enrich_recommendation_row(base_row(last_price=None, current_price=None, close=None))
+    item = enrich_recommendation_row(base_row(last_price=None, current_price=None, close=None), now=TEST_NOW)
 
     assert item["recommendation_status"] == "review_entry"
     assert item["price_status"] == "unknown"

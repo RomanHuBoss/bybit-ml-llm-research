@@ -136,17 +136,18 @@ def run_command(command: list[str]) -> int:
 
 
 def run_pytest_suite() -> int:
-    """Run pytest in-process so launcher diagnostics exit cleanly.
+    """Запускает pytest воспроизводимо и без внешних plugin-side effects.
 
-    The source tests disable external plugins via subprocess_env for child
-    commands; this in-process path mirrors the same arguments and avoids a
-    teardown hang observed when wrapping pytest in another Python subprocess.
+    В некоторых sandbox/IDE окружениях in-process pytest корректно печатает
+    ``passed``, но зависает на teardown сторонних импортов. Отдельный процесс с
+    отключенным автоподхватом plugins надежнее для команды ``run.py check`` и
+    совпадает с тем, что разработчик обычно запускает из shell.
     """
-    os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
-    os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
-    import pytest
-
-    return int(pytest.main(["-q", "-p", "no:cacheprovider"]))
+    env = subprocess_env()
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    command = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"]
+    return subprocess.run(command, cwd=str(PROJECT_ROOT), check=False, env=env).returncode
 
 
 def command_server(args: argparse.Namespace) -> int:

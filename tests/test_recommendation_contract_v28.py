@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.trade_contract import enrich_recommendation_row, validate_trade_levels
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_NOW = datetime(2026, 5, 2, 0, 30, tzinfo=timezone.utc)
 
 
 def base_row(**overrides):
@@ -42,7 +44,7 @@ def test_trade_level_validator_blocks_impossible_long_and_short():
 
 
 def test_enriched_contract_contains_actionable_ticket_fields():
-    item = enrich_recommendation_row(base_row())
+    item = enrich_recommendation_row(base_row(), now=TEST_NOW)
 
     assert item["recommendation_status"] == "review_entry"
     assert item["trade_direction"] == "long"
@@ -52,18 +54,22 @@ def test_enriched_contract_contains_actionable_ticket_fields():
     assert item["expected_reward_pct"] == 0.04
     assert item["risk_reward"] == 2.0
     assert item["expires_at"]
+    assert item["checked_at"]
+    assert item["ttl_status"] == "active"
+    assert item["ttl_seconds_left"] > 0
+    assert item["is_expired"] is False
     assert "Entry 100" in item["recommendation_explanation"]
     assert "invalidation_condition" in item["recommendation"]
     assert item["signal_breakdown"]["risk"]["risk_reward"] == 2.0
 
 
 def test_enriched_contract_turns_invalid_or_blocked_rows_into_no_trade():
-    invalid = enrich_recommendation_row(base_row(stop_loss=101.0))
+    invalid = enrich_recommendation_row(base_row(stop_loss=101.0), now=TEST_NOW)
     assert invalid["recommendation_status"] == "invalid"
     assert invalid["trade_direction"] == "no_trade"
     assert invalid["is_actionable"] is False
 
-    blocked = enrich_recommendation_row(base_row(operator_action="NO_TRADE", operator_hard_reasons=[{"code": "mtf", "title": "MTF veto", "detail": "conflict"}]))
+    blocked = enrich_recommendation_row(base_row(operator_action="NO_TRADE", operator_hard_reasons=[{"code": "mtf", "title": "MTF veto", "detail": "conflict"}]), now=TEST_NOW)
     assert blocked["recommendation_status"] == "blocked"
     assert blocked["trade_direction"] == "no_trade"
     assert "NO_TRADE" in blocked["recommendation_explanation"]

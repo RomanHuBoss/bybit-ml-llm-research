@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.api import SignalBuildRequest, _market_state_for_recommendations
 from app.trade_contract import enrich_recommendation_row
-from tests.test_recommendation_contract_v28 import base_row
+from tests.test_recommendation_contract_v28 import TEST_NOW, base_row
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,7 +29,8 @@ def test_v31_recommendation_contract_contains_operational_explanation_blocks():
             profit_factor=1.2,
             win_rate=0.52,
             max_drawdown=0.12,
-        )
+        ),
+        now=TEST_NOW,
     )
     contract = item["recommendation"]
 

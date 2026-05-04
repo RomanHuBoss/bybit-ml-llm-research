@@ -394,6 +394,28 @@ function riskRewardFmt(rr) {
   return rr && Number.isFinite(rr.ratio) ? rr.ratio.toFixed(2) : '—';
 }
 
+function ttlText(contract) {
+  const status = String(contract?.ttl_status || '').toLowerCase();
+  const seconds = num(contract?.ttl_seconds_left, null);
+  if (status === 'no_setup') return 'нет сетапа';
+  if (status === 'missing') return 'TTL отсутствует';
+  if (status === 'expired' || (seconds !== null && seconds <= 0)) return 'expired';
+  if (seconds === null) return compactDateTime(contract?.expires_at);
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours}ч ${rest}м`;
+}
+
+function ttlTone(contract) {
+  const status = String(contract?.ttl_status || '').toLowerCase();
+  if (status === 'active') return 'active';
+  if (status === 'expiring_soon') return 'expiring';
+  if (status === 'expired') return 'expired';
+  return 'unknown';
+}
+
 function contractFor(s) {
   return s?.recommendation && typeof s.recommendation === 'object' ? s.recommendation : (s || {});
 }
@@ -463,7 +485,7 @@ function renderDecisionTelemetry(s, d) {
   setText('telemetryStop', priceFmt(contractValue(s, 'stop_loss')));
   setText('telemetryTake', priceFmt(contractValue(s, 'take_profit')));
   setText('telemetryFreshness', fresh === 'fresh' ? 'fresh' : fresh === 'stale' ? 'stale' : String(fresh));
-  setText('telemetryDataStatus', `${ageText(s.bar_closed_at || s.created_at)} · liq ${s.liquidity_status || 'unknown'}`);
+  setText('telemetryDataStatus', `${ageText(s.bar_closed_at || s.created_at)} · liq ${s.liquidity_status || 'unknown'} · TTL ${ttlText(contractFor(s))}`);
   setText('telemetryVeto', d?.level === 'review' && veto.tone !== 'error' ? 'clear' : veto.label);
   setText('telemetryVetoReason', `${veto.reason} · R/R ${riskRewardFmt(rr)}`);
 }
@@ -515,7 +537,8 @@ function renderExecutionMap(s) {
     <div class="execution-level take"><span>Take-profit</span><strong>${priceFmt(contractValue(s, 'take_profit'))}</strong></div>
     <div class="execution-level rr"><span>Risk / Reward</span><strong>${rr ? rr.ratio.toFixed(2) : '—'}</strong></div>
     ${levelIssue ? `<div class="execution-level invalid"><span>Проверка уровней</span><strong>${escapeHtml(levelsProblemText(levelIssue))}</strong></div>` : ''}
-    ${priceGate.reason ? `<div class="execution-level invalid"><span>Price gate</span><strong>${escapeHtml(priceGate.reason)}</strong></div>` : ''}`;
+    ${priceGate.reason ? `<div class="execution-level invalid"><span>Price gate</span><strong>${escapeHtml(priceGate.reason)}</strong></div>` : ''}
+    <div class="execution-level ttl-state ${ttlTone(contractFor(s))}"><span>TTL</span><strong>${escapeHtml(ttlText(contractFor(s)))}</strong></div>`;
 }
 
 function showOperationStatus(message, tone = 'neutral') {
@@ -1728,7 +1751,8 @@ function renderTicket(s) {
       <div class="metric"><span>Risk amount</span><strong>${moneyFmt(contract.position_sizing?.risk_amount_usdt)}</strong></div>
       <div class="metric"><span>Position cap</span><strong>${moneyFmt(contract.position_sizing?.position_notional_usdt)}</strong><small>${escapeHtml(contract.position_sizing?.sizing_status || '—')}</small></div>
       <div class="metric"><span>Confidence</span><strong>${contract.confidence_score !== undefined ? `${contract.confidence_score}/100` : pct(s.confidence, 0)}</strong></div>
-      <div class="metric"><span>Expires</span><strong>${compactDateTime(contract.expires_at || s.expires_at)}</strong></div>
+      <div class="metric ttl-state ${ttlTone(contract)}"><span>TTL</span><strong>${escapeHtml(ttlText(contract))}</strong><small>expires ${escapeHtml(compactDateTime(contract.expires_at || s.expires_at))}</small></div>
+      <div class="metric"><span>Checked at</span><strong>${escapeHtml(compactDateTime(contract.checked_at))}</strong></div>
       <div class="metric"><span>Price status</span><strong>${escapeHtml(contract.price_status || s.price_status || 'unknown')}</strong></div>
       <div class="metric"><span>Trust gate</span><strong>${escapeHtml(s.operator_trust_status || '—')}</strong></div>
       <div class="metric"><span>MTF</span><strong>${escapeHtml(mtfLabel(s))}</strong></div>
@@ -1864,7 +1888,7 @@ function renderQueue() {
     const variants = variantsCount > 1 ? ` · ${variantsCount} вариантов${stabilityText}${riskText}` : `${stabilityText}${riskText}`;
     const contract = contractFor(s);
     const rr = num(contract.risk_reward, null);
-    const expires = compactDateTime(contract.expires_at || s.expires_at);
+    const expires = ttlText(contract);
     const conf = contract.confidence_score !== undefined ? `${contract.confidence_score}%` : pct(s.confidence, 0);
     return `
       <article class="candidate ${decisionLevel} ${isSelected ? 'selected' : ''}" data-id="${escapeHtml(s.id ?? '')}" data-key="${escapeHtml(cardKey)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">

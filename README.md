@@ -617,3 +617,35 @@ Apply the repeatable migration when updating an existing database:
 ```bash
 psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v36_frontend_contract_source_and_price_actionability.sql
 ```
+
+## V39 — deterministic TTL clock and frontend freshness state
+
+V39 is a compatibility hardening revision on top of `recommendation_v38`; the public contract version remains unchanged to avoid breaking existing API consumers.
+
+What changed:
+
+- Recommendation enrichment now uses one UTC `checked_at` timestamp for TTL, freshness, status and price actionability.
+- Boundary expiry is closed: `expires_at <= checked_at` is `expired`, never actionable.
+- `NO_TRADE` / hard-veto remains visible as `blocked` even when TTL is already expired, while `ttl_status=expired` is still exposed separately.
+- Outbound recommendation contracts now include `checked_at`, `ttl_status`, `ttl_seconds_left`, `is_expired`.
+- `/api/recommendations/contract` declares the new TTL fields as required for frontend rendering.
+- The frontend displays TTL state in the telemetry strip, execution map, queue cards and ticket metrics.
+- Contract tests use a fixed clock so regression results do not change when the calendar date changes.
+
+Stable local verification commands:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests
+node --check frontend/app.js
+python -m py_compile app/*.py run.py install.py sitecustomize.py
+```
+
+Sandbox verification for this revision:
+
+```text
+213 passed in 5.42s
+node --check frontend/app.js: OK
+python -m py_compile app/*.py run.py install.py sitecustomize.py: OK
+```
+
+Sandbox note: `python -u run.py check` reached `Syntax OK: 88 Python files`, then did not complete before the sandbox timeout. The direct pytest command above is the verified equivalent test path for this environment. Re-run `python run.py check` in a clean virtualenv/CI before staging.

@@ -1738,3 +1738,13 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
   opacity: 0.48;
   filter: grayscale(0.35);
 }
+
+/* V39: явное состояние срока актуальности рекомендации. */
+.ttl-state strong { color: var(--text); }
+.ttl-state.active strong { color: var(--green); }
+.ttl-state.expiring strong { color: var(--amber); }
+.ttl-state.expired strong { color: var(--red); }
+.ttl-state.unknown strong { color: var(--muted); }
+.execution-level.ttl-state { border-color: var(--stroke); }
+.execution-level.ttl-state.expiring { background: var(--amber-soft); }
+.execution-level.ttl-state.expired { background: var(--red-soft); }

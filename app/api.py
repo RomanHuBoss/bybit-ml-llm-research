@@ -366,7 +366,8 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "required_recommendation_fields": [
             "symbol", "trade_direction", "entry", "stop_loss", "take_profit",
             "risk_pct", "expected_reward_pct", "risk_reward", "net_risk_reward", "confidence_score",
-            "expires_at", "recommendation_explanation", "signal_breakdown",
+            "expires_at", "checked_at", "ttl_status", "ttl_seconds_left",
+            "recommendation_explanation", "signal_breakdown",
             "price_actionability", "contract_health", "decision_source", "frontend_may_recalculate",
         ],
         "price_gate_policy": "entry_zone_only_for_actionable_review",

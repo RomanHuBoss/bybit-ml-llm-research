@@ -56,6 +56,31 @@ def to_iso(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def utc_now(value: datetime | None = None) -> datetime:
+    # Единая точка времени для enrichment: TTL, price gate и health-check
+    # должны считаться относительно одного timestamp, иначе пограничные
+    # рекомендации могут получить разные статусы в соседних полях JSON.
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc)
+
+
+def ttl_state(expires_at: datetime | None, *, now: datetime | None = None) -> dict[str, Any]:
+    current = utc_now(now)
+    if expires_at is None:
+        return {"status": "missing", "seconds_left": None, "is_expired": False, "checked_at": to_iso(current)}
+    expiry = utc_now(expires_at)
+    seconds_left = int((expiry - current).total_seconds())
+    if seconds_left <= 0:
+        status = "expired"
+    elif seconds_left <= 15 * 60:
+        status = "expiring_soon"
+    else:
+        status = "active"
+    return {"status": status, "seconds_left": seconds_left, "is_expired": seconds_left <= 0, "checked_at": to_iso(current)}
+
+
 def interval_to_timedelta(interval: str | None) -> timedelta:
     value = str(interval or "").strip().upper()
     if value.isdigit():
@@ -198,7 +223,7 @@ def price_actionability(
         reasons.append(str(levels.get("reason") or "invalid_levels"))
     if expires_at is None:
         reasons.append("missing_expiry")
-    elif expires_at < now:
+    elif expires_at <= now:
         reasons.append("expired")
     if price.get("is_stale"):
         reasons.append("stale_data")
@@ -300,14 +325,16 @@ def recommendation_status(row: dict[str, Any], levels: dict[str, Any], price: di
     action = str(row.get("operator_action") or "WAIT").upper()
     if not levels.get("valid"):
         return "invalid"
+    if action == "NO_TRADE":
+        # Hard-veto должен оставаться видимым даже после истечения TTL: иначе
+        # оператор увидит только "expired" и потеряет исходную причину запрета.
+        return "blocked"
     if price.get("is_stale"):
         return "expired"
     if price.get("price_status") == "moved_away" and action in {"REVIEW_ENTRY", "RESEARCH_CANDIDATE"}:
         # Цена уже ушла из зоны ручного входа. Уровни оставляем для аудита,
         # но торговое направление для пользователя переводим в NO_TRADE.
         return "missed_entry"
-    if action == "NO_TRADE":
-        return "blocked"
     if action == "REVIEW_ENTRY":
         return "review_entry"
     if action == "RESEARCH_CANDIDATE":
@@ -561,9 +588,11 @@ def next_actions(status: str, trade_direction: str, price: dict[str, Any]) -> li
 
 
 def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    as_of = utc_now(now)
     levels = validate_trade_levels(row.get("direction"), row.get("entry"), row.get("stop_loss"), row.get("take_profit"))
-    expires_at = recommendation_expires_at(row, now=now)
-    price = price_freshness(row, expires_at, levels, now=now)
+    expires_at = recommendation_expires_at(row, now=as_of)
+    ttl = ttl_state(expires_at, now=as_of)
+    price = price_freshness(row, expires_at, levels, now=as_of)
     status = recommendation_status(row, levels, price)
     trade_direction = user_trade_direction(row, status)
     action_map = {
@@ -580,7 +609,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
     explanation_text = explanation(row, status, trade_direction, levels, price)
     invalidation = invalidation_condition(trade_direction, levels, expires_at) if levels.get("valid") else "Вход запрещён: уровни сделки не прошли серверную проверку."
     sizing = execution_plan(levels)
-    price_gate = price_actionability(price, status, levels, expires_at, now=now)
+    price_gate = price_actionability(price, status, levels, expires_at, now=as_of)
     contract = {
         "contract_version": RECOMMENDATION_CONTRACT_VERSION,
         "recommendation_id": row.get("id"),
@@ -591,6 +620,10 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "confidence_score": int(round(clamp(row.get("confidence")) * 100)),
         "expires_at": to_iso(expires_at),
         "valid_until": to_iso(expires_at),
+        "checked_at": ttl.get("checked_at"),
+        "ttl_status": ttl.get("status"),
+        "ttl_seconds_left": ttl.get("seconds_left"),
+        "is_expired": ttl.get("is_expired"),
         "risk_pct": levels.get("risk_pct"),
         "expected_reward_pct": levels.get("expected_reward_pct"),
         "risk_reward": levels.get("risk_reward"),
@@ -708,6 +741,10 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "confidence_score": 0,
         "expires_at": None,
         "valid_until": None,
+        "checked_at": to_iso(as_of),
+        "ttl_status": "no_setup",
+        "ttl_seconds_left": None,
+        "is_expired": False,
         "entry": None,
         "stop_loss": None,
         "take_profit": None,
