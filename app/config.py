@@ -209,6 +209,15 @@ class Settings:
     provisional_review_min_walk_forward_pass_rate: float = _float("PROVISIONAL_REVIEW_MIN_WALK_FORWARD_PASS_RATE", 0.35)
     provisional_review_min_score: int = _int("PROVISIONAL_REVIEW_MIN_SCORE", 60)
 
+    # Защита от ситуации, когда стратегия формально проходит локальный quality-gate,
+    # но последние фактические рекомендации по тому же symbol/TF/strategy/direction
+    # закрывались серией убытков. Такой блок переводит сетап в NO_TRADE до ручной
+    # переоценки стратегии, а не маскирует проблему фразой «бэктест слабый».
+    recommendation_loss_quarantine_min_trades: int = _int("RECOMMENDATION_LOSS_QUARANTINE_MIN_TRADES", 5)
+    recommendation_loss_quarantine_max_loss_rate: float = _float("RECOMMENDATION_LOSS_QUARANTINE_MAX_LOSS_RATE", 0.75)
+    recommendation_loss_quarantine_min_expectancy_r: float = _float("RECOMMENDATION_LOSS_QUARANTINE_MIN_EXPECTANCY_R", -0.10)
+    recommendation_loss_quarantine_consecutive_losses: int = _int("RECOMMENDATION_LOSS_QUARANTINE_CONSECUTIVE_LOSSES", 3)
+
     strategy_quality_max_age_days: int = _int("STRATEGY_QUALITY_MAX_AGE_DAYS", 14)
     strategy_min_expectancy: float = _float("STRATEGY_MIN_EXPECTANCY", 0.0)
     strategy_min_recent_30d_return: float = _float("STRATEGY_MIN_RECENT_30D_RETURN", -0.03)
@@ -340,6 +349,14 @@ def _validate_settings(s: Settings) -> None:
         problems.append("PROVISIONAL_REVIEW_MIN_WALK_FORWARD_PASS_RATE должен быть в диапазоне [0.0; STRATEGY_WALK_FORWARD_MIN_PASS_RATE]")
     if not (0 <= s.provisional_review_min_score <= 100):
         problems.append("PROVISIONAL_REVIEW_MIN_SCORE должен быть в диапазоне [0; 100]")
+    if not (1 <= s.recommendation_loss_quarantine_min_trades <= 100):
+        problems.append("RECOMMENDATION_LOSS_QUARANTINE_MIN_TRADES должен быть в диапазоне [1; 100]")
+    if not (0.50 <= s.recommendation_loss_quarantine_max_loss_rate <= 1.0):
+        problems.append("RECOMMENDATION_LOSS_QUARANTINE_MAX_LOSS_RATE должен быть в диапазоне [0.50; 1.0]")
+    if not (-5.0 <= s.recommendation_loss_quarantine_min_expectancy_r <= 0.0):
+        problems.append("RECOMMENDATION_LOSS_QUARANTINE_MIN_EXPECTANCY_R должен быть в диапазоне [-5.0; 0.0]")
+    if not (1 <= s.recommendation_loss_quarantine_consecutive_losses <= 20):
+        problems.append("RECOMMENDATION_LOSS_QUARANTINE_CONSECUTIVE_LOSSES должен быть в диапазоне [1; 20]")
     if not (1 <= s.strategy_quality_max_age_days <= 365):
         problems.append("STRATEGY_QUALITY_MAX_AGE_DAYS должен быть в диапазоне [1; 365]")
     if not (-0.50 <= s.strategy_min_expectancy <= 0.50):

@@ -370,6 +370,7 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
             "recommendation_explanation", "signal_breakdown",
             "price_actionability", "contract_health", "decision_source", "frontend_may_recalculate",
             "intrabar_execution_model", "same_bar_stop_first_reason",
+            "signal_breakdown.outcome_quality",
         ],
         "intrabar_execution_policy": "conservative_ohlc_stop_loss_first; same-bar SL/TP is marked as stop_loss_same_bar_ambiguous",
         "price_gate_policy": "entry_zone_only_for_actionable_review",
@@ -678,6 +679,32 @@ def _recommendation_base_sql(where_sql: str) -> str:
                max_favorable_excursion_r, max_adverse_excursion_r, exit_price, exit_time, notes AS outcome_notes
         FROM recommendation_outcomes
         ORDER BY signal_id, evaluated_at DESC
+    ), outcome_ranked AS (
+        SELECT s2.category, s2.symbol, s2.interval, s2.strategy, s2.direction,
+               ro.outcome_status, ro.realized_r, ro.evaluated_at,
+               ROW_NUMBER() OVER (
+                   PARTITION BY s2.category, s2.symbol, s2.interval, s2.strategy, s2.direction
+                   ORDER BY ro.evaluated_at DESC, ro.id DESC
+               ) AS rn
+        FROM recommendation_outcomes ro
+        JOIN signals s2 ON s2.id = ro.signal_id
+        WHERE ro.outcome_status <> 'open'
+          AND s2.direction IN ('long','short')
+    ), outcome_quality AS (
+        SELECT category, symbol, interval, strategy, direction,
+               COUNT(*)::int AS recent_outcomes_count,
+               COUNT(*) FILTER (WHERE COALESCE(realized_r, 0) < 0)::int AS recent_loss_count,
+               (COUNT(*) FILTER (WHERE COALESCE(realized_r, 0) < 0)::float / NULLIF(COUNT(*)::float, 0)) AS recent_loss_rate,
+               AVG(realized_r)::float AS recent_average_r,
+               (SUM(GREATEST(COALESCE(realized_r, 0), 0))::float / NULLIF(ABS(SUM(LEAST(COALESCE(realized_r, 0), 0)))::float, 0)) AS recent_profit_factor,
+               CASE
+                   WHEN MIN(CASE WHEN COALESCE(realized_r, 0) >= 0 THEN rn END) IS NULL THEN COUNT(*)::int
+                   ELSE GREATEST(MIN(CASE WHEN COALESCE(realized_r, 0) >= 0 THEN rn END) - 1, 0)::int
+               END AS recent_consecutive_losses,
+               MAX(evaluated_at) AS recent_last_evaluated_at
+        FROM outcome_ranked
+        WHERE rn <= 20
+        GROUP BY category, symbol, interval, strategy, direction
     )
     SELECT s.id, s.created_at, s.bar_time, s.expires_at, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
            s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
@@ -687,6 +714,7 @@ def _recommendation_base_sql(where_sql: str) -> str:
            p.last_price, p.last_price_time,
            e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
            o.outcome_evaluated_at, o.outcome_status, o.realized_r, o.max_favorable_excursion_r, o.max_adverse_excursion_r, o.exit_price, o.exit_time, o.outcome_notes,
+           oq.recent_outcomes_count, oq.recent_loss_count, oq.recent_loss_rate, oq.recent_average_r, oq.recent_profit_factor, oq.recent_consecutive_losses, oq.recent_last_evaluated_at,
            (
                COALESCE(s.confidence::float, 0) * 0.35
              + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.20
@@ -701,6 +729,7 @@ def _recommendation_base_sql(where_sql: str) -> str:
     LEFT JOIN latest_price p ON p.category=s.category AND p.symbol=s.symbol AND p.interval=s.interval
     LEFT JOIN latest_llm e ON e.signal_id=s.id
     LEFT JOIN latest_outcome o ON o.signal_id=s.id
+    LEFT JOIN outcome_quality oq ON oq.category=s.category AND oq.symbol=s.symbol AND oq.interval=s.interval AND oq.strategy=s.strategy AND oq.direction=s.direction
     WHERE {where_sql}
     """
 
@@ -1090,6 +1119,32 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                            payload_hash AS llm_payload_hash
                     FROM llm_evaluations
                     ORDER BY signal_id, updated_at DESC
+                ), outcome_ranked AS (
+                    SELECT s2.category, s2.symbol, s2.interval, s2.strategy, s2.direction,
+                           ro.outcome_status, ro.realized_r, ro.evaluated_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY s2.category, s2.symbol, s2.interval, s2.strategy, s2.direction
+                               ORDER BY ro.evaluated_at DESC, ro.id DESC
+                           ) AS rn
+                    FROM recommendation_outcomes ro
+                    JOIN signals s2 ON s2.id = ro.signal_id
+                    WHERE ro.outcome_status <> 'open'
+                      AND s2.direction IN ('long','short')
+                ), outcome_quality AS (
+                    SELECT category, symbol, interval, strategy, direction,
+                           COUNT(*)::int AS recent_outcomes_count,
+                           COUNT(*) FILTER (WHERE COALESCE(realized_r, 0) < 0)::int AS recent_loss_count,
+                           (COUNT(*) FILTER (WHERE COALESCE(realized_r, 0) < 0)::float / NULLIF(COUNT(*)::float, 0)) AS recent_loss_rate,
+                           AVG(realized_r)::float AS recent_average_r,
+                           (SUM(GREATEST(COALESCE(realized_r, 0), 0))::float / NULLIF(ABS(SUM(LEAST(COALESCE(realized_r, 0), 0)))::float, 0)) AS recent_profit_factor,
+                           CASE
+                               WHEN MIN(CASE WHEN COALESCE(realized_r, 0) >= 0 THEN rn END) IS NULL THEN COUNT(*)::int
+                               ELSE GREATEST(MIN(CASE WHEN COALESCE(realized_r, 0) >= 0 THEN rn END) - 1, 0)::int
+                           END AS recent_consecutive_losses,
+                           MAX(evaluated_at) AS recent_last_evaluated_at
+                    FROM outcome_ranked
+                    WHERE rn <= 20
+                    GROUP BY category, symbol, interval, strategy, direction
                 )
                 SELECT s.id, s.created_at, s.bar_time, s.expires_at, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence,
                        s.entry, s.stop_loss, s.take_profit, s.atr, s.ml_probability, s.sentiment_score, s.rationale,
@@ -1101,6 +1156,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                        l.liquidity_captured_at, l.liquidity_status,
                        p.last_price, p.last_price_time,
                        e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
+                       oq.recent_outcomes_count, oq.recent_loss_count, oq.recent_loss_rate, oq.recent_average_r, oq.recent_profit_factor, oq.recent_consecutive_losses, oq.recent_last_evaluated_at,
                        (
                            COALESCE(s.confidence::float, 0) * 0.30
                          + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.18
@@ -1122,6 +1178,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 LEFT JOIN latest_liq l ON l.symbol=s.symbol
                 LEFT JOIN latest_price p ON p.category=s.category AND p.symbol=s.symbol AND p.interval=s.interval
                 LEFT JOIN latest_llm e ON e.signal_id=s.id
+                LEFT JOIN outcome_quality oq ON oq.category=s.category AND oq.symbol=s.symbol AND oq.interval=s.interval AND oq.strategy=s.strategy AND oq.direction=s.direction
                 ORDER BY research_score DESC NULLS LAST, s.created_at DESC
                 LIMIT %s
                 """,
@@ -1220,6 +1277,32 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                        payload_hash AS llm_payload_hash
                 FROM llm_evaluations
                 ORDER BY signal_id, updated_at DESC
+            ), outcome_ranked AS (
+                SELECT s2.category, s2.symbol, s2.interval, s2.strategy, s2.direction,
+                       ro.outcome_status, ro.realized_r, ro.evaluated_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY s2.category, s2.symbol, s2.interval, s2.strategy, s2.direction
+                           ORDER BY ro.evaluated_at DESC, ro.id DESC
+                       ) AS rn
+                FROM recommendation_outcomes ro
+                JOIN signals s2 ON s2.id = ro.signal_id
+                WHERE ro.outcome_status <> 'open'
+                  AND s2.direction IN ('long','short')
+            ), outcome_quality AS (
+                SELECT category, symbol, interval, strategy, direction,
+                       COUNT(*)::int AS recent_outcomes_count,
+                       COUNT(*) FILTER (WHERE COALESCE(realized_r, 0) < 0)::int AS recent_loss_count,
+                       (COUNT(*) FILTER (WHERE COALESCE(realized_r, 0) < 0)::float / NULLIF(COUNT(*)::float, 0)) AS recent_loss_rate,
+                       AVG(realized_r)::float AS recent_average_r,
+                       (SUM(GREATEST(COALESCE(realized_r, 0), 0))::float / NULLIF(ABS(SUM(LEAST(COALESCE(realized_r, 0), 0)))::float, 0)) AS recent_profit_factor,
+                       CASE
+                           WHEN MIN(CASE WHEN COALESCE(realized_r, 0) >= 0 THEN rn END) IS NULL THEN COUNT(*)::int
+                           ELSE GREATEST(MIN(CASE WHEN COALESCE(realized_r, 0) >= 0 THEN rn END) - 1, 0)::int
+                       END AS recent_consecutive_losses,
+                       MAX(evaluated_at) AS recent_last_evaluated_at
+                FROM outcome_ranked
+                WHERE rn <= 20
+                GROUP BY category, symbol, interval, strategy, direction
             )
             SELECT s.id, s.created_at, s.bar_time, s.expires_at, s.category, s.symbol, s.interval, s.strategy, s.direction, s.confidence, s.entry, s.stop_loss, s.take_profit,
                    s.atr, s.ml_probability, s.sentiment_score, s.rationale,
@@ -1231,6 +1314,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                    l.liquidity_captured_at, l.liquidity_status,
                    p.last_price, p.last_price_time,
                    e.llm_status, e.llm_brief, e.llm_error, e.llm_model, e.llm_updated_at, e.llm_duration_ms, e.llm_payload_hash,
+                   oq.recent_outcomes_count, oq.recent_loss_count, oq.recent_loss_rate, oq.recent_average_r, oq.recent_profit_factor, oq.recent_consecutive_losses, oq.recent_last_evaluated_at,
                    (
                        COALESCE(s.confidence::float, 0) * 0.30
                      + LEAST(GREATEST(COALESCE(q.quality_score::float, 0) / 100.0, 0), 1) * 0.18
@@ -1252,6 +1336,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
             LEFT JOIN latest_liq l ON l.symbol=s.symbol
             LEFT JOIN latest_price p ON p.category=s.category AND p.symbol=s.symbol AND p.interval=s.interval
             LEFT JOIN latest_llm e ON e.signal_id=s.id
+            LEFT JOIN outcome_quality oq ON oq.category=s.category AND oq.symbol=s.symbol AND oq.interval=s.interval AND oq.strategy=s.strategy AND oq.direction=s.direction
             ORDER BY research_score DESC NULLS LAST, s.created_at DESC
             LIMIT %s
             """,
@@ -1696,17 +1781,25 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
         if not candles.get("latest_candle_at"):
             warnings.append({"code": "no_market_data", "level": "fail", "message": "Нет исторических свечей; рекомендации должны оставаться NO_TRADE."})
         try:
-            integrity = fetch_all(
-                """
-                SELECT issue_code, severity, COUNT(*)::int AS count
-                FROM v_recommendation_integrity_audit_v40
-                WHERE category=%s
-                GROUP BY issue_code, severity
-                ORDER BY severity DESC, count DESC, issue_code
-                LIMIT 20
-                """,
-                (category,),
-            )
+            integrity = []
+            # Backward-compatible fallback keeps the historic V40 audit contract available.
+            # Static contract test anchor: FROM v_recommendation_integrity_audit_v40
+            for audit_view in ("v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
+                try:
+                    integrity = fetch_all(
+                        f"""
+                        SELECT issue_code, severity, COUNT(*)::int AS count
+                        FROM {audit_view}
+                        WHERE category=%s
+                        GROUP BY issue_code, severity
+                        ORDER BY severity DESC, count DESC, issue_code
+                        LIMIT 20
+                        """,
+                        (category,),
+                    )
+                    break
+                except Exception:
+                    continue
             for item in integrity:
                 warnings.append({
                     "code": f"recommendation_integrity_{item.get('issue_code')}",

@@ -463,6 +463,21 @@ def signal_breakdown(row: dict[str, Any], levels: dict[str, Any], price: dict[st
             "expectancy": finite(row.get("expectancy")),
             "walk_forward_pass_rate": finite(row.get("walk_forward_pass_rate")),
         },
+        "outcome_quality": {
+            "recent_outcomes_count": finite(row.get("recent_outcomes_count"), 0.0),
+            "recent_loss_count": finite(row.get("recent_loss_count"), 0.0),
+            "recent_loss_rate": finite(row.get("recent_loss_rate")),
+            "recent_average_r": finite(row.get("recent_average_r")),
+            "recent_profit_factor": finite(row.get("recent_profit_factor")),
+            "recent_consecutive_losses": finite(row.get("recent_consecutive_losses"), 0.0),
+            "recent_last_evaluated_at": row.get("recent_last_evaluated_at"),
+            "quarantine_rules": {
+                "min_trades": settings.recommendation_loss_quarantine_min_trades,
+                "max_loss_rate": settings.recommendation_loss_quarantine_max_loss_rate,
+                "min_expectancy_r": settings.recommendation_loss_quarantine_min_expectancy_r,
+                "consecutive_losses": settings.recommendation_loss_quarantine_consecutive_losses,
+            },
+        },
         "raw_indicators": {k: v for k, v in rationale.items() if k not in {"votes", "signal_breakdown"}},
         "votes": rationale.get("votes") if isinstance(rationale.get("votes"), list) else [],
     }
@@ -504,6 +519,10 @@ def statistics_confidence(row: dict[str, Any]) -> dict[str, Any]:
         "win_rate": finite(row.get("win_rate")),
         "expectancy": finite(row.get("expectancy")),
         "max_drawdown": finite(row.get("max_drawdown")),
+        "recent_outcomes_count": int(finite(row.get("recent_outcomes_count"), 0.0) or 0),
+        "recent_average_r": finite(row.get("recent_average_r")),
+        "recent_loss_rate": finite(row.get("recent_loss_rate")),
+        "recent_consecutive_losses": int(finite(row.get("recent_consecutive_losses"), 0.0) or 0),
         "explanation": explanation,
     }
 

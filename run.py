@@ -96,7 +96,7 @@ def subprocess_env() -> dict[str, str]:
 def python_sources() -> list[Path]:
     """Возвращает проверяемые Python-файлы без записи __pycache__."""
     files: set[Path] = set()
-    for root_name in ("app", "tests"):
+    for root_name in ("app", "tests", "scripts"):
         root = PROJECT_ROOT / root_name
         if root.exists():
             files.update(
@@ -173,6 +173,23 @@ def command_init_db(args: argparse.Namespace) -> int:
     return run_command([runtime_python(args.no_venv), "-m", "app.init_db"])
 
 
+def command_migrate(args: argparse.Namespace) -> int:
+    # Накат миграций вынесен в отдельный модуль, чтобы его можно было запускать
+    # напрямую, через run.py и из CI одинаковым способом.
+    command = [runtime_python(args.no_venv), "-m", "app.db_migrations"]
+    if args.init_schema:
+        command.append("--init-schema")
+    if args.dry_run:
+        command.append("--dry-run")
+    if args.list_only:
+        command.append("--list")
+    if args.target:
+        command.extend(["--target", args.target])
+    if args.allow_changed_checksum:
+        command.append("--allow-changed-checksum")
+    return run_command(command)
+
+
 def command_test(args: argparse.Namespace) -> int:
     return run_pytest_suite()
 
@@ -233,6 +250,15 @@ def parse_args() -> argparse.Namespace:
     init_db = subparsers.add_parser("init-db", help="Применить sql/schema.sql к PostgreSQL из .env.")
     init_db.add_argument("--no-venv", action="store_true", help="Использовать текущий Python вместо .venv.")
     init_db.set_defaults(func=command_init_db)
+
+    migrate = subparsers.add_parser("migrate", help="Безопасно применить sql/migrations/*.sql к PostgreSQL из .env.")
+    migrate.add_argument("--init-schema", action="store_true", help="Если core-таблиц нет, сначала применить sql/schema.sql.")
+    migrate.add_argument("--dry-run", action="store_true", help="Показать план без изменений в БД.")
+    migrate.add_argument("--list", dest="list_only", action="store_true", help="Показать статус миграций и выйти.")
+    migrate.add_argument("--target", help="Применить миграции только до указанного файла включительно.")
+    migrate.add_argument("--allow-changed-checksum", action="store_true", help="Не останавливать аварийный ремонт при измененной примененной миграции.")
+    migrate.add_argument("--no-venv", action="store_true", help="Использовать текущий Python вместо .venv.")
+    migrate.set_defaults(func=command_migrate)
 
     test = subparsers.add_parser("test", help="Запустить pytest.")
     test.add_argument("--no-venv", action="store_true", help="Использовать текущий Python вместо .venv.")

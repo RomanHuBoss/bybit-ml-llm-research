@@ -83,11 +83,37 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Создайте БД и примените схему:
+Создайте БД и примените схему с миграциями:
 
 ```bash
-psql -U bybit_lab_user -d bybit_lab -f sql/schema.sql
+# Для новой пустой БД: применит sql/schema.sql, затем все sql/migrations/*.sql.
+python run.py migrate --init-schema
+
+# Для уже инициализированной БД: применит только еще не примененные миграции.
+python run.py migrate
 ```
+
+Скрипт ведет журнал примененных файлов в `public.schema_migrations`, проверяет SHA-256
+каждой миграции и берет PostgreSQL advisory lock, чтобы два процесса не накатывали
+изменения одновременно. Повторный запуск безопасен: уже примененные миграции будут
+пропущены.
+
+Полезные режимы:
+
+```bash
+python run.py migrate --list
+python run.py migrate --dry-run
+python run.py migrate --target 20260504_v43_recent_loss_quarantine.sql
+
+# Альтернативные прямые запускатели:
+python scripts/apply_migrations.py --init-schema
+scripts/apply_migrations.sh --init-schema
+# Windows PowerShell:
+# .\scripts\apply_migrations.ps1 --init-schema
+```
+
+`python run.py init-db` оставлен только как legacy-команда для прямого применения
+`sql/schema.sql`; для обычной эксплуатации используйте `python run.py migrate`.
 
 ## Запуск
 
@@ -197,7 +223,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V38
+## Recommendation API V40/V43
 
 Канонические endpoints для витрины оператора:
 
@@ -210,14 +236,35 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V38 additions
+### Recommendation API V40/V43 additions
 
-- `contract_version = recommendation_v38`.
+- `contract_version = recommendation_v40`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
 - `price_actionability.is_price_actionable=true` возможен только в `entry_zone`; состояние `extended` означает ждать ретест, а не догонять цену.
 - `net_risk_reward` после fee/slippage участвует в review gate; слабый net R/R переводит сетап в hard/warn guardrail.
-- Контракт содержит `decision_source=server_enriched_contract_v38` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
-- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v38`, если миграция применена. V38 дополнительно ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста.
+- Контракт содержит `decision_source=server_enriched_contract_v40` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
+- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v43` с fallback на `v_recommendation_integrity_audit_v40`, если миграция применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction.
+
+
+
+## Loss quarantine V43
+
+Добавлен защитный слой против ситуации, когда стратегия формально прошла backtest/quality-gate, но последние реальные или paper-исходы похожих рекомендаций убыточны. Runtime собирает последние 20 завершенных исходов по ключу `category + symbol + interval + strategy + direction` и передает в операторский классификатор поля:
+
+- `recent_outcomes_count`;
+- `recent_loss_count`;
+- `recent_loss_rate`;
+- `recent_average_r`;
+- `recent_profit_factor`;
+- `recent_consecutive_losses`;
+- `recent_last_evaluated_at`.
+
+Если выполнено одно из условий ниже, рекомендация блокируется как `NO_TRADE` независимо от формального `APPROVED`:
+
+- исходов не меньше `RECOMMENDATION_LOSS_QUARANTINE_MIN_TRADES`, доля убытков >= `RECOMMENDATION_LOSS_QUARANTINE_MAX_LOSS_RATE`, средний R <= `RECOMMENDATION_LOSS_QUARANTINE_MIN_EXPECTANCY_R`;
+- подряд убыточных исходов >= `RECOMMENDATION_LOSS_QUARANTINE_CONSECUTIVE_LOSSES`.
+
+Фронт показывает отдельную карточку `Loss quarantine`, а `/api/system/warnings` использует `v_recommendation_integrity_audit_v43`, если миграция применена. Это не заменяет полноценный risk review, но закрывает дефект, когда после серии фактических убытков система продолжала выдавать новые `REVIEW_ENTRY`.
 
 ## Frontend
 
@@ -266,7 +313,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 - Все кандидаты `НЕТ ВХОДА`: откройте checklist/reasons; чаще всего причина в stale данных, MTF conflict, низком R/R или liquidity/spread.
 - `Quality refresh` долго идет: это штатная фоновая операция; смотрите статус в Strategy Lab или `/api/strategies/quality/refresh/status`. Если часто видите `partial=true`, уменьшите `STRATEGY_QUALITY_REFRESH_LIMIT` или увеличьте `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`.
 - Ошибка Bybit: уменьшите число symbols/intervals/days, проверьте rate limits и сеть.
-- Ошибка PostgreSQL: проверьте `.env`, доступность БД и примененную `sql/schema.sql`.
+- Ошибка PostgreSQL: проверьте `.env`, доступность БД и выполните `python run.py migrate --list`; для новой БД используйте `python run.py migrate --init-schema`.
 - LLM unavailable: проверьте `OLLAMA_BASE_URL`, модель и timeout.
 
 ## Риск-дисклеймер

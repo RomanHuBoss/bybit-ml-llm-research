@@ -1599,6 +1599,26 @@ function indicatorValuesHtml(values) {
   return `<div class="indicator-chip-row">${entries.slice(0, 16).map(([key, value]) => `<span class="indicator-chip">${escapeHtml(key)} ${fmt(value, 4)}</span>`).join('')}</div>`;
 }
 
+function outcomeQualityHtml(contract) {
+  const quality = contract?.signal_breakdown?.outcome_quality || {};
+  const count = num(quality.recent_outcomes_count, 0);
+  if (!count) {
+    return '<p class="muted-line">Недавние исходы по этому symbol/TF/strategy/direction ещё не накоплены.</p>';
+  }
+  const lossRate = num(quality.recent_loss_rate, null);
+  const avgR = num(quality.recent_average_r, null);
+  const streak = num(quality.recent_consecutive_losses, 0);
+  const rules = quality.quarantine_rules || {};
+  const quarantined = (lossRate !== null && lossRate >= num(rules.max_loss_rate, 0.75) && avgR !== null && avgR <= num(rules.min_expectancy_r, -0.10)) || streak >= num(rules.consecutive_losses, 3);
+  return `<div class="outcome-quality ${quarantined ? 'quarantined' : 'ok'}">
+    <div><span>Последние исходы</span><strong>${fmt(count, 0)}</strong></div>
+    <div><span>Убыточность</span><strong>${pct(lossRate, 0)}</strong></div>
+    <div><span>Средний R</span><strong>${fmt(avgR, 2)}</strong></div>
+    <div><span>Loss streak</span><strong>${fmt(streak, 0)}</strong></div>
+    <small>${quarantined ? 'Loss quarantine активен: новый REVIEW_ENTRY должен быть заблокирован сервером.' : 'Недавние исходы не активируют loss quarantine, но не являются гарантией прибыли.'}</small>
+  </div>`;
+}
+
 function outcomeContractHtml(outcome) {
   if (!outcome || !outcome.status) {
     return '<p class="muted-line">Исход ещё не зафиксирован. Активная рекомендация оценивается после TP/SL, invalidation или expiry.</p>';
@@ -1793,6 +1813,7 @@ function renderTicket(s) {
       <section class="detail-card warn"><b>Что против сделки</b>${factorListHtml(contract.factors_against || [])}</section>
       <section class="detail-card"><b>Таймфреймы</b>${timeframeListHtml(contract.timeframes_used || [])}</section>
       <section class="detail-card"><b>Выборка качества</b>${statisticsConfidenceHtml(contract.statistics_confidence)}</section>
+      <section class="detail-card"><b>Loss quarantine</b>${outcomeQualityHtml(contract)}</section>
       <section class="detail-card"><b>Исход рекомендации</b>${outcomeContractHtml(contract.outcome)}</section>
       <section class="detail-card"><b>Guardrails контракта</b>${contractHealthHtml(contract.contract_health)}</section>
       <section class="detail-card wide"><b>История похожих сигналов</b>${similarHistoryHtml(state.similarHistory, s.id)}</section>

@@ -206,6 +206,56 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     else:
         _add_reason(evidence, "walk_forward_ok", "Walk-forward подтверждает устойчивость", f"WF pass {wf_rate:.0%} по {wf_windows} окнам.")
 
+    recent_count = int(_finite(row.get("recent_outcomes_count"), 0.0) or 0)
+    recent_loss_count = int(_finite(row.get("recent_loss_count"), 0.0) or 0)
+    recent_loss_rate = _finite(row.get("recent_loss_rate"))
+    recent_average_r = _finite(row.get("recent_average_r"))
+    recent_profit_factor = _finite(row.get("recent_profit_factor"))
+    recent_consecutive_losses = int(_finite(row.get("recent_consecutive_losses"), 0.0) or 0)
+    if recent_count > 0:
+        pf_text = "∞/недоступен" if recent_profit_factor is None else f"{recent_profit_factor:.2f}"
+        avg_r_text = "н/д" if recent_average_r is None else f"{recent_average_r:.2f}R"
+        _add_reason(
+            evidence,
+            "recent_outcome_quality",
+            "Проверены последние фактические исходы",
+            f"Последних исходов: {recent_count}, убыточных: {recent_loss_count}, средний R: {avg_r_text}, PF: {pf_text}.",
+        )
+    enough_recent = recent_count >= settings.recommendation_loss_quarantine_min_trades
+    if recent_consecutive_losses >= settings.recommendation_loss_quarantine_consecutive_losses and recent_count >= recent_consecutive_losses:
+        _add_reason(
+            hard,
+            "loss_streak_quarantine",
+            "Серия последних рекомендаций убыточна",
+            (
+                f"Последние {recent_consecutive_losses} завершенных рекомендаций по этому symbol/TF/strategy/direction были убыточны. "
+                "Новая сделка запрещена до переоценки стратегии."
+            ),
+        )
+    elif (
+        enough_recent
+        and recent_loss_rate is not None
+        and recent_average_r is not None
+        and recent_loss_rate >= settings.recommendation_loss_quarantine_max_loss_rate
+        and recent_average_r <= settings.recommendation_loss_quarantine_min_expectancy_r
+    ):
+        _add_reason(
+            hard,
+            "recent_loss_quarantine",
+            "Недавние исходы запрещают новый вход",
+            (
+                f"Убыточность последних похожих рекомендаций {recent_loss_rate:.0%}, средний результат {recent_average_r:.2f}R. "
+                "Это не слабый evidence, а активный блок на REVIEW_ENTRY."
+            ),
+        )
+    elif enough_recent and recent_average_r is not None and recent_average_r < 0:
+        _add_reason(
+            warnings,
+            "recent_expectancy_negative",
+            "Недавняя expectancy отрицательная",
+            f"Средний результат последних похожих рекомендаций {recent_average_r:.2f}R; риск должен быть снижен или сетап пропущен.",
+        )
+
     roc_auc = _finite(row.get("roc_auc"))
     ml_probability = _finite(row.get("ml_probability"))
     if roc_auc is None and ml_probability is None:
@@ -235,6 +285,10 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         score += max(0.0, 1.0 - min(1.0, max_dd / 0.18)) * 4.0
     if wf_rate is not None and wf_windows >= settings.strategy_walk_forward_min_windows:
         score += max(0.0, min(1.0, wf_rate)) * 4.0
+    if enough_recent and recent_loss_rate is not None:
+        score -= min(14.0, max(0.0, recent_loss_rate) * 14.0)
+    if enough_recent and recent_average_r is not None and recent_average_r < 0:
+        score -= min(10.0, abs(recent_average_r) * 8.0)
     score -= min(18.0, len(evidence) * 3.0)
     score -= min(16.0, len(warnings) * 4.0)
     score = int(round(max(0.0, min(100.0, score))))

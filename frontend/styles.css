@@ -1758,3 +1758,39 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .execution-level.ttl-state { border-color: var(--stroke); }
 .execution-level.ttl-state.expiring { background: var(--amber-soft); }
 .execution-level.ttl-state.expired { background: var(--red-soft); }
+
+/* V43 recent outcome quality / loss quarantine card */
+.outcome-quality {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.outcome-quality div {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  padding: 8px;
+  background: rgba(2, 6, 23, 0.30);
+}
+.outcome-quality span,
+.outcome-quality small {
+  display: block;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.outcome-quality strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.outcome-quality small {
+  grid-column: 1 / -1;
+}
+.outcome-quality.quarantined {
+  border-left: 3px solid var(--red);
+  padding-left: 10px;
+}
+.outcome-quality.ok {
+  border-left: 3px solid rgba(0, 227, 140, 0.65);
+  padding-left: 10px;
+}
