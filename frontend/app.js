@@ -1319,7 +1319,7 @@ function algorithmDecisionFor(s) {
     label: 'НЕТ ВХОДА',
     score: 0,
     title: `${s.symbol}: нет серверного recommendation contract`,
-    subtitle: 'Frontend v38 не пересчитывает торговое решение и risk/reward. Нужно обновить backend или открыть /api/recommendations/active: без server-enriched contract вход запрещён.',
+    subtitle: 'Frontend v40 не пересчитывает торговое решение и risk/reward. Нужно обновить backend или открыть /api/recommendations/active: без server-enriched contract вход запрещён.',
   };
 }
 

@@ -6,7 +6,7 @@ from .config import settings
 from .db import fetch_all
 from .mtf import apply_mtf_consensus
 from .operator_queue import consolidate_operator_queue
-from .recommendation import annotate_recommendations
+from .recommendation import annotate_recommendations, ensure_operator_decisions
 from .safety import annotate_and_filter_fresh_signals
 from .strategy_quality import ensure_strategy_quality_storage
 
@@ -171,4 +171,4 @@ def rank_candidates_multi(category: str = "linear", intervals: list[str] | tuple
         if not requested_entry_queue:
             return []
         rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
-    return consolidate_operator_queue(annotate_recommendations(rows), limit=limit)
+    return annotate_recommendations(consolidate_operator_queue(ensure_operator_decisions(rows), limit=limit))

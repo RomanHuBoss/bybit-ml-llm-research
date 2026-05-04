@@ -9,7 +9,8 @@ from .config import settings
 DIRECTION_LONG = "long"
 DIRECTION_SHORT = "short"
 DIRECTION_NO_TRADE = "no_trade"
-RECOMMENDATION_CONTRACT_VERSION = "recommendation_v38"
+RECOMMENDATION_CONTRACT_VERSION = "recommendation_v40"
+DECISION_SOURCE = "server_enriched_contract_v40"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
 NON_ENTRY_ACTIONS = {"NO_TRADE", "WAIT"}
 
@@ -639,7 +640,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "price_actionability": price_gate,
         "entry_window": price_gate.get("entry_window"),
         "confidence_semantics": "engineering_score_not_win_probability",
-        "decision_source": "server_enriched_contract_v38",
+        "decision_source": DECISION_SOURCE,
         "frontend_may_recalculate": False,
         "invalidation_condition": invalidation,
         "recommendation_explanation": explanation_text,
@@ -701,7 +702,7 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
         problems.append({"code": "no_trade_marked_actionable", "level": "error", "message": "NO_TRADE cannot be actionable."})
     if contract.get("frontend_may_recalculate") is not False:
         problems.append({"code": "frontend_recalculation_allowed", "level": "error", "message": "Frontend must render the server-enriched recommendation contract and must not recompute trade math."})
-    if contract.get("decision_source") != "server_enriched_contract_v38":
+    if contract.get("decision_source") != DECISION_SOURCE:
         problems.append({"code": "missing_server_decision_source", "level": "warn", "message": "Contract should explicitly identify the server as the only decision source."})
     if status in {"review_entry", "research_candidate", "blocked", "wait"}:
         factors_for = contract.get("factors_for")
@@ -769,7 +770,7 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         },
         "entry_window": None,
         "confidence_semantics": "engineering_score_not_win_probability",
-        "decision_source": "server_enriched_contract_v38",
+        "decision_source": DECISION_SOURCE,
         "frontend_may_recalculate": False,
         "invalidation_condition": "Нет валидного торгового сетапа: вход запрещён до появления свежей рекомендации с entry, SL, TP и сроком актуальности.",
         "recommendation_explanation": reason,

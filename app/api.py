@@ -66,8 +66,8 @@ from .db import execute, fetch_all, fetch_one
 from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .operator_queue import consolidate_operator_queue
-from .recommendation import annotate_recommendations
-from .trade_contract import RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
+from .recommendation import annotate_recommendations, ensure_operator_decisions
+from .trade_contract import DECISION_SOURCE, RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
 from .recommendation_outcomes import evaluate_due_recommendation_outcomes
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
@@ -313,7 +313,7 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "stale": stale,
         "moved_away": moved_away,
         "contract": RECOMMENDATION_CONTRACT_VERSION,
-        "previous_contract": "recommendation_v37",
+        "previous_contract": "recommendation_v38",
     }
 
 
@@ -371,7 +371,9 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
             "price_actionability", "contract_health", "decision_source", "frontend_may_recalculate",
         ],
         "price_gate_policy": "entry_zone_only_for_actionable_review",
-        "decision_source": "server_enriched_contract_v38",
+        "decision_source": DECISION_SOURCE,
+        "decision_source_literal": "server_enriched_contract_v40",
+        "operator_queue_policy": "operator_queue_consolidates_before_contract_enrichment",
         "frontend_may_recalculate": False,
         "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction or risk math on the client",
     }
@@ -1131,7 +1133,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
             )
             if entry_only:
                 rows = [row for row in rows if str(row.get("interval") or "").strip().upper() == entry_interval]
-            rows = consolidate_operator_queue(annotate_recommendations(rows), limit=limit)
+            rows = annotate_recommendations(consolidate_operator_queue(ensure_operator_decisions(rows), limit=limit))
             return {"ok": True, "category": category, "entry_only": entry_only, "entry_interval": settings.mtf_entry_interval, "signals": rows}
     
         try:
@@ -1252,7 +1254,7 @@ def latest_signals(limit: int = 50, entry_only: bool = True, category: str = set
                 settings.max_spread_pct, limit,
             ),
         )
-        rows = consolidate_operator_queue(annotate_recommendations(annotate_and_filter_fresh_signals(rows)), limit=limit)
+        rows = annotate_recommendations(consolidate_operator_queue(ensure_operator_decisions(annotate_and_filter_fresh_signals(rows)), limit=limit))
         return {"ok": True, "category": category, "entry_only": False, "entry_interval": settings.mtf_entry_interval, "signals": rows}
     except Exception as exc:
         return {
@@ -1679,7 +1681,7 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
             integrity = fetch_all(
                 """
                 SELECT issue_code, severity, COUNT(*)::int AS count
-                FROM v_recommendation_integrity_audit_v38
+                FROM v_recommendation_integrity_audit_v40
                 WHERE category=%s
                 GROUP BY issue_code, severity
                 ORDER BY severity DESC, count DESC, issue_code

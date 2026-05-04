@@ -10,7 +10,7 @@ def test_v34_no_trade_decision_snapshot_is_explicit():
 
     snap = no_trade_decision_snapshot(reason="Нет валидных сетапов", category="linear")
 
-    assert snap["contract_version"] == RECOMMENDATION_CONTRACT_VERSION == "recommendation_v38"
+    assert snap["contract_version"] == RECOMMENDATION_CONTRACT_VERSION == "recommendation_v40"
     assert snap["trade_direction"] == "no_trade"
     assert snap["display_direction"] == "NO_TRADE"
     assert snap["is_actionable"] is False
@@ -29,7 +29,7 @@ def test_v34_active_recommendations_returns_no_trade_snapshot_on_empty(monkeypat
     assert payload["ok"] is True
     assert payload["recommendations"] == []
     assert payload["market_state"]["status"] == "no_trade"
-    assert payload["decision_snapshot"]["contract_version"] == "recommendation_v38"
+    assert payload["decision_snapshot"]["contract_version"] == "recommendation_v40"
     assert payload["decision_snapshot"]["trade_direction"] == "no_trade"
 
 

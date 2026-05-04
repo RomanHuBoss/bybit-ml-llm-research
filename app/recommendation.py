@@ -343,6 +343,24 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def ensure_operator_decisions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Возвращает строки с operator_* полями без построения финального контракта.
+
+    Консолидация очереди должна происходить между классификацией и enrichment.
+    Иначе nested `recommendation` уже содержит старое решение, а последующая
+    блокировка конфликта LONG/SHORT меняет только top-level поля. Для trading UI
+    это критичный рассинхрон: карточка может показать NO_TRADE с вложенным
+    REVIEW_ENTRY.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("operator_action") and isinstance(row.get("operator_hard_reasons"), list):
+            out.append(dict(row))
+        else:
+            out.append({**row, **classify_operator_action(row)})
+    return out
+
+
 def annotate_recommendations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Adds the canonical operator decision and the frontend-ready trade ticket contract.
 
@@ -352,7 +370,6 @@ def annotate_recommendations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     `/api/recommendations/*` endpoints one validated source of truth.
     """
     annotated: list[dict[str, Any]] = []
-    for row in rows:
-        with_decision = {**row, **classify_operator_action(row)}
-        annotated.append(enrich_recommendation_row(with_decision))
+    for row in ensure_operator_decisions(rows):
+        annotated.append(enrich_recommendation_row(row))
     return annotated

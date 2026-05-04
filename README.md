@@ -180,7 +180,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V38
+## Recommendation API V40
 
 Канонические endpoints для витрины оператора:
 
@@ -193,14 +193,14 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V38 additions
+### Recommendation API V40 additions
 
-- `contract_version = recommendation_v38`.
+- `contract_version = recommendation_v40`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
 - `price_actionability.is_price_actionable=true` возможен только в `entry_zone`; состояние `extended` означает ждать ретест, а не догонять цену.
 - `net_risk_reward` после fee/slippage участвует в review gate; слабый net R/R переводит сетап в hard/warn guardrail.
-- Контракт содержит `decision_source=server_enriched_contract_v38` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
-- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v38`, если миграция применена. V38 дополнительно ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста.
+- Контракт содержит `decision_source=server_enriched_contract_v40` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
+- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v40`, если миграция применена. V38 дополнительно ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста.
 
 ## Frontend
 
@@ -575,7 +575,7 @@ psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v30_recommendatio
 
 ## V35 — active recommendation integrity
 
-Текущий контракт рекомендаций: `recommendation_v38`.
+Текущий контракт рекомендаций: `recommendation_v40`.
 
 Ключевое изменение V35: активная выдача больше не показывает directional-сигналы, которые уже завершены outcome-evaluator или закрыты оператором. `/api/recommendations/active` требует `expires_at > NOW()` и исключает terminal outcomes. Метрики `/api/recommendations/quality` считаются только по завершённым рекомендациям (`outcome_status <> 'open'`), поэтому `winrate`, `profit_factor`, `average R`, MFE/MAE и confidence buckets не искажаются открытыми строками.
 
@@ -620,7 +620,7 @@ psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v36_frontend_cont
 
 ## V39 — deterministic TTL clock and frontend freshness state
 
-V39 is a compatibility hardening revision on top of `recommendation_v38`; the public contract version remains unchanged to avoid breaking existing API consumers.
+V39 was a compatibility hardening revision on top of `recommendation_v38`. V40 intentionally bumps the public contract after fixing operator-queue/enrichment consistency.
 
 What changed:
 
@@ -649,3 +649,43 @@ python -m py_compile app/*.py run.py install.py sitecustomize.py: OK
 ```
 
 Sandbox note: `python -u run.py check` reached `Syntax OK: 88 Python files`, then did not complete before the sandbox timeout. The direct pytest command above is the verified equivalent test path for this environment. Re-run `python run.py check` in a clean virtualenv/CI before staging.
+
+
+## V40 — operator queue and nested contract consistency
+
+Критичное исправление V40: консолидация operator queue теперь выполняется **до** построения frontend-ready recommendation contract.
+
+До V40 возможен был опасный рассинхрон: `consolidate_operator_queue()` мог перевести рынок с конкурирующими LONG/SHORT в top-level `NO_TRADE`, но вложенный объект `recommendation` уже был построен раньше и мог сохранять старый `review_entry`. Для торгового интерфейса это критично, потому что разные блоки одной карточки могли показывать разные решения.
+
+Что изменено:
+
+- добавлен `ensure_operator_decisions(rows)` в `app/recommendation.py`;
+- `/api/signals/latest`, `/api/recommendations/active` и `rank_candidates_multi()` теперь используют порядок: classify operator decision → consolidate queue → enrich recommendation contract;
+- runtime contract повышен до `recommendation_v40`;
+- `decision_source=server_enriched_contract_v40`;
+- `GET /api/recommendations/contract` публикует `operator_queue_policy=operator_queue_consolidates_before_contract_enrichment`;
+- `GET /api/system/warnings` читает `v_recommendation_integrity_audit_v40`, если миграция применена;
+- добавлена миграция `sql/migrations/20260504_v40_operator_queue_contract_consistency.sql`;
+- добавлен regression-test `tests/test_recommendation_contract_v40.py`, проверяющий, что конфликт LONG/SHORT формирует и top-level, и nested contract как `NO_TRADE`.
+
+Применение миграции на существующей БД:
+
+```bash
+psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260504_v40_operator_queue_contract_consistency.sql
+```
+
+Проверка V40:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests
+node --check frontend/app.js
+python -m py_compile app/*.py run.py install.py sitecustomize.py
+```
+
+Sandbox verification for V40:
+
+```text
+215 passed in 4.09s
+node --check frontend/app.js: OK
+python -m py_compile app/*.py run.py install.py sitecustomize.py: OK
+```

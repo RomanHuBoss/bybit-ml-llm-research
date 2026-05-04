@@ -26,9 +26,9 @@ def test_v38_contract_declares_server_only_decision_source():
     )
     contract = item["recommendation"]
 
-    assert RECOMMENDATION_CONTRACT_VERSION == "recommendation_v38"
-    assert contract["contract_version"] == "recommendation_v38"
-    assert contract["decision_source"] == "server_enriched_contract_v38"
+    assert RECOMMENDATION_CONTRACT_VERSION == "recommendation_v40"
+    assert contract["contract_version"] == "recommendation_v40"
+    assert contract["decision_source"] == "server_enriched_contract_v40"
     assert contract["frontend_may_recalculate"] is False
     assert contract["contract_health"]["ok"] is True
 
@@ -36,8 +36,8 @@ def test_v38_contract_declares_server_only_decision_source():
 def test_v38_no_trade_snapshot_is_also_server_only():
     snap = no_trade_decision_snapshot(reason="Нет активных рекомендаций", category="linear", as_of=NOW)
 
-    assert snap["contract_version"] == "recommendation_v38"
-    assert snap["decision_source"] == "server_enriched_contract_v38"
+    assert snap["contract_version"] == "recommendation_v40"
+    assert snap["decision_source"] == "server_enriched_contract_v40"
     assert snap["frontend_may_recalculate"] is False
     assert snap["contract_health"]["ok"] is True
 
@@ -48,7 +48,7 @@ def test_v38_frontend_does_not_recompute_trade_math_or_decision():
     assert "legacy_fallback" not in js
     assert "reward / risk" not in js
     assert "Math.abs(entry - stop)" not in js
-    assert "Frontend v38 не пересчитывает торговое решение" in js
+    assert "Frontend v40 не пересчитывает торговое решение" in js
     assert "frontend не\n  // пересчитывает торговое решение" in js
     assert "contract.risk_reward ??" not in js
     assert "riskReward(s)?.ratio" in js  # allowed: riskReward now returns server fields only.
@@ -56,17 +56,14 @@ def test_v38_frontend_does_not_recompute_trade_math_or_decision():
 
 def test_v38_schema_migration_publishes_server_only_contract_and_integrity_audit():
     schema = (ROOT / "sql" / "schema.sql").read_text(encoding="utf-8")
-    migration = (ROOT / "sql" / "migrations" / "20260504_v38_server_only_recommendation_contract.sql").read_text(encoding="utf-8")
+    migration = (ROOT / "sql" / "migrations" / "20260504_v40_operator_queue_contract_consistency.sql").read_text(encoding="utf-8")
     api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
 
     for source in (schema, migration):
-        assert "enforce_signal_recommendation_contract_v38" in source
-        assert "v_recommendation_integrity_audit_v38" in source
-        assert "v_recommendation_contract_v38" in source
-        assert "recommendation_v38" in source
-        assert "active_direction_conflict" in source
-        assert "missing_explanation_payload" in source
-        assert "missing_timeframe_context" in source
-        assert "ck_signals_directional_ttl_upper_bound_v38" in source
-    assert "FROM v_recommendation_integrity_audit_v38" in api
+        assert "v_recommendation_integrity_audit_v40" in source
+        assert "v_recommendation_contract_v40" in source
+        assert "recommendation_v40" in source
+        assert "operator_contract_conflict_mismatch" in source
+        assert "operator_queue_consolidates_before_contract_enrichment" in source
+    assert "FROM v_recommendation_integrity_audit_v40" in api
     assert '"frontend_may_recalculate": False' in api
