@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from .config import settings
@@ -171,7 +172,11 @@ def load_market_frame(category: str, symbol: str, interval: str, limit: int = 50
     for col in FEATURE_COLUMNS:
         if col not in df.columns:
             df[col] = 0.0
-        df[col] = pd.to_numeric(df[col], errors="coerce").replace([float("inf"), float("-inf")], pd.NA).fillna(0.0)
+        # pd.NA в replace()+fillna() на object-колонках провоцирует FutureWarning
+        # о silent downcasting. Для признаков используем явный float-пайплайн:
+        # строковые/битые значения -> NaN, +/-inf -> NaN, пропуски -> 0.0.
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        df[col] = numeric.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(float)
     return df
 
 
@@ -188,7 +193,7 @@ def prepare_feature_matrix(frame: pd.DataFrame | pd.Series) -> pd.DataFrame:
         out = frame[FEATURE_COLUMNS].copy()
     for col in FEATURE_COLUMNS:
         out[col] = pd.to_numeric(out[col], errors="coerce")
-    return out.replace([float("inf"), float("-inf")], pd.NA).fillna(0.0).astype(float)
+    return out.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(float)
 
 
 def build_ml_dataset(category: str, symbol: str, interval: str, horizon_bars: int = 12) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
