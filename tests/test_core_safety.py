@@ -140,10 +140,66 @@ def test_backtest_enters_on_next_bar_open_and_persists(monkeypatch):
     trade_batches = [rows for sql, rows in calls["insert_batches"] if "INSERT INTO backtest_trades" in sql]
     assert trade_batches, "ожидалась запись тестовой сделки"
     first_trade = trade_batches[0][0]
+    assert len(first_trade) == 11
     entry_time = first_trade[4]
+    exit_time = first_trade[5]
+    entry_price = first_trade[6]
+    exit_price = first_trade[7]
     assert entry_time == df.iloc[221]["start_time"]
+    assert exit_time == df.iloc[221]["start_time"]
+    assert isinstance(entry_price, float)
+    assert isinstance(exit_price, float)
     assert result["run_id"] == 42
 
+
+
+
+def test_backtest_skips_entry_when_next_open_left_entry_zone(monkeypatch):
+    import app.backtest as backtest
+    from app.strategies import StrategySignal
+
+    n = 310
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    df = pd.DataFrame(
+        {
+            "start_time": [start + timedelta(hours=i) for i in range(n)],
+            "open": [100.0] * n,
+            "high": [101.0] * n,
+            "low": [99.0] * n,
+            "close": [100.0] * n,
+        }
+    )
+    df.loc[221:, "open"] = 106.0
+    for col in ["volume", "turnover"]:
+        df[col] = 1000.0
+
+    def fake_load_market_frame(*args, **kwargs):
+        out = df.copy()
+        out["atr_14"] = 1.0
+        out["spread_pct"] = 0.01
+        out["liquidity_score"] = 8.0
+        out["is_eligible"] = True
+        return out
+
+    def fake_execute_many_values(_sql, rows, page_size=1000):
+        return len(list(rows))
+
+    def fake_execute_many_values_returning(_sql, rows, page_size=1000):
+        return [{"id": 44}]
+
+    monkeypatch.setattr(backtest, "load_market_frame", fake_load_market_frame)
+    monkeypatch.setattr(backtest, "execute_many_values", fake_execute_many_values)
+    monkeypatch.setattr(backtest, "execute_many_values_returning", fake_execute_many_values_returning)
+    monkeypatch.setitem(
+        backtest.STRATEGY_MAP,
+        "unit_drift_strategy",
+        lambda row: StrategySignal("unit_drift_strategy", "long", 0.9, 100.0, 99.0, 103.0, 1.0, {}),
+    )
+
+    result = backtest.run_backtest("linear", "BTCUSDT", "60", "unit_drift_strategy", limit=500)
+
+    assert result["trades_count"] == 0
+    assert result["skipped_signals"].get("entry_drift_exceeded", 0) > 0
 
 def test_validation_rejects_bad_symbol():
     from app.validation import normalize_symbol

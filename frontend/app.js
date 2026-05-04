@@ -1024,17 +1024,29 @@ function baseChecklistFor(s) {
   const liquidityApiStatus = String(s.liquidity_status || '').toLowerCase();
   const liquidityKnown = s.is_eligible !== null && s.is_eligible !== undefined && liquidityApiStatus !== 'stale' && liquidityApiStatus !== 'missing';
   const eligible = bool(s.is_eligible);
+  const contract = contractFor(s);
   const maxAgeHours = num(state.status?.max_signal_age_hours, 24) || 24;
   const serverFreshnessKnown = typeof s.fresh === 'boolean' || Boolean(s.data_status);
   const created = s.created_at ? new Date(s.created_at) : null;
   const createdStale = !created || Number.isNaN(created.getTime()) || Date.now() - created.getTime() > maxAgeHours * 3600_000;
-  const stale = serverFreshnessKnown ? s.fresh !== true : createdStale;
+
+  // Frontend не рассчитывает торговый TTL сам: он доверяет серверному recommendation contract.
+  // created_at остаётся только legacy fallback для старых API-ответов без contract.ttl_status.
+  const ttlStatus = String(contract?.ttl_status || '').toLowerCase();
+  const priceStatus = String(contract?.price_status || s.price_status || '').toLowerCase();
+  const contractExpired = contract?.is_expired === true || ttlStatus === 'expired' || ttlStatus === 'missing';
+  const priceGateReasons = Array.isArray(contract?.price_actionability?.reasons) ? contract.price_actionability.reasons.map((item) => String(item)) : [];
+  const contractStale = contractExpired || priceStatus === 'stale' || priceGateReasons.includes('stale_data') || priceGateReasons.includes('contract_expired');
+  const hasContractFreshness = Boolean(ttlStatus || priceStatus || contract?.expires_at || contract?.checked_at);
+  const stale = hasContractFreshness ? contractStale : (serverFreshnessKnown ? s.fresh !== true : createdStale);
   const freshnessTitle = stale
-    ? (s.data_status === 'no_bar_time' ? 'Нет времени рыночной свечи' : s.data_status === 'unclosed_bar' ? 'Свеча не закрыта' : 'Сигнал устарел')
+    ? (contractExpired ? 'TTL рекомендации истёк' : s.data_status === 'no_bar_time' ? 'Нет времени рыночной свечи' : s.data_status === 'unclosed_bar' ? 'Свеча не закрыта' : 'Сигнал устарел')
     : 'Сигнал свежий';
-  const freshnessText = serverFreshnessKnown
-    ? `Bar closed ${compactDateTime(s.bar_closed_at)}; age ${fmt(s.signal_age_minutes, 0)} мин. API freshness: ${escapeHtml(s.data_status || 'fresh')}.`
-    : `Создан ${ageText(s.created_at)}. Максимальный возраст: ${maxAgeHours} ч.`;
+  const freshnessText = hasContractFreshness
+    ? `TTL ${escapeHtml(ttlText(contract))}; expires ${compactDateTime(contract?.expires_at)}; checked ${compactDateTime(contract?.checked_at)}; price gate: ${escapeHtml(priceGateReasons.length ? priceGateReasons.join(', ') : (priceStatus || 'ok'))}.`
+    : serverFreshnessKnown
+      ? `Bar closed ${compactDateTime(s.bar_closed_at)}; age ${fmt(s.signal_age_minutes, 0)} мин. API freshness: ${escapeHtml(s.data_status || 'fresh')}.`
+      : `Создан ${ageText(s.created_at)}. Максимальный возраст: ${maxAgeHours} ч.`;
   const spreadStatus = !hasSpread ? 'warn' : spread <= 0.08 ? 'pass' : spread <= 0.15 ? 'warn' : 'fail';
   const liquidityStatus = !liquidityKnown ? 'warn' : eligible ? 'pass' : 'fail';
   const liquidityTitle = liquidityStatus === 'pass'

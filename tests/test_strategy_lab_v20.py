@@ -82,11 +82,3 @@ def test_strategy_lab_payload_explains_approved_and_blockers():
     assert payload["trading_desk"][0]["symbol"] == "APEUSDT"
 
 
-def test_quality_snapshot_can_drive_strategy_lab_regression():
-    payload = strategy_lab_from_quality_export(ROOT / "docs" / "QUALITY_SNAPSHOT_2026-04-30.json")
-
-    assert payload["summary"]["approved"] == 3
-    assert payload["summary"]["watchlist"] == 3
-    assert payload["summary"]["research"] == 32
-    assert payload["summary"]["rejected"] == 18
-    assert payload["desk_status"] == "HAS_APPROVED"

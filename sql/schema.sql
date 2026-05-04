@@ -191,11 +191,11 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
     run_id BIGINT NOT NULL REFERENCES backtest_runs(id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
     strategy TEXT NOT NULL,
-    direction TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('long','short')),
     entry_time TIMESTAMPTZ NOT NULL,
-    exit_time TIMESTAMPTZ NOT NULL,
-    entry NUMERIC NOT NULL,
-    exit NUMERIC NOT NULL,
+    exit_time TIMESTAMPTZ NOT NULL CHECK (exit_time >= entry_time),
+    entry NUMERIC NOT NULL CHECK (entry > 0),
+    exit NUMERIC NOT NULL CHECK (exit > 0),
     pnl NUMERIC NOT NULL,
     pnl_pct NUMERIC NOT NULL,
     reason TEXT
@@ -203,6 +203,12 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
 
 CREATE INDEX IF NOT EXISTS idx_backtest_trades_run
 ON backtest_trades(run_id);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_trades_run_exit
+ON backtest_trades(run_id, exit_time);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_trades_quality_lookup_v41
+ON backtest_trades(symbol, strategy, direction, exit_time DESC);
 
 
 CREATE TABLE IF NOT EXISTS strategy_quality (

@@ -62,6 +62,29 @@ def ensure_backtest_trades_storage() -> None:
     )
     execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_run ON backtest_trades(run_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_run_exit ON backtest_trades(run_id, exit_time)")
+    execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_quality_lookup_v41 ON backtest_trades(symbol, strategy, direction, exit_time DESC)")
+    execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_backtest_trades_direction_v41') THEN
+                ALTER TABLE backtest_trades
+                ADD CONSTRAINT chk_backtest_trades_direction_v41
+                CHECK (direction IN ('long','short')) NOT VALID;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_backtest_trades_prices_v41') THEN
+                ALTER TABLE backtest_trades
+                ADD CONSTRAINT chk_backtest_trades_prices_v41
+                CHECK (entry > 0 AND exit > 0) NOT VALID;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_backtest_trades_time_order_v41') THEN
+                ALTER TABLE backtest_trades
+                ADD CONSTRAINT chk_backtest_trades_time_order_v41
+                CHECK (exit_time >= entry_time) NOT VALID;
+            END IF;
+        END $$;
+        """
+    )
 
 
 def _try_ensure_backtest_trades_storage() -> str | None:
@@ -140,6 +163,26 @@ def _adjust_levels_for_executable_entry(sig: StrategySignal, executable_entry: f
     return executable_entry + stop_distance, executable_entry - take_distance
 
 
+def _entry_drift_gate(sig: StrategySignal, executable_entry: float) -> tuple[bool, dict[str, float | str]]:
+    """Не даёт бэктесту догонять цену, если следующий open ушёл от signal-entry.
+
+    Live-контракт уже имеет price_actionability/entry_window. Бэктест должен
+    моделировать ту же дисциплину исполнения: сигнал на закрытой свече может быть
+    взят только рядом с рассчитанным entry, а не по любому следующему open.
+    """
+    signal_entry = _safe_float(sig.entry)
+    atr = _safe_float(sig.atr)
+    if signal_entry is None or signal_entry <= 0 or executable_entry <= 0:
+        return False, {"reason": "invalid_entry_for_drift_gate"}
+    zone_pct = 0.0025
+    if atr is not None and atr > 0:
+        zone_pct = max(0.0015, min(0.018, (atr / signal_entry) * 0.35))
+    drift_pct = abs(executable_entry - signal_entry) / signal_entry
+    if drift_pct > zone_pct:
+        return False, {"reason": "entry_drift_exceeded", "price_drift_pct": drift_pct, "entry_zone_pct": zone_pct}
+    return True, {"reason": "entry_drift_ok", "price_drift_pct": drift_pct, "entry_zone_pct": zone_pct}
+
+
 def _build_signal(strategy: str, fn: StrategyFn, row: pd.Series, history: pd.DataFrame) -> StrategySignal | None:
     if strategy == "volatility_squeeze_breakout":
         return volatility_squeeze(row, history)
@@ -207,6 +250,10 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
     equity_curve: list[dict] = []
     open_trade: dict | None = None
     halted_by_risk = False
+    skipped_signals: dict[str, int] = {}
+
+    def skip_signal(reason: str) -> None:
+        skipped_signals[reason] = skipped_signals.get(reason, 0) + 1
 
     def close_trade(bar: pd.Series, reason: str, exit_price: float) -> None:
         nonlocal equity, open_trade
@@ -254,11 +301,20 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
                 if not valid_signal:
                     # Backtest не должен открывать сделку по сигналу, который live-контур
                     # отказался бы сохранять из-за перепутанных уровней или NaN-значений.
+                    skip_signal(str(invalid_reason or "invalid_signal"))
                     equity_curve.append({"time": str(trade_bar["start_time"]), "equity": round(equity + _unrealized_pnl(open_trade, float(trade_bar["close"])), 6), "skipped_signal": invalid_reason})
                     continue
                 raw_entry = _safe_float(trade_bar.get("open"))
                 if raw_entry is not None and raw_entry > 0:
                     entry = raw_entry * (1 + settings.slippage_rate if sig.direction == "long" else 1 - settings.slippage_rate)
+                    drift_ok, drift_meta = _entry_drift_gate(sig, entry)
+                    if not drift_ok:
+                        # Бэктест теперь не покупает/шортит рынок, который уже ушёл от
+                        # расчетной зоны входа. Иначе quality может оценивать сделки,
+                        # которые live-интерфейс честно заблокировал бы как missed_entry.
+                        skip_signal(str(drift_meta.get("reason") or "entry_drift_blocked"))
+                        equity_curve.append({"time": str(trade_bar["start_time"]), "equity": round(equity + _unrealized_pnl(open_trade, float(trade_bar["close"])), 6), "skipped_signal": drift_meta})
+                        continue
                     stop_loss, take_profit = _adjust_levels_for_executable_entry(sig, entry)
                     qty = _position_qty(equity, entry, stop_loss)
                     if qty > 0:
@@ -275,6 +331,10 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
                         _, reason, exit_price = _exit_trade_if_needed(open_trade, trade_bar, i + 1)
                         if exit_price is not None and reason is not None:
                             close_trade(trade_bar, reason, exit_price)
+                    else:
+                        skip_signal("zero_position_size")
+                else:
+                    skip_signal("invalid_next_open")
 
         mtm_equity = equity + _unrealized_pnl(open_trade, float(trade_bar["close"]))
         equity_curve.append({"time": str(trade_bar["start_time"]), "equity": round(mtm_equity, 6)})
@@ -323,6 +383,8 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
                 "entry_model": "signal_on_closed_bar_execution_on_next_bar_open",
                 "same_bar_ambiguity": "stop_loss_first",
                 "halted_by_risk": halted_by_risk,
+                "skipped_signals": skipped_signals,
+                "entry_drift_gate": "next_open_must_remain_inside_server_equivalent_entry_zone",
             },
             equity_curve[-500:],
         )
@@ -388,6 +450,7 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
         "win_rate": win_rate,
         "profit_factor": profit_factor,
         "trades_count": len(trades),
+        "skipped_signals": skipped_signals,
         "halted_by_risk": halted_by_risk,
         "quality": quality,
         "persistence_warnings": persistence_warnings,
