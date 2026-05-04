@@ -116,6 +116,9 @@ node --check frontend/app.js
 
 В текущей ревизии добавлены regression-проверки для:
 
+- консервативного исполнения `SL-first`, если внутри одной OHLC-свечи одновременно достижимы SL и TP;
+- явной маркировки `stop_loss_same_bar_ambiguous` в backtest, outcome evaluation, strategy-quality diagnostics, API-контракте и UI;
+- запрета на `APPROVED` для стратегий, где высокая доля сделок зависит от неоднозначного внутрисвечного порядка;
 - строковых `mtf_veto` / `higher_tf_conflict` на API/JSON границе;
 - стабилизации operator queue и блокировки близкого LONG/SHORT-конфликта;
 - безопасной обработки `is_eligible="false"` и отсутствующего liquidity snapshot в генераторе стратегий;
@@ -146,6 +149,20 @@ node --check frontend/app.js
 - `WAIT` / `НАБЛЮДАТЬ` — критического запрета нет, но доказательности недостаточно;
 - `RESEARCH_CANDIDATE` / `ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ` — технический сетап есть, но стратегия еще не имеет статуса `APPROVED`;
 - `REVIEW_ENTRY` / `РУЧНАЯ ПРОВЕРКА ВХОДА` — сетап можно вынести на ручную проверку только после strategy-quality gate, но это не приказ на сделку.
+
+## Модель исполнения SL/TP в backtest и outcome evaluation
+
+OHLC-свеча не содержит точного внутрисвечного порядка цены. Поэтому если в одной свече одновременно достижимы `stop_loss` и `take_profit`, проект использует безопасную консервативную модель:
+
+- `intrabar_execution_model = conservative_ohlc_stop_loss_first`;
+- результат сделки засчитывается как `hit_stop_loss`;
+- причина выхода маркируется как `stop_loss_same_bar_ambiguous`;
+- в outcome notes выставляются `same_bar_stop_first=true`, `ambiguous_exit=true`, `both_sl_tp_touched=true`;
+- backtest считает `ambiguous_exit_count`, `ambiguous_exit_rate` и `exit_reason_counts`;
+- `strategy_quality` снижает оценку стратегии и не допускает `APPROVED`, если доля таких сделок превышает безопасный порог;
+- frontend показывает отдельное предупреждение `SL-first`, чтобы оператор понимал, что статистика зависит от разрешения OHLC-неоднозначности.
+
+Это намеренно более строгая модель, чем optimistic TP-first. Для повышения доверия к стратегии требуется проверка на меньшем таймфрейме или tick/trade данных.
 
 ## Veto-логика
 
@@ -232,6 +249,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 - Optional evidence ML/LLM/backtest не заменяет hard risk controls.
 - Stale-сигнал определяется по `bar_time` рыночной свечи, а не только по времени пересчета `created_at`.
 - Для спорного рынка безопаснее показать `NO_TRADE` с причиной конфликта, чем выбирать между LONG/SHORT по случайному порядку обновления evidence.
+- При одновременном касании SL и TP внутри одной OHLC-свечи безопаснее считать SL-first, чем завышать качество стратегии за счет недоказуемого TP-first.
 
 ## Известные ограничения
 
@@ -240,6 +258,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 - LLM evidence зависит от локального Ollama-compatible endpoint и не является источником торгового приказа.
 - ML evidence зависит от доступности истории и актуальности model_runs.
 - Полная production-эксплуатация требует мониторинга PostgreSQL, API rate limits, alerting и резервного восстановления.
+- OHLC-backtest не восстанавливает реальный внутрисвечный путь цены; неоднозначные SL/TP-свечи помечаются и штрафуются, но окончательная верификация требует более детальных данных.
 
 ## Troubleshooting
 

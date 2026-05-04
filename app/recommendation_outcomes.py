@@ -6,6 +6,9 @@ from typing import Any
 from .db import execute_many_values, fetch_all
 from .trade_contract import finite, interval_to_timedelta, recommendation_expires_at, validate_trade_levels
 
+SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
+INTRABAR_EXECUTION_MODEL = "conservative_ohlc_stop_loss_first"
+
 
 def _parse_dt(value: Any) -> datetime | None:
     if value in (None, ""):
@@ -32,6 +35,19 @@ def _outcome_payload(status: str, *, exit_price: float | None, exit_time: Any, r
         "max_adverse_excursion_r": min(0.0, mae),
         "bars_observed": max(0, bars),
         "notes": notes or {},
+    }
+
+
+def _ambiguous_stop_notes(direction: str) -> dict[str, Any]:
+    # Same-bar SL/TP — не обычный стоп. Это методологически неоднозначная свеча,
+    # поэтому outcome хранит отдельный флаг для quality dashboards и интерфейса.
+    return {
+        "same_bar_stop_first": True,
+        "ambiguous_exit": True,
+        "both_sl_tp_touched": True,
+        "exit_reason": SAME_BAR_STOP_FIRST_REASON,
+        "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
+        "direction": direction,
     }
 
 
@@ -76,19 +92,23 @@ def evaluate_signal_outcome(signal: dict[str, Any], candles: list[dict[str, Any]
             mae = min(mae, (low - entry) / risk)
             stop_hit = low <= stop
             target_hit = high >= target
+            if stop_hit and target_hit:
+                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes=_ambiguous_stop_notes(direction))
             if stop_hit:
-                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes={"same_bar_stop_first": bool(target_hit)})
+                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "stop_loss", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL})
             if target_hit:
-                return _outcome_payload("hit_take_profit", exit_price=target, exit_time=ts, realized_r=reward_r, mfe=mfe, mae=mae, bars=bars)
+                return _outcome_payload("hit_take_profit", exit_price=target, exit_time=ts, realized_r=reward_r, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "take_profit", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL})
         else:
             mfe = max(mfe, (entry - low) / risk)
             mae = min(mae, (entry - high) / risk)
             stop_hit = high >= stop
             target_hit = low <= target
+            if stop_hit and target_hit:
+                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes=_ambiguous_stop_notes(direction))
             if stop_hit:
-                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes={"same_bar_stop_first": bool(target_hit)})
+                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "stop_loss", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL})
             if target_hit:
-                return _outcome_payload("hit_take_profit", exit_price=target, exit_time=ts, realized_r=reward_r, mfe=mfe, mae=mae, bars=bars)
+                return _outcome_payload("hit_take_profit", exit_price=target, exit_time=ts, realized_r=reward_r, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "take_profit", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL})
 
     if expires_at is not None and now >= expires_at:
         return _outcome_payload("expired", exit_price=None, exit_time=expires_at, realized_r=0.0, mfe=mfe, mae=mae, bars=bars)

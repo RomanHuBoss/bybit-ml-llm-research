@@ -1603,10 +1603,16 @@ function outcomeContractHtml(outcome) {
   if (!outcome || !outcome.status) {
     return '<p class="muted-line">Исход ещё не зафиксирован. Активная рекомендация оценивается после TP/SL, invalidation или expiry.</p>';
   }
+  const notes = outcome.notes && typeof outcome.notes === 'object' ? outcome.notes : {};
+  const ambiguous = Boolean(outcome.is_ambiguous_intrabar_exit || notes.ambiguous_exit || notes.same_bar_stop_first || notes.exit_reason === 'stop_loss_same_bar_ambiguous');
   const terminal = outcome.is_terminal ? 'terminal' : 'open';
-  return `<div class="outcome-contract ${escapeHtml(cssToken(terminal, 'open'))}">
+  const ambiguityHtml = ambiguous
+    ? '<small class="intrabar-warning">В этой OHLC-свече одновременно были достижимы SL и TP. Сервер засчитал SL-first; такой исход снижает статистическую уверенность и требует проверки на меньшем таймфрейме.</small>'
+    : '';
+  return `<div class="outcome-contract ${escapeHtml(cssToken(terminal, 'open'))} ${ambiguous ? 'ambiguous' : ''}">
     <p><b>${escapeHtml(String(outcome.status).toUpperCase())}</b> · R ${fmt(outcome.realized_r, 2)} · exit ${priceFmt(outcome.exit_price)}</p>
     <small>Evaluated ${escapeHtml(compactDateTime(outcome.evaluated_at))} · exit time ${escapeHtml(compactDateTime(outcome.exit_time))} · MFE ${fmt(outcome.max_favorable_excursion_r, 2)} · MAE ${fmt(outcome.max_adverse_excursion_r, 2)}</small>
+    ${ambiguityHtml}
   </div>`;
 }
 
@@ -1637,12 +1643,14 @@ function similarHistoryHtml(history, signalId) {
   }
   const summary = history.summary || {};
   const items = Array.isArray(history.items) ? history.items : [];
-  const header = `<p><b>${escapeHtml(String(summary.statistical_confidence || 'none').toUpperCase())}</b> · ${fmt(summary.evaluated, 0)} случаев · avg R ${fmt(summary.average_r, 2)} · PF ${fmt(summary.profit_factor, 2)} · WR ${pct(summary.winrate, 0)}</p><small>${escapeHtml(summary.explanation || summary.metric_semantics || 'История похожих сигналов не является вероятностью прибыли.')}</small>`;
+  const ambiguousCount = num(summary.ambiguous_stop_first_count, 0);
+  const ambiguousText = ambiguousCount > 0 ? ` · same-bar SL-first ${fmt(ambiguousCount, 0)}` : '';
+  const header = `<p><b>${escapeHtml(String(summary.statistical_confidence || 'none').toUpperCase())}</b> · ${fmt(summary.evaluated, 0)} случаев · avg R ${fmt(summary.average_r, 2)} · PF ${fmt(summary.profit_factor, 2)} · WR ${pct(summary.winrate, 0)}${escapeHtml(ambiguousText)}</p><small>${escapeHtml(summary.explanation || summary.metric_semantics || 'История похожих сигналов не является вероятностью прибыли.')}</small>`;
   if (!items.length) return `${header}<p class="muted-line">Завершённых похожих рекомендаций пока нет.</p>`;
   return `${header}
     <div class="similar-history-table-wrap">
       <table class="similar-history-table">
-        <thead><tr><th>Дата</th><th>Исход</th><th>R</th><th>MFE</th><th>MAE</th><th>Conf</th></tr></thead>
+        <thead><tr><th>Дата</th><th>Исход</th><th>R</th><th>MFE</th><th>MAE</th><th>Conf</th><th>SL/TP</th></tr></thead>
         <tbody>${items.slice(0, 12).map((row) => `<tr>
           <td>${escapeHtml(compactDateTime(row.exit_time || row.evaluated_at || row.bar_time))}</td>
           <td>${escapeHtml(row.outcome_status || '—')}</td>
@@ -1650,6 +1658,7 @@ function similarHistoryHtml(history, signalId) {
           <td>${fmt(row.max_favorable_excursion_r, 2)}</td>
           <td>${fmt(row.max_adverse_excursion_r, 2)}</td>
           <td>${pct(row.confidence, 0)}</td>
+          <td>${row.notes?.ambiguous_exit || row.notes?.same_bar_stop_first || row.notes?.exit_reason === 'stop_loss_same_bar_ambiguous' ? 'SL-first' : '—'}</td>
         </tr>`).join('')}</tbody>
       </table>
     </div>`;
@@ -1766,6 +1775,7 @@ function renderTicket(s) {
       <div class="metric ttl-state ${ttlTone(contract)}"><span>TTL</span><strong>${escapeHtml(ttlText(contract))}</strong><small>expires ${escapeHtml(compactDateTime(contract.expires_at || s.expires_at))}</small></div>
       <div class="metric"><span>Checked at</span><strong>${escapeHtml(compactDateTime(contract.checked_at))}</strong></div>
       <div class="metric"><span>Price status</span><strong>${escapeHtml(contract.price_status || s.price_status || 'unknown')}</strong></div>
+      <div class="metric"><span>OHLC model</span><strong>${escapeHtml(contract.intrabar_execution_model || 'SL-first')}</strong><small>same-bar SL/TP ⇒ SL</small></div>
       <div class="metric"><span>Trust gate</span><strong>${escapeHtml(s.operator_trust_status || '—')}</strong></div>
       <div class="metric"><span>MTF</span><strong>${escapeHtml(mtfLabel(s))}</strong></div>
       <div class="metric"><span>LLM</span><strong>${escapeHtml(llmStateText(s).replace('LLM: ', ''))}</strong></div>

@@ -369,7 +369,9 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
             "expires_at", "checked_at", "ttl_status", "ttl_seconds_left",
             "recommendation_explanation", "signal_breakdown",
             "price_actionability", "contract_health", "decision_source", "frontend_may_recalculate",
+            "intrabar_execution_model", "same_bar_stop_first_reason",
         ],
+        "intrabar_execution_policy": "conservative_ohlc_stop_loss_first; same-bar SL/TP is marked as stop_loss_same_bar_ambiguous",
         "price_gate_policy": "entry_zone_only_for_actionable_review",
         "decision_source": DECISION_SOURCE,
         "decision_source_literal": "server_enriched_contract_v40",
@@ -435,7 +437,10 @@ def _quality_outcome_status_counts(category: str, interval_filter: str | None = 
         params.append(interval_filter)
     return fetch_all(
         f"""
-        SELECT o.outcome_status, COUNT(*)::int AS count
+        SELECT o.outcome_status, COUNT(*)::int AS count,
+               COUNT(*) FILTER (WHERE COALESCE((o.notes->>'ambiguous_exit')::boolean, false)
+                                OR COALESCE((o.notes->>'same_bar_stop_first')::boolean, false)
+                                OR o.notes->>'exit_reason' = 'stop_loss_same_bar_ambiguous')::int AS ambiguous_stop_first_count
         FROM recommendation_outcomes o
         JOIN signals s ON s.id=o.signal_id
         WHERE s.category=%s {interval_sql}
@@ -459,7 +464,10 @@ def _quality_segment_rows(category: str, interval_filter: str | None = None) -> 
                SUM(CASE WHEN o.realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
                SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor,
                AVG(o.max_favorable_excursion_r)::float AS avg_mfe_r,
-               AVG(o.max_adverse_excursion_r)::float AS avg_mae_r
+               AVG(o.max_adverse_excursion_r)::float AS avg_mae_r,
+               COUNT(*) FILTER (WHERE COALESCE((o.notes->>'ambiguous_exit')::boolean, false)
+                                OR COALESCE((o.notes->>'same_bar_stop_first')::boolean, false)
+                                OR o.notes->>'exit_reason' = 'stop_loss_same_bar_ambiguous')::int AS ambiguous_stop_first_count
         FROM recommendation_outcomes o
         JOIN signals s ON s.id=o.signal_id
         WHERE s.category=%s {interval_sql}
@@ -555,6 +563,9 @@ def _similar_recommendation_history(signal_id: int, category: str, limit: int = 
                SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor,
                AVG(o.max_favorable_excursion_r)::float AS avg_mfe_r,
                AVG(o.max_adverse_excursion_r)::float AS avg_mae_r,
+               COUNT(*) FILTER (WHERE COALESCE((o.notes->>'ambiguous_exit')::boolean, false)
+                                OR COALESCE((o.notes->>'same_bar_stop_first')::boolean, false)
+                                OR o.notes->>'exit_reason' = 'stop_loss_same_bar_ambiguous')::int AS ambiguous_stop_first_count,
                MAX(o.evaluated_at) AS last_evaluated_at
         FROM recommendation_outcomes o
         JOIN signals s ON s.id=o.signal_id
@@ -573,7 +584,7 @@ def _similar_recommendation_history(signal_id: int, category: str, limit: int = 
                s.entry, s.stop_loss, s.take_profit, s.risk_reward,
                o.outcome_status, o.exit_time, o.exit_price, o.realized_r,
                o.max_favorable_excursion_r, o.max_adverse_excursion_r,
-               o.bars_observed, o.evaluated_at
+               o.bars_observed, o.evaluated_at, o.notes
         FROM recommendation_outcomes o
         JOIN signals s ON s.id=o.signal_id
         WHERE s.category=%s
@@ -1516,7 +1527,10 @@ def api_recommendation_quality(category: str = settings.default_category, interv
                    SUM(CASE WHEN realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
                    SUM(GREATEST(realized_r,0))::float / NULLIF(ABS(SUM(LEAST(realized_r,0)))::float,0) AS profit_factor,
                    AVG(max_favorable_excursion_r)::float AS avg_mfe_r,
-                   AVG(max_adverse_excursion_r)::float AS avg_mae_r
+                   AVG(max_adverse_excursion_r)::float AS avg_mae_r,
+                   COUNT(*) FILTER (WHERE COALESCE((notes->>'ambiguous_exit')::boolean, false)
+                                    OR COALESCE((notes->>'same_bar_stop_first')::boolean, false)
+                                    OR notes->>'exit_reason' = 'stop_loss_same_bar_ambiguous')::int AS ambiguous_stop_first_count
             FROM recommendation_outcomes o
             JOIN signals s ON s.id=o.signal_id
             WHERE s.category=%s {interval_filter}
@@ -1525,11 +1539,15 @@ def api_recommendation_quality(category: str = settings.default_category, interv
             tuple(params),
         ) or {}
         evaluated = int(outcome.get("evaluated") or 0) if isinstance(outcome, dict) else 0
+        ambiguous_count = int(outcome.get("ambiguous_stop_first_count") or 0) if isinstance(outcome, dict) else 0
+        ambiguous_rate = ambiguous_count / evaluated if evaluated else 0.0
         statistical_confidence = "low" if evaluated < 30 else "medium" if evaluated < 100 else "high"
         assessment = {
             "evaluated": evaluated,
             "statistical_confidence": statistical_confidence,
             "sample_warning": None if evaluated >= 30 else "Историческая выборка мала: качество стратегии и качество конкретного сигнала разделяются, риск должен быть снижен.",
+            "intrabar_warning": None if ambiguous_count == 0 else f"{ambiguous_count} завершённых рекомендаций ({ambiguous_rate:.1%}) имели одновременный SL/TP внутри одной OHLC-свечи и засчитаны как SL-first.",
+            "intrabar_execution_model": "conservative_ohlc_stop_loss_first",
             "metric_semantics": "winrate/average_r/profit_factor описывают завершённые рекомендации; confidence_score не является вероятностью прибыли.",
         }
         return {

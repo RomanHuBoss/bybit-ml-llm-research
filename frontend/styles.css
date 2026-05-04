@@ -1694,6 +1694,16 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .outcome-contract.terminal b {
   color: var(--text);
 }
+.outcome-contract.ambiguous {
+  padding: 10px;
+  border: 1px solid rgba(245, 185, 66, 0.32);
+  border-radius: 14px;
+  background: rgba(245, 185, 66, 0.08);
+}
+.outcome-contract .intrabar-warning {
+  color: var(--amber);
+  line-height: 1.4;
+}
 
 .price-actionability {
   margin-top: 10px;

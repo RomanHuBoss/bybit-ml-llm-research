@@ -11,6 +11,8 @@ DIRECTION_SHORT = "short"
 DIRECTION_NO_TRADE = "no_trade"
 RECOMMENDATION_CONTRACT_VERSION = "recommendation_v40"
 DECISION_SOURCE = "server_enriched_contract_v40"
+INTRABAR_EXECUTION_MODEL = "conservative_ohlc_stop_loss_first"
+SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
 NON_ENTRY_ACTIONS = {"NO_TRADE", "WAIT"}
 
@@ -358,6 +360,8 @@ def outcome_payload(row: dict[str, Any]) -> dict[str, Any]:
     """
     status = str(row.get("outcome_status") or "").strip().lower()
     terminal = status in {"hit_take_profit", "hit_stop_loss", "expired", "invalidated", "closed_manual"}
+    notes = row.get("outcome_notes") if isinstance(row.get("outcome_notes"), dict) else {}
+    ambiguous = bool(notes.get("ambiguous_exit") or notes.get("same_bar_stop_first") or notes.get("exit_reason") == SAME_BAR_STOP_FIRST_REASON)
     return {
         "status": status or None,
         "is_terminal": terminal,
@@ -367,7 +371,9 @@ def outcome_payload(row: dict[str, Any]) -> dict[str, Any]:
         "realized_r": finite(row.get("realized_r")),
         "max_favorable_excursion_r": finite(row.get("max_favorable_excursion_r")),
         "max_adverse_excursion_r": finite(row.get("max_adverse_excursion_r")),
-        "notes": row.get("outcome_notes"),
+        "notes": notes,
+        "is_ambiguous_intrabar_exit": ambiguous,
+        "intrabar_execution_model": (notes.get("intrabar_execution_model") or INTRABAR_EXECUTION_MODEL) if status else None,
     }
 
 
@@ -434,6 +440,10 @@ def signal_breakdown(row: dict[str, Any], levels: dict[str, Any], price: dict[st
             "risk_pct": levels.get("risk_pct"),
             "expected_reward_pct": levels.get("expected_reward_pct"),
             "risk_reward": levels.get("risk_reward"),
+        },
+        "execution_model": {
+            "intrabar": INTRABAR_EXECUTION_MODEL,
+            "same_bar_policy": "SL-first when SL and TP are touched inside one OHLC candle",
         },
         "price": price,
         "market": {
@@ -630,6 +640,8 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "risk_reward": levels.get("risk_reward"),
         "net_risk_reward": sizing.get("net_risk_reward"),
         "fee_slippage_roundtrip_pct": sizing.get("fee_slippage_roundtrip_pct"),
+        "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
+        "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
         "position_sizing": sizing,
         "level_validation": {"valid": levels.get("valid"), "reason": levels.get("reason")},
         "price_status": price.get("price_status"),
@@ -753,6 +765,8 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "expected_reward_pct": None,
         "risk_reward": None,
         "net_risk_reward": None,
+        "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
+        "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
         "price_status": "no_setup",
         "last_price": None,
         "last_price_time": None,
@@ -799,6 +813,10 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
             "raw_indicators": {},
             "trading_signal": "NO_TRADE",
             "final_gate": "blocked",
+            "execution_model": {
+                "intrabar": INTRABAR_EXECUTION_MODEL,
+                "same_bar_policy": "SL-first when SL and TP are touched inside one OHLC candle",
+            },
             "price": {"price_status": "no_setup"},
             "quality": {"quality_status": "NO_ACTIVE_RECOMMENDATION"},
         },

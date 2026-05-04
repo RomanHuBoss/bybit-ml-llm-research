@@ -39,6 +39,10 @@ STRATEGY_MAP: dict[str, StrategyFn] = {
     "regime_adaptive_combo": regime_adaptive_combo,  # type: ignore[dict-item]
 }
 
+SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
+INTRABAR_EXECUTION_MODEL = "conservative_ohlc_stop_loss_first"
+
+
 
 def ensure_backtest_trades_storage() -> None:
     """Создает хранилище сделок бэктеста для старых БД без V20-миграции."""
@@ -63,6 +67,7 @@ def ensure_backtest_trades_storage() -> None:
     execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_run ON backtest_trades(run_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_run_exit ON backtest_trades(run_id, exit_time)")
     execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_quality_lookup_v41 ON backtest_trades(symbol, strategy, direction, exit_time DESC)")
+    execute("CREATE INDEX IF NOT EXISTS idx_backtest_trades_reason_v42 ON backtest_trades(run_id, reason)")
     execute(
         """
         DO $$
@@ -81,6 +86,11 @@ def ensure_backtest_trades_storage() -> None:
                 ALTER TABLE backtest_trades
                 ADD CONSTRAINT chk_backtest_trades_time_order_v41
                 CHECK (exit_time >= entry_time) NOT VALID;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_backtest_trades_reason_v42') THEN
+                ALTER TABLE backtest_trades
+                ADD CONSTRAINT chk_backtest_trades_reason_v42
+                CHECK (reason IS NULL OR btrim(reason) <> '') NOT VALID;
             END IF;
         END $$;
         """
@@ -191,6 +201,36 @@ def _build_signal(strategy: str, fn: StrategyFn, row: pd.Series, history: pd.Dat
     return fn(row)
 
 
+def _intrabar_exit_reason(direction: str, high: float, low: float, stop: float, take: float) -> tuple[str | None, float | None]:
+    """Возвращает консервативный исход свечи с явной маркировкой same-bar SL/TP.
+
+    OHLC не содержит порядка событий внутри свечи. Если в одной свече задеты и
+    stop-loss, и take-profit, бэктест обязан считать SL первым и пометить сделку
+    как неоднозначную, чтобы quality/UI не воспринимали такой результат как
+    обычный стоп без методологического риска.
+    """
+    if direction == "long":
+        stop_hit = low <= stop
+        take_hit = high >= take
+        if stop_hit and take_hit:
+            return SAME_BAR_STOP_FIRST_REASON, stop
+        if stop_hit:
+            return "stop_loss", stop
+        if take_hit:
+            return "take_profit", take
+        return None, None
+
+    stop_hit = high >= stop
+    take_hit = low <= take
+    if stop_hit and take_hit:
+        return SAME_BAR_STOP_FIRST_REASON, stop
+    if stop_hit:
+        return "stop_loss", stop
+    if take_hit:
+        return "take_profit", take
+    return None, None
+
+
 def _exit_trade_if_needed(open_trade: dict, bar: pd.Series, bar_index: int, *, force_reason: str | None = None) -> tuple[dict | None, str | None, float | None]:
     direction = open_trade["direction"]
     stop = open_trade["stop_loss"]
@@ -204,21 +244,13 @@ def _exit_trade_if_needed(open_trade: dict, bar: pd.Series, bar_index: int, *, f
     if force_reason:
         exit_price = close * (1 - settings.slippage_rate if direction == "long" else 1 + settings.slippage_rate)
         reason = force_reason
-    elif direction == "long":
-        # Если в одной свече достигнуты SL и TP, выбираем SL как более консервативный и проверяемый вариант.
-        if low <= stop:
-            exit_price = stop * (1 - settings.slippage_rate)
-            reason = "stop_loss"
-        elif high >= take:
-            exit_price = take * (1 - settings.slippage_rate)
-            reason = "take_profit"
     else:
-        if high >= stop:
-            exit_price = stop * (1 + settings.slippage_rate)
-            reason = "stop_loss"
-        elif low <= take:
-            exit_price = take * (1 + settings.slippage_rate)
-            reason = "take_profit"
+        reason, raw_exit_price = _intrabar_exit_reason(direction, high, low, stop, take)
+        if raw_exit_price is not None and reason is not None:
+            # Проскальзывание ухудшает исполнение в сторону позиции. Same-bar ambiguity
+            # остается отдельной причиной, но цена исполнения такая же консервативная,
+            # как у обычного stop-loss.
+            exit_price = raw_exit_price * (1 - settings.slippage_rate if direction == "long" else 1 + settings.slippage_rate)
 
     max_hold = 48
     if exit_price is None and bar_index - open_trade["entry_idx"] >= max_hold:
@@ -234,6 +266,18 @@ def _unrealized_pnl(open_trade: dict | None, close: float) -> float:
     entry = open_trade["entry"]
     direction = open_trade["direction"]
     return (close - entry) * qty if direction == "long" else (entry - close) * qty
+
+
+def _exit_reason_counts(trades: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for trade in trades:
+        reason = str(trade.get("reason") or "unknown")
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _ambiguous_exit_count(trades: list[dict]) -> int:
+    return sum(1 for trade in trades if str(trade.get("reason") or "") == SAME_BAR_STOP_FIRST_REASON)
 
 
 def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit: int = 5000) -> dict:
@@ -358,6 +402,9 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
     end_time = df.iloc[-1]["start_time"]
     max_drawdown = _max_drawdown(equity_curve)
     sharpe = _sharpe(equity_curve, interval)
+    exit_reason_counts = _exit_reason_counts(trades)
+    ambiguous_exit_count = _ambiguous_exit_count(trades)
+    ambiguous_exit_rate = ambiguous_exit_count / len(trades) if trades else 0.0
     run_rows = [
         (
             category,
@@ -381,7 +428,12 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
                 "max_position_notional_usdt": settings.max_position_notional_usdt,
                 "max_leverage": settings.max_leverage,
                 "entry_model": "signal_on_closed_bar_execution_on_next_bar_open",
-                "same_bar_ambiguity": "stop_loss_first",
+                "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
+                "same_bar_ambiguity": "explicit_stop_loss_first",
+                "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
+                "ambiguous_exit_count": ambiguous_exit_count,
+                "ambiguous_exit_rate": ambiguous_exit_rate,
+                "exit_reason_counts": exit_reason_counts,
                 "halted_by_risk": halted_by_risk,
                 "skipped_signals": skipped_signals,
                 "entry_drift_gate": "next_open_must_remain_inside_server_equivalent_entry_zone",
@@ -451,6 +503,10 @@ def run_backtest(category: str, symbol: str, interval: str, strategy: str, limit
         "profit_factor": profit_factor,
         "trades_count": len(trades),
         "skipped_signals": skipped_signals,
+        "exit_reason_counts": exit_reason_counts,
+        "ambiguous_exit_count": ambiguous_exit_count,
+        "ambiguous_exit_rate": round(ambiguous_exit_rate, 6),
+        "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "halted_by_risk": halted_by_risk,
         "quality": quality,
         "persistence_warnings": persistence_warnings,

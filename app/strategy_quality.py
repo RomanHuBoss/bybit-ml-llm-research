@@ -15,6 +15,8 @@ RESEARCH = "RESEARCH"
 REJECTED = "REJECTED"
 STALE = "STALE"
 QUALITY_STATUSES = {APPROVED, WATCHLIST, RESEARCH, REJECTED, STALE}
+SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
+MAX_AMBIGUOUS_EXIT_RATE_FOR_APPROVAL = 0.20
 
 
 def _finite(value: Any, default: float | None = None) -> float | None:
@@ -108,6 +110,8 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     wf_windows = _int(metrics.get("walk_forward_windows"), 0)
     last_backtest_at = metrics.get("last_backtest_at") or metrics.get("created_at")
     last_30d_return = _finite(metrics.get("last_30d_return"))
+    ambiguous_exit_count = _int(metrics.get("ambiguous_exit_count"), 0)
+    ambiguous_exit_rate = _finite(metrics.get("ambiguous_exit_rate"), 0.0) or 0.0
 
     thresholds = _quality_thresholds()
     min_trades = int(thresholds["min_trades"])
@@ -123,6 +127,12 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     min_recent_30d_return = float(thresholds["min_recent_30d_return"])
 
     diagnostics = dict(thresholds)
+    diagnostics.update({
+        "ambiguous_exit_count": ambiguous_exit_count,
+        "ambiguous_exit_rate": ambiguous_exit_rate,
+        "max_ambiguous_exit_rate_for_approval": MAX_AMBIGUOUS_EXIT_RATE_FOR_APPROVAL,
+        "exit_reason_counts": metrics.get("exit_reason_counts") if isinstance(metrics.get("exit_reason_counts"), dict) else {},
+    })
 
     if _is_stale_backtest(last_backtest_at):
         return {
@@ -160,6 +170,14 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
         + 0.05 * expectancy_factor
         + 0.08 * wf_factor
     )))
+    if ambiguous_exit_count > 0:
+        # Большая доля same-bar SL/TP означает, что OHLC-таймфрейм слишком грубый
+        # для уверенного quality approval: результат зависит от неизвестного
+        # порядка тиков внутри свечи. Не отбрасываем стратегию автоматически, но
+        # снижаем score и не даём ей стать APPROVED при чрезмерной неоднозначности.
+        score = max(0, score - int(round(min(30.0, ambiguous_exit_rate * 100.0))))
+
+    intrabar_uncertainty = ambiguous_exit_count >= 3 and ambiguous_exit_rate > MAX_AMBIGUOUS_EXIT_RATE_FOR_APPROVAL
 
     negative_enough = trades >= watch_trades and (
         (pf is not None and pf < 1.0)
@@ -185,13 +203,22 @@ def evaluate_strategy_quality(metrics: dict[str, Any]) -> dict[str, Any]:
     wf_ok = (not require_wf and not wf_available) or (wf_available and wf_rate >= wf_min_rate)
     expectancy_ok = expectancy is None or expectancy >= min_expectancy
     recent_ok = last_30d_return is None or last_30d_return >= min_recent_30d_return
-    if trades >= min_trades and pf_ok and dd_ok and ret_ok and wf_ok and expectancy_ok and recent_ok:
+    if trades >= min_trades and pf_ok and dd_ok and ret_ok and wf_ok and expectancy_ok and recent_ok and not intrabar_uncertainty:
         wf_tail = "" if wf_rate is None else f", WF {wf_rate:.0%}"
         return {
             "quality_status": APPROVED,
             "quality_score": max(score, 70),
             "evidence_grade": "APPROVED",
             "quality_reason": f"Стратегия допущена: сделок {trades}, PF {pf:.2f}, DD {dd:.2%}{wf_tail}.",
+            "quality_diagnostics": diagnostics,
+        }
+
+    if intrabar_uncertainty:
+        return {
+            "quality_status": WATCHLIST if trades >= watch_trades else RESEARCH,
+            "quality_score": min(max(score, 35), 60),
+            "evidence_grade": "INTRABAR_UNCERTAINTY",
+            "quality_reason": f"Стратегия требует проверки на меньшем таймфрейме: {ambiguous_exit_count} из {trades} сделок ({ambiguous_exit_rate:.1%}) имели одновременный SL/TP внутри одной свечи и засчитаны как SL-first.",
             "quality_diagnostics": diagnostics,
         }
 
@@ -345,8 +372,20 @@ def _windowed_trade_metrics(trades: list[dict[str, Any]], windows: int = 6) -> d
             "walk_forward_pass_rate": None,
             "walk_forward_windows": 0,
             "walk_forward_summary": [],
+            "exit_reason_counts": {},
+            "ambiguous_exit_count": 0,
+            "ambiguous_exit_rate": 0.0,
         }
     ordered = sorted(trades, key=lambda t: _parse_time(t.get("exit_time")) or datetime.min.replace(tzinfo=timezone.utc))
+    reason_counts: dict[str, int] = {}
+    for trade in ordered:
+        reason = str(trade.get("reason") or "unknown")
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    ambiguous_exit_count = sum(
+        count for reason, count in reason_counts.items()
+        if reason == SAME_BAR_STOP_FIRST_REASON or "same_bar" in reason or "ambiguous" in reason
+    )
+    ambiguous_exit_rate = ambiguous_exit_count / len(ordered) if ordered else 0.0
     pnls = [_finite(t.get("pnl"), 0.0) or 0.0 for t in ordered]
     avg = statistics.fmean(pnls) if pnls else None
     median = statistics.median(pnls) if pnls else None
@@ -389,6 +428,9 @@ def _windowed_trade_metrics(trades: list[dict[str, Any]], windows: int = 6) -> d
         "walk_forward_pass_rate": pass_rate,
         "walk_forward_windows": len(chunks),
         "walk_forward_summary": chunks,
+        "exit_reason_counts": reason_counts,
+        "ambiguous_exit_count": ambiguous_exit_count,
+        "ambiguous_exit_rate": ambiguous_exit_rate,
     }
 
 
@@ -437,6 +479,14 @@ def derive_backtest_run_metrics(run_id: int | None, run_row: dict[str, Any] | No
     else:
         metrics["last_30d_return"] = None
         metrics["last_90d_return"] = None
+    params = run_row.get("params") if isinstance(run_row, dict) else None
+    if isinstance(params, dict):
+        if not metrics.get("exit_reason_counts") and isinstance(params.get("exit_reason_counts"), dict):
+            metrics["exit_reason_counts"] = params.get("exit_reason_counts")
+        if not metrics.get("ambiguous_exit_count") and params.get("ambiguous_exit_count") is not None:
+            metrics["ambiguous_exit_count"] = _int(params.get("ambiguous_exit_count"), 0)
+        if (metrics.get("ambiguous_exit_rate") in (None, 0.0)) and params.get("ambiguous_exit_rate") is not None:
+            metrics["ambiguous_exit_rate"] = _finite(params.get("ambiguous_exit_rate"), 0.0) or 0.0
     return metrics
 
 
@@ -517,7 +567,7 @@ def upsert_strategy_quality_from_run_id(run_id: int | None) -> dict[str, Any] | 
     row = fetch_one(
         """
         SELECT id AS backtest_run_id, created_at AS last_backtest_at, category, symbol, interval, strategy,
-               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve
+               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve, params
         FROM backtest_runs
         WHERE id=%s
         """,
@@ -541,7 +591,7 @@ def refresh_strategy_quality(limit: int = 500, time_budget_sec: float | None = N
         """
         SELECT DISTINCT ON (category, symbol, interval, strategy)
                id AS backtest_run_id, created_at AS last_backtest_at, category, symbol, interval, strategy,
-               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve
+               total_return, max_drawdown, sharpe, win_rate, profit_factor, trades_count, equity_curve, params
         FROM backtest_runs
         ORDER BY category, symbol, interval, strategy, created_at DESC
         LIMIT %s
