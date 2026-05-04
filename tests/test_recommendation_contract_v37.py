@@ -27,7 +27,7 @@ def test_v37_extended_price_is_not_actionable_even_when_review_entry():
     )
     contract = item["recommendation"]
 
-    assert contract["contract_version"] == "recommendation_v37"
+    assert contract["contract_version"] == "recommendation_v38"
     assert contract["recommendation_status"] == "review_entry"
     assert contract["price_status"] == "extended"
     assert contract["price_actionability"]["is_price_actionable"] is False
@@ -66,7 +66,7 @@ def test_v37_net_rr_gate_blocks_fee_adjusted_bad_review_candidate():
 def test_v37_no_trade_snapshot_also_carries_contract_health():
     snap = no_trade_decision_snapshot(reason="Нет активных рекомендаций", category="linear", as_of=NOW)
 
-    assert snap["contract_version"] == "recommendation_v37"
+    assert snap["contract_version"] == "recommendation_v38"
     assert snap["contract_health"]["ok"] is True
     assert snap["price_actionability"]["reason"] == "no_active_recommendation"
 

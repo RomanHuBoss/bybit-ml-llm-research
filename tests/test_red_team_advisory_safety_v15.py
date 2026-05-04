@@ -65,10 +65,14 @@ def test_latest_signals_api_contract_includes_liquidity_join_for_operator_decisi
     assert "l.liquidity_captured_at, l.liquidity_status" in source
 
 
-def test_frontend_directional_risk_reward_does_not_show_absolute_rr_for_bad_levels():
+def test_frontend_directional_risk_reward_uses_only_server_contract():
     source = Path("frontend/app.js").read_text(encoding="utf-8")
 
     assert "function levelsProblem" in source
-    assert "if (levelsProblem(s)) return null" in source
+    assert "function riskReward" in source
+    assert "source: 'server_contract'" in source
+    assert "legacy_fallback" not in source
+    assert "reward / risk" not in source
+    assert "Math.abs(entry - stop)" not in source
     assert "long_levels_not_ordered" in source
     assert "short_levels_not_ordered" in source

@@ -9,7 +9,7 @@ from .config import settings
 DIRECTION_LONG = "long"
 DIRECTION_SHORT = "short"
 DIRECTION_NO_TRADE = "no_trade"
-RECOMMENDATION_CONTRACT_VERSION = "recommendation_v37"
+RECOMMENDATION_CONTRACT_VERSION = "recommendation_v38"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
 NON_ENTRY_ACTIONS = {"NO_TRADE", "WAIT"}
 
@@ -606,6 +606,8 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "price_actionability": price_gate,
         "entry_window": price_gate.get("entry_window"),
         "confidence_semantics": "engineering_score_not_win_probability",
+        "decision_source": "server_enriched_contract_v38",
+        "frontend_may_recalculate": False,
         "invalidation_condition": invalidation,
         "recommendation_explanation": explanation_text,
         "factors_for": factors_for,
@@ -664,6 +666,18 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
             problems.append({"code": str(price_gate.get("reason") or "price_gate_blocked"), "level": "error", "message": "Review entry is not actionable unless server price gate is green."})
     if direction == DIRECTION_NO_TRADE and contract.get("is_actionable") is True:
         problems.append({"code": "no_trade_marked_actionable", "level": "error", "message": "NO_TRADE cannot be actionable."})
+    if contract.get("frontend_may_recalculate") is not False:
+        problems.append({"code": "frontend_recalculation_allowed", "level": "error", "message": "Frontend must render the server-enriched recommendation contract and must not recompute trade math."})
+    if contract.get("decision_source") != "server_enriched_contract_v38":
+        problems.append({"code": "missing_server_decision_source", "level": "warn", "message": "Contract should explicitly identify the server as the only decision source."})
+    if status in {"review_entry", "research_candidate", "blocked", "wait"}:
+        factors_for = contract.get("factors_for")
+        factors_against = contract.get("factors_against")
+        if not isinstance(factors_for, list) or not isinstance(factors_against, list):
+            problems.append({"code": "factor_arrays_missing", "level": "error", "message": "Recommendation explanation factors must be structured arrays."})
+    price_gate = contract.get("price_actionability") if isinstance(contract.get("price_actionability"), dict) else {}
+    if contract.get("is_actionable") is True and price_gate.get("is_price_actionable") is not True:
+        problems.append({"code": "top_level_actionable_without_price_gate", "level": "error", "message": "Top-level is_actionable cannot be true while price gate is blocked."})
     level = "error" if any(p["level"] == "error" for p in problems) else "warn" if problems else "ok"
     return {
         "level": level,
@@ -718,6 +732,8 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         },
         "entry_window": None,
         "confidence_semantics": "engineering_score_not_win_probability",
+        "decision_source": "server_enriched_contract_v38",
+        "frontend_may_recalculate": False,
         "invalidation_condition": "Нет валидного торгового сетапа: вход запрещён до появления свежей рекомендации с entry, SL, TP и сроком актуальности.",
         "recommendation_explanation": reason,
         "factors_for": [],

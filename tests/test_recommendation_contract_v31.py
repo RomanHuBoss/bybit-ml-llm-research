@@ -46,7 +46,7 @@ def test_v31_market_state_explains_no_trade_without_ui_guessing():
     state = _market_state_for_recommendations(payload_ok=True, recommendations=[])
 
     assert state["status"] == "no_trade"
-    assert state["contract"] == "recommendation_v37"
+    assert state["contract"] == "recommendation_v38"
     assert "NO_TRADE" in state["explanation"]
 
 

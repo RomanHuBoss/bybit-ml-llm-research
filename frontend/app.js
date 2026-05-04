@@ -584,7 +584,8 @@ function levelsProblem(s) {
 }
 
 function riskReward(s) {
-  // Основной источник математики — серверный recommendation contract.
+  // V38: фронт не пересчитывает торговую математику. Он только отображает
+  // risk/reward, risk_pct и expected_reward_pct, рассчитанные и проверенные backend.
   const contract = contractFor(s);
   const serverRatio = num(contract.risk_reward, null);
   const serverRisk = num(contract.risk_pct, null);
@@ -592,20 +593,7 @@ function riskReward(s) {
   if (contract.level_validation?.valid !== false && serverRatio !== null && serverRatio > 0 && serverRisk !== null && serverRisk > 0 && serverReward !== null && serverReward > 0) {
     return { ratio: serverRatio, riskPct: serverRisk, rewardPct: serverReward, source: 'server_contract' };
   }
-  // Legacy fallback только для старых /signals/latest при отказе основного endpoint.
-  if (levelsProblem(s)) return null;
-  const entry = num(contractValue(s, 'entry'));
-  const stop = num(contractValue(s, 'stop_loss'));
-  const target = num(contractValue(s, 'take_profit'));
-  const risk = Math.abs(entry - stop);
-  const reward = Math.abs(target - entry);
-  if (risk <= 0 || reward <= 0) return null;
-  return {
-    ratio: reward / risk,
-    riskPct: risk / entry,
-    rewardPct: reward / entry,
-    source: 'legacy_fallback',
-  };
+  return null;
 }
 
 function levelsProblemText(code) {
@@ -1303,64 +1291,13 @@ function algorithmDecisionFor(s) {
     };
   }
 
-  // Fallback ниже нужен только для старых backend-сборок или аварийной деградации API-контракта.
-  if (s.operator_action) {
-    const fallbackLevel = s.operator_action === 'REVIEW_ENTRY' ? 'review' : s.operator_action === 'RESEARCH_CANDIDATE' ? 'research' : s.operator_action === 'WAIT' ? 'watch' : 'reject';
-    const level = cssToken(s.operator_level, fallbackLevel);
-    const score = Math.round(num(s.operator_score, 0) || 0);
-    const hard = Array.isArray(s.operator_hard_reasons) ? s.operator_hard_reasons : [];
-    const warnings = Array.isArray(s.operator_warnings) ? s.operator_warnings : [];
-    const evidence = Array.isArray(s.operator_evidence_notes) ? s.operator_evidence_notes : [];
-    const first = hard[0] || warnings[0] || evidence[0];
-    const qualityMode = String(s.operator_quality_mode || '').toLowerCase();
-    const subtitle = level === 'review'
-      ? (qualityMode === 'provisional'
-        ? `Пилотная ручная проверка входа: score ${score}. Strategy quality ещё не APPROVED, но sample-only фильтр прошёл; обязательно проверить график, стакан и риск.`
-        : `Сетап можно вынести на ручную проверку: score ${score}. Strategy quality: ${s.quality_status || '—'}.`)
-      : level === 'research'
-        ? `Не торговая рекомендация: стратегия не прошла approval. ${s.quality_reason || first?.title || 'Нужен полноценный бэктест.'}; score ${score}.`
-        : level === 'watch'
-          ? `Ждать/наблюдать: ${first?.title || 'недостаточно совокупной доказательности'}; score ${score}.`
-          : `Вход запрещён: ${first?.title || 'сработал защитный фильтр'}; score ${score}.`;
-    return {
-      level,
-      label: s.operator_label || (level === 'review' ? 'РУЧНАЯ ПРОВЕРКА ВХОДА' : level === 'research' ? 'ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ' : level === 'watch' ? 'НАБЛЮДАТЬ' : 'НЕТ ВХОДА'),
-      score,
-      title: `${s.symbol}: ${s.operator_label || 'решение рассчитано'}`,
-      subtitle,
-    };
-  }
-
-  const checks = baseChecklistFor(s);
-  const hardStopKeys = new Set(['freshness', 'direction', 'mtf', 'liquidity', 'spread', 'rr', 'confidence']);
-  const hardFails = checks.filter((item) => item.status === 'fail' && hardStopKeys.has(item.key));
-  const warnings = checks.filter((item) => item.status === 'warn' || (item.status === 'fail' && !hardStopKeys.has(item.key)));
-  const rr = riskReward(s);
-  let score = 0;
-  score += Math.max(0, Math.min(1, num(s.research_score, 0))) * 16;
-  score += Math.max(0, Math.min(1, num(s.mtf_score, 0))) * 16;
-  score += Math.max(0, Math.min(1, num(s.confidence, 0))) * 20;
-  score += Math.max(0, Math.min(1, ((rr?.ratio || 0) - 1) / 1.5)) * 18;
-  score += bool(s.is_eligible) ? 10 : 0;
-  score += num(s.spread_pct, 999) <= 0.08 ? 8 : num(s.spread_pct, 999) <= 0.15 ? 3 : 0;
-  score += Math.max(0, Math.min(1, num(s.quality_score, 0) / 100)) * 10;
-  score += Math.max(0, Math.min(1, num(s.trades_count, 0) / 50)) * 4;
-  score += Math.max(0, Math.min(1, num(s.profit_factor, 0) / 2)) * 4;
-  score += Math.max(0, Math.min(1, (num(s.roc_auc, 0.5) - 0.5) / 0.2)) * 5;
-  score += Math.max(0, 1 - Math.min(1, num(s.max_drawdown, 0.4) / 0.35)) * 3;
-  if (s.mtf_veto || s.higher_tf_conflict || s.entry_tf_conflict || s.mtf_status === 'context_only') score -= 30;
-  score = Math.round(Math.max(0, Math.min(100, score)));
-
-  if (hardFails.length) {
-    return { level: 'reject', label: 'НЕТ ВХОДА', score, title: `${s.symbol}: вход запрещён`, subtitle: `Причина: ${hardFails[0].title}. Сетап можно только разобрать; ручной вход запрещен до снятия красного пункта.` };
-  }
-  if (num(s.confidence, 0) >= 0.58 && rr && rr.ratio >= 1.45 && score >= 56) {
-    if (String(s.quality_status || '').toUpperCase() === 'APPROVED') {
-      return { level: 'review', label: 'РУЧНАЯ ПРОВЕРКА ВХОДА', score, title: `${s.symbol}: можно вынести на ручную проверку`, subtitle: `Критических veto нет. Strategy quality APPROVED. ${warnings.length ? `Есть замечания: ${warnings.map((x) => x.title).slice(0, 2).join('; ')}.` : 'Дополнительные проверки ниже.'}` };
-    }
-    return { level: 'research', label: 'ИССЛЕДОВАТЕЛЬСКИЙ КАНДИДАТ', score, title: `${s.symbol}: research candidate`, subtitle: `Сетап есть, но strategy quality не APPROVED: ${s.quality_reason || 'нужен полноценный бэктест.'}` };
-  }
-  return { level: 'watch', label: 'НАБЛЮДАТЬ', score, title: `${s.symbol}: только наблюдение`, subtitle: `Нет критического запрета, но сетап пока слабый: ${warnings.map((x) => x.title).slice(0, 2).join('; ') || 'score ниже входного порога'}.` };
+  return {
+    level: 'reject',
+    label: 'НЕТ ВХОДА',
+    score: 0,
+    title: `${s.symbol}: нет серверного recommendation contract`,
+    subtitle: 'Frontend v38 не пересчитывает торговое решение и risk/reward. Нужно обновить backend или открыть /api/recommendations/active: без server-enriched contract вход запрещён.',
+  };
 }
 
 function checklistFor(s, options = {}) {
@@ -1770,7 +1707,6 @@ function renderTicket(s) {
     $('ticketBody').textContent = 'Выберите кандидата из очереди слева.';
     return;
   }
-  const rr = riskReward(s);
   const llmVerdict = llmVerdictFor(s);
   const contract = contractFor(s);
   const tradeDirection = tradeDirectionFor(s);
@@ -1785,9 +1721,9 @@ function renderTicket(s) {
       <div class="metric"><span>Entry</span><strong>${priceFmt(contractValue(s, 'entry'))}</strong></div>
       <div class="metric"><span>Stop-loss</span><strong>${priceFmt(contractValue(s, 'stop_loss'))}</strong></div>
       <div class="metric"><span>Take-profit</span><strong>${priceFmt(contractValue(s, 'take_profit'))}</strong></div>
-      <div class="metric"><span>Risk до SL</span><strong>${pct(contract.risk_pct ?? rr?.riskPct, 2)}</strong></div>
-      <div class="metric"><span>Потенциал до TP</span><strong>${pct(contract.expected_reward_pct ?? rr?.rewardPct, 2)}</strong></div>
-      <div class="metric"><span>R/R</span><strong>${fmt(contract.risk_reward ?? rr?.ratio, 2)}</strong></div>
+      <div class="metric"><span>Risk до SL</span><strong>${pct(contract.risk_pct, 2)}</strong></div>
+      <div class="metric"><span>Потенциал до TP</span><strong>${pct(contract.expected_reward_pct, 2)}</strong></div>
+      <div class="metric"><span>R/R</span><strong>${fmt(contract.risk_reward, 2)}</strong></div>
       <div class="metric"><span>Net R/R</span><strong>${fmt(contract.net_risk_reward, 2)}</strong><small>после fee/slippage</small></div>
       <div class="metric"><span>Risk amount</span><strong>${moneyFmt(contract.position_sizing?.risk_amount_usdt)}</strong></div>
       <div class="metric"><span>Position cap</span><strong>${moneyFmt(contract.position_sizing?.position_notional_usdt)}</strong><small>${escapeHtml(contract.position_sizing?.sizing_status || '—')}</small></div>
@@ -1927,7 +1863,7 @@ function renderQueue() {
     const riskText = hasNumber(s.operator_risk_score) ? ` · risk ${Math.round(num(s.operator_risk_score, 0))}` : '';
     const variants = variantsCount > 1 ? ` · ${variantsCount} вариантов${stabilityText}${riskText}` : `${stabilityText}${riskText}`;
     const contract = contractFor(s);
-    const rr = contract.risk_reward ?? riskReward(s)?.ratio;
+    const rr = num(contract.risk_reward, null);
     const expires = compactDateTime(contract.expires_at || s.expires_at);
     const conf = contract.confidence_score !== undefined ? `${contract.confidence_score}%` : pct(s.confidence, 0);
     return `
@@ -1980,7 +1916,7 @@ function renderRawTable(list = candidates()) {
   updateRawTableSortHeaders();
   body.innerHTML = rows.map((s) => {
     const contract = contractFor(s);
-    const rr = contract.risk_reward !== undefined && contract.risk_reward !== null ? { ratio: num(contract.risk_reward, null) } : riskReward(s);
+    const rr = num(contract.risk_reward, null);
     return `<tr class="dir-${cssToken(contract.trade_direction || s.direction, 'flat')} ${bool(s.direction_conflict) ? 'conflict-row' : ''}">
       <td>${escapeHtml(s.decision.label)}</td>
       <td>${escapeHtml(s.decision.score)}</td>
@@ -1990,7 +1926,7 @@ function renderRawTable(list = candidates()) {
       <td>${escapeHtml(String(contract.display_direction || contract.trade_direction || s.direction || 'flat').toUpperCase())}</td>
       <td>${escapeHtml(s.strategy || '—')}</td>
       <td>${confidenceScoreFor(s) === null ? '—' : `${confidenceScoreFor(s)}%`}</td>
-      <td>${rr ? rr.ratio.toFixed(2) : '—'}</td>
+      <td>${rr !== null ? rr.toFixed(2) : '—'}</td>
       <td>${fmt(s.profit_factor, 2)}</td>
       <td>${pct(s.max_drawdown, 1)}</td>
       <td>${pctRaw(s.spread_pct, 3)}</td>

@@ -313,7 +313,7 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "stale": stale,
         "moved_away": moved_away,
         "contract": RECOMMENDATION_CONTRACT_VERSION,
-        "previous_contract": "recommendation_v35",
+        "previous_contract": "recommendation_v37",
     }
 
 
@@ -367,10 +367,12 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
             "symbol", "trade_direction", "entry", "stop_loss", "take_profit",
             "risk_pct", "expected_reward_pct", "risk_reward", "net_risk_reward", "confidence_score",
             "expires_at", "recommendation_explanation", "signal_breakdown",
-            "price_actionability", "contract_health",
+            "price_actionability", "contract_health", "decision_source", "frontend_may_recalculate",
         ],
         "price_gate_policy": "entry_zone_only_for_actionable_review",
-        "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction on the client",
+        "decision_source": "server_enriched_contract_v38",
+        "frontend_may_recalculate": False,
+        "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction or risk math on the client",
     }
 
 
@@ -1676,7 +1678,7 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
             integrity = fetch_all(
                 """
                 SELECT issue_code, severity, COUNT(*)::int AS count
-                FROM v_recommendation_integrity_audit_v37
+                FROM v_recommendation_integrity_audit_v38
                 WHERE category=%s
                 GROUP BY issue_code, severity
                 ORDER BY severity DESC, count DESC, issue_code

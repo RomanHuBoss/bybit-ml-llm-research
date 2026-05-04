@@ -180,7 +180,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V37
+## Recommendation API V38
 
 Канонические endpoints для витрины оператора:
 
@@ -193,13 +193,14 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V37 additions
+### Recommendation API V38 additions
 
-- `contract_version = recommendation_v37`.
+- `contract_version = recommendation_v38`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
 - `price_actionability.is_price_actionable=true` возможен только в `entry_zone`; состояние `extended` означает ждать ретест, а не догонять цену.
 - `net_risk_reward` после fee/slippage участвует в review gate; слабый net R/R переводит сетап в hard/warn guardrail.
-- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v37`, если миграция применена.
+- Контракт содержит `decision_source=server_enriched_contract_v38` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
+- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v38`, если миграция применена. V38 дополнительно ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста.
 
 ## Frontend
 
@@ -574,7 +575,7 @@ psql -U bybit_lab_user -d bybit_lab -f sql/migrations/20260503_v30_recommendatio
 
 ## V35 — active recommendation integrity
 
-Текущий контракт рекомендаций: `recommendation_v37`.
+Текущий контракт рекомендаций: `recommendation_v38`.
 
 Ключевое изменение V35: активная выдача больше не показывает directional-сигналы, которые уже завершены outcome-evaluator или закрыты оператором. `/api/recommendations/active` требует `expires_at > NOW()` и исключает terminal outcomes. Метрики `/api/recommendations/quality` считаются только по завершённым рекомендациям (`outcome_status <> 'open'`), поэтому `winrate`, `profit_factor`, `average R`, MFE/MAE и confidence buckets не искажаются открытыми строками.
 
