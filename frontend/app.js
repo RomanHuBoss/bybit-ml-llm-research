@@ -1940,13 +1940,13 @@ function renderTicket(s) {
       <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>
     </div>
     <div class="ticket-operator-actions" aria-label="Действия оператора">
-      <button type="button" class="secondary small" data-busy-lock="true" data-operator-action="manual_review" ${contract.is_actionable ? '' : 'disabled title="Manual review доступен только при зелёном server price gate и contract_health=ok"'}>Взять в разбор</button>
-      <button type="button" class="primary small" data-busy-lock="true" data-operator-action="paper_opened" ${contract.is_actionable ? '' : 'disabled title="Paper-отметка доступна только при зелёном server price gate и contract_health=ok"'}>Отметить paper-вход</button>
+      <button type="button" class="secondary small" data-busy-lock="true" data-operator-action="manual_review">Взять в разбор</button>
+      <button type="button" class="primary small" data-busy-lock="true" data-operator-action="paper_opened" ${contract.is_actionable ? '' : 'disabled title="Paper-отметка доступна только при зелёном server price gate и contract_health=ok; API повторно проверит это на сервере"'}>Отметить paper-вход</button>
       <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="wait_confirmation">Ждать подтверждения</button>
       <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="skip">Пропустить</button>
       <button type="button" class="danger small" data-busy-lock="true" data-operator-action="close_invalidated">Закрыть как неактуальную</button>
     </div>
-    <div class="operator-action-status">${escapeHtml(state.lastOperatorAction || 'Действия сохраняются в recommendation_operator_actions; закрытие как неактуальной фиксирует outcome=invalidated.')}</div>
+    <div class="operator-action-status">${escapeHtml(state.lastOperatorAction || 'Действия сохраняются в recommendation_operator_actions; paper-вход дополнительно проходит V51 server gate, закрытие как неактуальной фиксирует outcome=invalidated.')}</div>
     <section class="llm-detail-card ${escapeHtml(cssToken(llmVerdict.tone, 'pending'))}">
       <header><span>LLM verdict · ${escapeHtml(llmVerdict.symbol)}</span><strong>${escapeHtml(llmVerdict.recommendation)} · ${escapeHtml(llmVerdict.confidenceText)}</strong></header>
       <p>${escapeHtml(llmVerdict.rationale || llmVerdict.summary)}</p>

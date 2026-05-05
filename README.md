@@ -174,6 +174,7 @@ node --check frontend/app.js
 - V45-расширения outbound-контракта: вложенный объект `recommendation` теперь самодостаточно содержит `entry`, `stop_loss`, `take_profit`, а системный аудит ловит неполный signal payload;
 - V46 server actionability: `REVIEW_ENTRY`/`RESEARCH_CANDIDATE` демотируются в `missed_entry`/`wait`, если цена не в `entry_zone` или текущая цена неизвестна.
 - V49 operator cockpit: DOM без дублирующихся id, единичный trade-ticket, скрытый legacy market-context mirror, компактная очередь без повторного вывода entry/SL/TP и paper-action без автоматической торговли.
+- V51 operator action gate: `paper_opened` повторно проверяется backend и БД; unsafe paper-входы по blocked/missed/stale контрактам отклоняются сервером.
 
 ## Торговая логика
 
@@ -244,7 +245,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V40/V43/V44/V45/V46
+## Recommendation API V40/V43/V44/V45/V46/V51
 
 Канонические endpoints для витрины оператора:
 
@@ -257,7 +258,7 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V40/V43/V44/V45/V46/V47/V48 additions
+### Recommendation API V40/V43/V44/V45/V46/V51/V47/V48 additions
 
 - `contract_version = recommendation_v40`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
@@ -380,6 +381,21 @@ UI реализует состояния loading, empty, error, stale data, API 
 - Ошибка Bybit: уменьшите число symbols/intervals/days, проверьте rate limits и сеть.
 - Ошибка PostgreSQL: проверьте `.env`, доступность БД и выполните `python run.py migrate --list`; для новой БД используйте `python run.py migrate --init-schema`.
 - LLM unavailable: проверьте `OLLAMA_BASE_URL`, модель и timeout.
+
+## V51: server-side gate для operator `paper_opened`
+
+V51 закрывает критичный разрыв между frontend UX и API: отключенная кнопка в браузере больше не является единственной защитой от фиксации paper-входа. `POST /api/recommendations/{signal_id}/operator-action` теперь серверно отклоняет `paper_opened`, если рекомендация не является actionable `REVIEW_ENTRY`.
+
+Что изменено:
+
+- `paper_opened` принимается только при `recommendation_status=review_entry`, `is_actionable=true`, `contract_health.ok=true`, `price_status=entry_zone`, торговом направлении `long/short` и отсутствии красных пунктов server-owned `operator_checklist`;
+- для paper-входа обязательна положительная цена аудита: `observed_price` из клиента или серверный `last_price`;
+- payload в `recommendation_operator_actions` сохраняет `is_actionable`, `contract_health_ok`, `price_status`, `market_freshness`, `net_risk_reward`;
+- миграция `20260505_v51_operator_action_server_gate.sql` добавляет DB CHECK-ограничения и audit-view `v_recommendation_integrity_audit_v51`;
+- `/api/system/warnings` сначала использует V51 audit-view;
+- frontend сообщает, что paper-вход повторно проверяется сервером, а `manual_review` остается доступным даже для blocked/research сетапов, потому что ручной разбор не является входом.
+
+Практическое правило V51: невозможно зафиксировать paper-вход через API, если серверный recommendation contract не разрешил actionable ручную проверку входа.
 
 ## Риск-дисклеймер
 

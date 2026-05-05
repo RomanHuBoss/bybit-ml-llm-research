@@ -85,5 +85,6 @@ def test_v37_schema_migration_and_frontend_publish_guardrails():
         assert "recommendation_v37" in source
         assert "ck_signals_rationale_json_object_v37" in source
     assert "contractHealthHtml" in js
-    assert "Manual review доступен только" in js
+    assert 'data-operator-action="manual_review">Взять в разбор</button>' in js
+    assert "Paper-отметка доступна только" in js
     assert ".contract-health" in css

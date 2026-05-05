@@ -14,6 +14,7 @@ DECISION_SOURCE = "server_enriched_contract_v40"
 INTRABAR_EXECUTION_MODEL = "conservative_ohlc_stop_loss_first"
 OPERATOR_CHECKLIST_EXTENSION = "operator_checklist_v47"
 MARKET_FRESHNESS_EXTENSION = "market_price_freshness_v48"
+OPERATOR_ACTION_SERVER_GATE_EXTENSION = "operator_action_server_gate_v51"
 COMPATIBLE_EXTENSIONS = [
     "market_data_integrity_v44",
     "quality_segments_v44",
@@ -21,6 +22,7 @@ COMPATIBLE_EXTENSIONS = [
     "server_actionability_v46",
     OPERATOR_CHECKLIST_EXTENSION,
     MARKET_FRESHNESS_EXTENSION,
+    OPERATOR_ACTION_SERVER_GATE_EXTENSION,
 ]
 SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}

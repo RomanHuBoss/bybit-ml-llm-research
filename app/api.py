@@ -67,7 +67,7 @@ from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .operator_queue import consolidate_operator_queue
 from .recommendation import annotate_recommendations, ensure_operator_decisions
-from .trade_contract import COMPATIBLE_EXTENSIONS, DECISION_SOURCE, MARKET_FRESHNESS_EXTENSION, OPERATOR_CHECKLIST_EXTENSION, RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
+from .trade_contract import COMPATIBLE_EXTENSIONS, DECISION_SOURCE, MARKET_FRESHNESS_EXTENSION, OPERATOR_ACTION_SERVER_GATE_EXTENSION, OPERATOR_CHECKLIST_EXTENSION, RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
 from .recommendation_outcomes import evaluate_due_recommendation_outcomes
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
@@ -386,6 +386,8 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "quality_segments": ["symbol", "timeframe", "direction", "confidence_bucket", "signal_type"],
         "integrity_audit_view": "v_recommendation_integrity_audit_v47",
         "market_freshness_audit_view": "v_recommendation_integrity_audit_v48",
+        "operator_action_gate_extension": OPERATOR_ACTION_SERVER_GATE_EXTENSION,
+        "operator_action_audit_view": "v_recommendation_integrity_audit_v51",
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
         "frontend_may_recalculate": False,
         "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction or risk math on the client",
@@ -734,6 +736,51 @@ def _operator_action_status(action: str) -> str:
         "close_invalidated": "invalidated_by_operator",
         "paper_opened": "paper_opened",
     }.get(action, "operator_action_logged")
+
+
+def _paper_entry_rejection_reason(contract: dict[str, Any]) -> str | None:
+    """Возвращает причину запрета paper-входа на сервере.
+
+    Disabled-кнопка на frontend не является защитой API: действие может прийти
+    из curl, старого клиента или из гонки состояния. Поэтому paper-вход
+    разрешается только для того же server-owned контракта, который UI показывает
+    как actionable REVIEW_ENTRY.
+    """
+    status = str(contract.get("recommendation_status") or "").lower()
+    health = contract.get("contract_health") if isinstance(contract.get("contract_health"), dict) else {}
+    price_actionability = contract.get("price_actionability") if isinstance(contract.get("price_actionability"), dict) else {}
+    checklist = contract.get("operator_checklist") if isinstance(contract.get("operator_checklist"), list) else []
+
+    if status != "review_entry":
+        return f"paper_opened_allowed_only_for_review_entry: current_status={status or 'missing'}"
+    if contract.get("is_actionable") is not True:
+        return "paper_opened_requires_contract_is_actionable_true"
+    if health.get("ok") is not True:
+        return "paper_opened_requires_contract_health_ok"
+    if str(contract.get("price_status") or price_actionability.get("price_status") or "").lower() != "entry_zone":
+        return "paper_opened_requires_entry_zone_price_gate"
+    if str(contract.get("trade_direction") or "").lower() not in {"long", "short"}:
+        return "paper_opened_requires_directional_trade_contract"
+    failed_check = next((item for item in checklist if isinstance(item, dict) and item.get("status") == "fail"), None)
+    if failed_check:
+        return f"paper_opened_blocked_by_operator_checklist:{failed_check.get('key') or failed_check.get('title') or 'fail'}"
+    return None
+
+
+def _operator_action_observed_price(req: OperatorActionRequest, contract: dict[str, Any]) -> float | None:
+    """Единая цена аудита действия оператора.
+
+    Для paper-входа цена обязательна: либо оператор передал observed_price,
+    либо сервер берет проверенную reference price из actionable-контракта.
+    """
+    if req.observed_price is not None:
+        return float(req.observed_price)
+    price = contract.get("last_price")
+    try:
+        value = float(price)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _recommendation_base_sql(where_sql: str) -> str:
@@ -1812,12 +1859,38 @@ def api_recommendation_operator_action(signal_id: int, req: OperatorActionReques
             return {"ok": False, "recommendation_id": signal_id, "error": "Recommendation not found"}
         annotated = annotate_recommendations([row])[0]
         contract = annotated.get("recommendation") or annotated
+        if req.action == "paper_opened":
+            rejection_reason = _paper_entry_rejection_reason(contract)
+            if rejection_reason:
+                return {
+                    "ok": False,
+                    "recommendation_id": signal_id,
+                    "action": req.action,
+                    "status": "rejected_by_server_gate",
+                    "error": rejection_reason,
+                    "recommendation_status": contract.get("recommendation_status"),
+                }
+
+        observed_price = _operator_action_observed_price(req, contract)
+        if req.action == "paper_opened" and observed_price is None:
+            return {
+                "ok": False,
+                "recommendation_id": signal_id,
+                "action": req.action,
+                "status": "rejected_by_server_gate",
+                "error": "paper_opened_requires_positive_observed_or_reference_price",
+                "recommendation_status": contract.get("recommendation_status"),
+            }
+
         payload = {
             "recommendation_status": contract.get("recommendation_status"),
             "trade_direction": contract.get("trade_direction"),
             "risk_reward": contract.get("risk_reward"),
             "net_risk_reward": contract.get("net_risk_reward"),
             "price_status": contract.get("price_status"),
+            "is_actionable": contract.get("is_actionable"),
+            "contract_health_ok": (contract.get("contract_health") or {}).get("ok") if isinstance(contract.get("contract_health"), dict) else None,
+            "market_freshness": contract.get("market_freshness"),
             "expires_at": contract.get("expires_at"),
         }
         execute(
@@ -1826,7 +1899,7 @@ def api_recommendation_operator_action(signal_id: int, req: OperatorActionReques
                 signal_id, action, operator_note, observed_price, recommendation_status, payload
             ) VALUES (%s,%s,%s,%s,%s,%s)
             """,
-            (int(signal_id), req.action, req.notes, req.observed_price, contract.get("recommendation_status"), payload),
+            (int(signal_id), req.action, req.notes, observed_price, contract.get("recommendation_status"), payload),
         )
         if req.action == "close_invalidated":
             execute(
@@ -1841,7 +1914,7 @@ def api_recommendation_operator_action(signal_id: int, req: OperatorActionReques
                     max_favorable_excursion_r=0, max_adverse_excursion_r=0,
                     notes=EXCLUDED.notes
                 """,
-                (int(signal_id), req.observed_price, {"source": "operator_action", "action": req.action, "note": req.notes}),
+                (int(signal_id), observed_price, {"source": "operator_action", "action": req.action, "note": req.notes}),
             )
         return {
             "ok": True,
@@ -1883,7 +1956,7 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
             integrity = []
             # Backward-compatible fallback keeps the historic V40 audit contract available.
             # Static contract test anchor: FROM v_recommendation_integrity_audit_v40
-            for audit_view in ("v_recommendation_integrity_audit_v48", "v_recommendation_integrity_audit_v47", "v_recommendation_integrity_audit_v46", "v_recommendation_integrity_audit_v45", "v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
+            for audit_view in ("v_recommendation_integrity_audit_v51", "v_recommendation_integrity_audit_v48", "v_recommendation_integrity_audit_v47", "v_recommendation_integrity_audit_v46", "v_recommendation_integrity_audit_v45", "v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
                 try:
                     integrity = fetch_all(
                         f"""
