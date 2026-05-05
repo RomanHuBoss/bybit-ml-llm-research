@@ -1941,6 +1941,7 @@ function renderTicket(s) {
     </div>
     <div class="ticket-operator-actions" aria-label="Действия оператора">
       <button type="button" class="secondary small" data-busy-lock="true" data-operator-action="manual_review" ${contract.is_actionable ? '' : 'disabled title="Manual review доступен только при зелёном server price gate и contract_health=ok"'}>Взять в разбор</button>
+      <button type="button" class="primary small" data-busy-lock="true" data-operator-action="paper_opened" ${contract.is_actionable ? '' : 'disabled title="Paper-отметка доступна только при зелёном server price gate и contract_health=ok"'}>Отметить paper-вход</button>
       <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="wait_confirmation">Ждать подтверждения</button>
       <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="skip">Пропустить</button>
       <button type="button" class="danger small" data-busy-lock="true" data-operator-action="close_invalidated">Закрыть как неактуальную</button>
@@ -2061,13 +2062,15 @@ function renderQueue() {
     const rr = num(contract.risk_reward, null);
     const expires = ttlText(contract);
     const conf = contract.confidence_score !== undefined ? `${contract.confidence_score}%` : pct(s.confidence, 0);
+    const direction = String(contract.display_direction || contract.trade_direction || s.direction || 'NO_TRADE').toUpperCase();
+    const priceState = contract.price_status || s.data_status || 'fresh';
     return `
       <article class="candidate ${decisionLevel} ${isSelected ? 'selected' : ''}" data-id="${escapeHtml(s.id ?? '')}" data-key="${escapeHtml(cardKey)}" role="button" tabindex="0" aria-label="${escapeHtml(s.symbol)} ${label}">
-        <span class="candidate-star" aria-hidden="true">☆</span>
+        <span class="candidate-star" aria-hidden="true">${isSelected ? '●' : '○'}</span>
         <div class="candidate-copy">
-          <span class="symbol">${escapeHtml(s.symbol)}</span>
-          <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)} · ${escapeHtml(contract.price_status || s.data_status || 'fresh')}</span>
-          <span class="candidate-metrics">E ${priceFmt(contractValue(s, 'entry'))} · SL ${priceFmt(contractValue(s, 'stop_loss'))} · TP ${priceFmt(contractValue(s, 'take_profit'))} · R/R ${fmt(rr, 2)} · Conf ${escapeHtml(conf)} · TTL ${escapeHtml(expires)}</span>
+          <span class="symbol">${escapeHtml(s.symbol)} <em>${escapeHtml(direction)}</em></span>
+          <span class="candidate-timeframe">${escapeHtml(s.interval || '—')}m${escapeHtml(variants)} · ${escapeHtml(priceState)}</span>
+          <span class="candidate-metrics">R/R ${fmt(rr, 2)} · Conf ${escapeHtml(conf)} · TTL ${escapeHtml(expires)}</span>
         </div>
         <span class="badge ${decisionLevel}" title="${label}" aria-label="${label}">${compactLabel}</span>
         <span class="candidate-score">${s.decision.score}</span>

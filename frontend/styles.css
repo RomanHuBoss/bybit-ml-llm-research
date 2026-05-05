@@ -1856,3 +1856,197 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .sample.high { color: var(--green); border-color: rgba(0, 227, 140, 0.30); background: var(--green-soft); }
 .sample.medium { color: var(--blue); border-color: rgba(84, 163, 255, 0.30); background: var(--blue-soft); }
 .sample.low, .sample.none { color: var(--amber); border-color: rgba(245, 185, 66, 0.32); background: var(--amber-soft); }
+
+/* V49: операторский cockpit без дублирования торговой информации по панелям. */
+.operator-cockpit-v49 .terminal-shell.operator-workspace {
+  padding: 14px;
+  gap: 14px;
+}
+
+.operator-cockpit-v49 .operator-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+
+.operator-cockpit-v49 .operator-grid {
+  grid-template-columns: minmax(300px, 0.72fr) minmax(560px, 1.58fr) minmax(330px, 0.9fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.operator-cockpit-v49 .operator-left,
+.operator-cockpit-v49 .operator-center,
+.operator-cockpit-v49 .operator-right {
+  min-width: 0;
+}
+
+.operator-cockpit-v49 .queue-panel,
+.operator-cockpit-v49 .ticket,
+.operator-cockpit-v49 .mtf-panel {
+  height: auto;
+  min-height: 0;
+}
+
+.operator-cockpit-v49 .queue-panel {
+  position: sticky;
+  top: 92px;
+  z-index: 3;
+}
+
+.operator-cockpit-v49 .candidate-queue {
+  max-height: clamp(340px, 42vh, 580px);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.operator-cockpit-v49 .candidate {
+  grid-template-columns: 22px minmax(0, 1fr) minmax(78px, auto) 44px 18px;
+  gap: 9px;
+}
+
+.operator-cockpit-v49 .candidate .symbol {
+  display: inline-flex;
+  gap: 7px;
+  align-items: baseline;
+}
+
+.operator-cockpit-v49 .candidate .symbol em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: .08em;
+}
+
+.operator-cockpit-v49 .decision-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, .32fr);
+  gap: 12px;
+}
+
+.operator-cockpit-v49 .decision-meters,
+.operator-cockpit-v49 .decision-telemetry {
+  grid-column: 1 / -1;
+}
+
+.operator-cockpit-v49 .decision-telemetry {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.operator-cockpit-v49 .execution-panel .execution-map:not(.empty-state) {
+  margin-bottom: 10px;
+}
+
+.operator-cockpit-v49 .chart-stage {
+  min-height: 240px;
+}
+
+.operator-cockpit-v49 .trade-ticket .ticket-body {
+  max-height: none;
+  overflow-y: visible;
+}
+
+.operator-cockpit-v49 .ticket-main {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.operator-cockpit-v49 .recommendation-detail-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.operator-cockpit-v49 .recommendation-detail-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.operator-cockpit-v49 .context-card {
+  position: sticky;
+  top: 92px;
+  z-index: 2;
+}
+
+.operator-cockpit-v49 .context-tab-panel {
+  max-height: clamp(300px, 40vh, 560px);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.operator-cockpit-v49 .support-card[hidden],
+.operator-cockpit-v49 .support-grid[hidden] {
+  display: none !important;
+}
+
+.operator-cockpit-v49 .ops-panel {
+  order: 2;
+}
+
+.operator-cockpit-v49 .strategy-lab-panel {
+  order: 3;
+}
+
+.operator-cockpit-v49 .technical-details {
+  margin-top: 0;
+}
+
+.operator-cockpit-v49 .raw-table-wrap {
+  max-height: 56vh;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.operator-cockpit-v49 #rawTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.operator-cockpit-v49 .error-banner,
+.operator-cockpit-v49 .operation-toast {
+  margin: 10px 14px 0;
+}
+
+.operator-cockpit-v49 .danger {
+  border: 1px solid rgba(255, 77, 109, .45);
+  color: var(--red);
+  background: rgba(255, 77, 109, .10);
+  border-radius: 14px;
+  min-height: 32px;
+  padding: 6px 10px;
+  font-weight: 850;
+}
+
+.operator-cockpit-v49 .primary.small {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+@media (max-width: 1500px) {
+  .operator-cockpit-v49 .operator-grid {
+    grid-template-columns: minmax(280px, .8fr) minmax(520px, 1.4fr);
+  }
+  .operator-cockpit-v49 .operator-right {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr) minmax(280px, .75fr);
+    gap: 14px;
+  }
+  .operator-cockpit-v49 .context-card {
+    position: relative;
+    top: auto;
+  }
+}
+
+@media (max-width: 980px) {
+  .operator-cockpit-v49 .operator-summary,
+  .operator-cockpit-v49 .operator-grid,
+  .operator-cockpit-v49 .operator-right,
+  .operator-cockpit-v49 .decision-board,
+  .operator-cockpit-v49 .ticket-main,
+  .operator-cockpit-v49 .recommendation-detail-grid,
+  .operator-cockpit-v49 .decision-telemetry {
+    grid-template-columns: 1fr;
+  }
+  .operator-cockpit-v49 .queue-panel,
+  .operator-cockpit-v49 .context-card {
+    position: relative;
+    top: auto;
+  }
+}

@@ -132,6 +132,20 @@ python run.py app
 5. вручную проверить entry, SL, TP, R/R, MTF, liquidity, LLM/backtest/ML evidence;
 6. отличать торговые карточки `REVIEW_ENTRY` от исследовательских `RESEARCH_CANDIDATE`.
 
+
+## V49: операторский frontend-cockpit
+
+Фронтенд переработан как единое рабочее место оператора, а не набор дублирующих плиток:
+
+- слева: очередь 15m-рекомендаций, фильтры, параметры рынка и Strategy Lab;
+- в центре: одно каноническое решение, execution map/equity и подробный trade sheet;
+- справа: Risk & evidence, факторы решения, LLM, новости/sentiment, протокол, MTF и quality-сегменты;
+- техническая таблица сырых сигналов и журнал операций спрятаны в раскрываемый блок `Технические детали и журнал`;
+- карточки очереди больше не повторяют entry/SL/TP, а показывают только направление, статус, score, R/R, confidence и TTL;
+- добавлено действие `Отметить paper-вход`, которое фиксирует операторское действие, но не отправляет ордер.
+
+Каноническая торговая математика остается на backend: frontend только отображает `recommendation` contract и не пересчитывает `entry`, `stop_loss`, `take_profit`, `risk/reward` или `price_actionability`.
+
 ## Тесты и проверки
 
 ```bash
@@ -159,6 +173,7 @@ node --check frontend/app.js
 - V44-миграции целостности market data/liquidity/outcome metrics;
 - V45-расширения outbound-контракта: вложенный объект `recommendation` теперь самодостаточно содержит `entry`, `stop_loss`, `take_profit`, а системный аудит ловит неполный signal payload;
 - V46 server actionability: `REVIEW_ENTRY`/`RESEARCH_CANDIDATE` демотируются в `missed_entry`/`wait`, если цена не в `entry_zone` или текущая цена неизвестна.
+- V49 operator cockpit: DOM без дублирующихся id, единичный trade-ticket, скрытый legacy market-context mirror, компактная очередь без повторного вывода entry/SL/TP и paper-action без автоматической торговли.
 
 ## Торговая логика
 
