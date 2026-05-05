@@ -55,8 +55,9 @@ def test_queue_card_is_compact_and_no_longer_duplicates_trade_levels():
 def test_operator_actions_include_advisory_paper_mark_without_auto_trading():
     js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert "data-operator-action=\"paper_opened\"" in js
-    assert "Отметить paper-вход" in js
+    assert "operatorActionButtonsHtml(contract)" in js
+    assert "paper_opened: 'Отметить paper-вход'" in js
+    assert "data-operator-action=\"${escapeHtml(item.action)}\"" in js
     assert "const allowedActions = new Set(['skip', 'wait_confirmation', 'manual_review', 'close_invalidated', 'paper_opened']);" in js
     assert "Система не отправляет ордера автоматически" in (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 

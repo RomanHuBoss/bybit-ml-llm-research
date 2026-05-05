@@ -1838,6 +1838,56 @@ function nextActionsHtml(items) {
   return `<ol>${items.map((item, index) => `<li class="${index === 0 ? 'primary-next-action' : ''}"><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
 }
 
+function operatorActionButtonsHtml(contract) {
+  const allowedActions = new Set(['skip', 'wait_confirmation', 'manual_review', 'close_invalidated', 'paper_opened']);
+  const labels = {
+    skip: 'Пропустить',
+    wait_confirmation: 'Ждать подтверждения',
+    manual_review: 'Взять в разбор',
+    close_invalidated: 'Закрыть как неактуальную',
+    paper_opened: 'Отметить paper-вход',
+  };
+  const classes = {
+    skip: 'ghost small',
+    wait_confirmation: 'ghost small',
+    manual_review: 'secondary small',
+    close_invalidated: 'danger small',
+    paper_opened: 'primary small',
+  };
+  const status = String(contract?.recommendation_status || '').toLowerCase();
+  const direction = String(contract?.trade_direction || '').toLowerCase();
+  const priceStatus = String(contract?.price_status || contract?.price_actionability?.price_status || '').toLowerCase();
+  const healthOk = contract?.contract_health?.ok === true;
+  const priceOk = contract?.price_actionability?.is_price_actionable === true;
+  const isActionable = contract?.is_actionable === true;
+  const paperGateOk = status === 'review_entry' && ['long', 'short'].includes(direction) && isActionable && healthOk && priceOk && priceStatus === 'entry_zone';
+  const primaryAction = contract?.primary_next_action?.action || '';
+  const source = Array.isArray(contract?.next_actions) && contract.next_actions.length
+    ? contract.next_actions
+    : [{ action: primaryAction || 'skip', label: contract?.primary_next_action?.label || 'Пропустить', detail: contract?.primary_next_action?.detail || 'Нет безопасного действия.' }];
+  const unique = [];
+  const seen = new Set();
+  source.forEach((item) => {
+    const action = String(item?.action || '').trim();
+    if (!allowedActions.has(action) || seen.has(action)) return;
+    if (action === 'paper_opened' && !paperGateOk) return;
+    seen.add(action);
+    unique.push({ action, label: item?.label || labels[action] || action, detail: item?.detail || '' });
+  });
+  if (!unique.some((item) => item.action === 'skip') && !paperGateOk) {
+    unique.push({ action: 'skip', label: labels.skip, detail: 'Безопасное действие при WAIT/NO_TRADE, stale data или veto.' });
+  }
+  if (!unique.length) {
+    return '<button type="button" class="ghost small" disabled>Нет доступных действий</button>';
+  }
+  return unique.map((item, index) => {
+    const isPrimary = item.action === primaryAction || (!primaryAction && index === 0);
+    const title = item.detail ? ` title="${escapeHtml(item.detail)}"` : '';
+    const css = `${classes[item.action] || 'ghost small'}${isPrimary ? ' operator-primary-action' : ''}`;
+    return `<button type="button" class="${css}" data-busy-lock="true" data-operator-action="${escapeHtml(item.action)}"${title}>${escapeHtml(item.label || labels[item.action] || item.action)}</button>`;
+  }).join('');
+}
+
 function similarHistoryHtml(history, signalId) {
   if (state.similarHistoryLoading && Number(state.similarHistorySignalId) === Number(signalId)) {
     return '<p class="muted-line">Загружаю историю похожих сигналов…</p>';
@@ -2013,11 +2063,7 @@ function renderTicket(s) {
       <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>
     </div>
     <div class="ticket-operator-actions" aria-label="Действия оператора">
-      <button type="button" class="secondary small" data-busy-lock="true" data-operator-action="manual_review">Взять в разбор</button>
-      <button type="button" class="primary small" data-busy-lock="true" data-operator-action="paper_opened" ${contract.is_actionable ? '' : 'disabled title="Paper-отметка доступна только при зелёном server price gate и contract_health=ok; API повторно проверит это на сервере"'}>Отметить paper-вход</button>
-      <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="wait_confirmation">Ждать подтверждения</button>
-      <button type="button" class="ghost small" data-busy-lock="true" data-operator-action="skip">Пропустить</button>
-      <button type="button" class="danger small" data-busy-lock="true" data-operator-action="close_invalidated">Закрыть как неактуальную</button>
+      ${operatorActionButtonsHtml(contract)}
     </div>
     <div class="operator-action-status">${escapeHtml(state.lastOperatorAction || 'Действия сохраняются в recommendation_operator_actions; paper-вход дополнительно проходит V51 server gate, закрытие как неактуальной фиксирует outcome=invalidated.')}</div>
     <section class="llm-detail-card ${escapeHtml(cssToken(llmVerdict.tone, 'pending'))}">
@@ -2662,11 +2708,11 @@ function bindControls() {
 
   document.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-operator-action]');
-    if (!button) return;
+    if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
     const action = button.dataset.operatorAction;
     await runOperation(`Действие оператора: ${action}`, async () => {
       const result = await postOperatorAction(action);
-      if (action === 'close_invalidated') {
+      if (action === 'close_invalidated' || result?.status === 'rejected_by_server_gate') {
         await refreshRank();
         await refreshSignals();
       }

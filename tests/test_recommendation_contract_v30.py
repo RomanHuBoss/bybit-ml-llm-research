@@ -79,9 +79,11 @@ def test_frontend_has_operator_action_buttons_and_displays_backend_sizing():
 
     assert "async function postOperatorAction(action)" in js
     assert "function operatorActionPayload(action, candidate)" in js
-    assert "data-operator-action=\"manual_review\"" in js
-    assert "data-operator-action=\"wait_confirmation\"" in js
-    assert "data-operator-action=\"close_invalidated\"" in js
+    assert "function operatorActionButtonsHtml(contract)" in js
+    assert "manual_review: 'Взять в разбор'" in js
+    assert "wait_confirmation: 'Ждать подтверждения'" in js
+    assert "close_invalidated: 'Закрыть как неактуальную'" in js
+    assert "data-operator-action=\"${escapeHtml(item.action)}\"" in js
     assert "/api/recommendations/${encodeURIComponent(payload.signalId)}/operator-action" in js
     assert "state.lastOperatorAction" in js
     assert "position_sizing?.risk_amount_usdt" in js

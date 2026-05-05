@@ -82,8 +82,10 @@ def test_v51_sql_and_metadata_expose_operator_action_gate():
 def test_v51_frontend_keeps_manual_review_available_but_marks_paper_gate_as_server_checked():
     js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'data-operator-action="manual_review">Взять в разбор</button>' in js
-    assert "API повторно проверит это на сервере" in js
+    assert "function operatorActionButtonsHtml(contract)" in js
+    assert "manual_review: 'Взять в разбор'" in js
+    assert "paper_opened: 'Отметить paper-вход'" in js
+    assert "paperGateOk" in js
     assert "paper-вход дополнительно проходит V51 server gate" in js
 
 

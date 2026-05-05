@@ -492,3 +492,24 @@ python run.py migrate
 python -m pytest -q tests/test_v54_quote_freshness_and_quality_drawdown.py
 node --check frontend/app.js
 ```
+
+## V55: защита UI от paper-входа при WAIT/NO_TRADE
+
+V55 исправляет найденный эксплуатационный рассинхрон: пользователь мог увидеть или нажать `paper_opened`, когда сервер уже пересчитал контракт в `recommendation_status=wait`. Backend V51 корректно отклонял такое действие сообщением `paper_opened_allowed_only_for_review_entry`, но UI не должен предлагать оператору кнопку входа для WAIT/NO_TRADE.
+
+Что изменено:
+
+- frontend больше не рендерит фиксированный набор операторских кнопок для каждого ticket;
+- кнопки действий строятся только из server-owned `recommendation.next_actions` и `primary_next_action`;
+- `paper_opened` показывается только при полном server gate: `recommendation_status=review_entry`, `trade_direction=long|short`, `is_actionable=true`, `contract_health.ok=true`, `price_actionability.is_price_actionable=true`, `price_status=entry_zone`;
+- для `WAIT`, `NO_TRADE`, stale data, veto, missed entry и blocked-состояний UI оставляет безопасные действия вроде `skip` / `wait_confirmation` / `close_invalidated`, но не кнопку paper-входа;
+- click handler игнорирует disabled-кнопки и обновляет данные после server-gate rejection, чтобы экран не оставался на устаревшем состоянии.
+
+Практическое правило V55: если backend-контракт находится в `wait`, оператор не видит кнопку `paper_opened`; если старый клиент всё же отправит такое действие, backend по-прежнему отклонит его V51 server gate.
+
+Проверка V55:
+
+```bash
+python -m pytest -q tests/test_v55_operator_action_wait_gate.py
+node --check frontend/app.js
+```
