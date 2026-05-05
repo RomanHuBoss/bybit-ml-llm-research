@@ -33,6 +33,8 @@ const state = {
   similarHistorySignalId: null,
   similarHistoryLoading: false,
   similarHistoryError: null,
+  recommendationQuality: null,
+  recommendationQualityError: null,
 };
 
 const STRATEGY_LABELS = {
@@ -1231,6 +1233,87 @@ function scheduleQualityRefreshPoll() {
   }, QUALITY_REFRESH_POLL_MS);
 }
 
+function segmentLabel(row, axis) {
+  if (!row) return '—';
+  if (axis === 'by_confidence_bucket') return row.confidence_bucket || 'confidence';
+  if (axis === 'by_timeframe') return `TF ${row.interval || '—'}`;
+  if (axis === 'by_direction') return String(row.direction || '—').toUpperCase();
+  if (axis === 'by_signal_type') return compactStrategy(row.signal_type || row.strategy || 'signal');
+  if (axis === 'by_strategy') return `${row.interval || '—'} · ${compactStrategy(row.strategy || 'strategy')}`;
+  return row.symbol || row.interval || row.strategy || row.signal_type || 'segment';
+}
+
+function renderQualitySegmentRows(title, rows, axis) {
+  const safeRows = Array.isArray(rows) ? rows.slice(0, 5) : [];
+  if (!safeRows.length) {
+    return `<section class="quality-segment-card empty"><h3>${escapeHtml(title)}</h3><p>нет завершённых рекомендаций</p></section>`;
+  }
+  return `<section class="quality-segment-card">
+    <h3>${escapeHtml(title)}</h3>
+    ${safeRows.map((row) => {
+      const sampleClass = cssToken(row.sample_confidence || 'none');
+      return `<div class="quality-segment-row" title="${escapeHtml(row.sample_warning || 'Выборка сегмента достаточна для мониторинга, но не отменяет veto/price gates.')}">
+        <span class="segment-name">${escapeHtml(segmentLabel(row, axis))}</span>
+        <b>${fmt(row.average_r, 2)}R</b>
+        <span>${pct(row.winrate, 0)}</span>
+        <small class="sample ${sampleClass}">${escapeHtml(row.sample_confidence || 'none')} · n=${fmt(row.evaluated, 0)}</small>
+      </div>`;
+    }).join('')}
+  </section>`;
+}
+
+function renderRecommendationQuality() {
+  const box = $('qualitySegmentsBody');
+  if (!box) return;
+  const meta = $('qualitySegmentsMeta');
+  if (state.recommendationQualityError) {
+    box.className = 'quality-segments empty-state error-banner';
+    box.textContent = `Quality endpoint недоступен: ${state.recommendationQualityError}`;
+    if (meta) meta.textContent = 'error';
+    return;
+  }
+  const quality = state.recommendationQuality;
+  if (!quality) {
+    box.className = 'quality-segments empty-state';
+    box.textContent = 'Качество появится после загрузки /api/recommendations/quality.';
+    if (meta) meta.textContent = 'ожидание';
+    return;
+  }
+  const assessment = quality.quality_assessment || {};
+  const segments = quality.segments || {};
+  const evaluated = assessment.evaluated ?? quality.recommendation_outcomes?.evaluated ?? 0;
+  if (meta) meta.textContent = `${fmt(evaluated, 0)} исходов · ${assessment.statistical_confidence || 'none'}`;
+  if (!evaluated) {
+    box.className = 'quality-segments empty-state';
+    box.innerHTML = `<b>Нет завершённых рекомендаций.</b><p>${escapeHtml(assessment.operator_guidance || 'NO_TRADE и активные рекомендации еще не дают статистики качества.')}</p>`;
+    return;
+  }
+  box.className = 'quality-segments';
+  box.innerHTML = `
+    <div class="quality-assessment-note">
+      <b>${escapeHtml(assessment.statistical_confidence || 'none')}</b>
+      <span>${escapeHtml(assessment.operator_guidance || assessment.sample_warning || 'Качество стратегии и качество конкретного сигнала оцениваются отдельно.')}</span>
+    </div>
+    ${renderQualitySegmentRows('По confidence', segments.by_confidence_bucket, 'by_confidence_bucket')}
+    ${renderQualitySegmentRows('По TF', segments.by_timeframe, 'by_timeframe')}
+    ${renderQualitySegmentRows('LONG / SHORT', segments.by_direction, 'by_direction')}
+    ${renderQualitySegmentRows('Тип сигнала', segments.by_signal_type, 'by_signal_type')}
+  `;
+}
+
+async function refreshRecommendationQuality() {
+  const category = encodeURIComponent($('category')?.value || 'linear');
+  const interval = encodeURIComponent(primaryInterval());
+  try {
+    state.recommendationQualityError = null;
+    state.recommendationQuality = await api(`/api/recommendations/quality?category=${category}&interval=${interval}`);
+  } catch (error) {
+    state.recommendationQualityError = error.message;
+    log(`WARN recommendation quality: ${error.message}`);
+  }
+  renderRecommendationQuality();
+}
+
 function renderStrategyLab() {
   renderStrategyQualityRefreshStatus();
   const lab = state.strategyLab || {};
@@ -2225,7 +2308,7 @@ async function refreshAll() {
     await refreshBacktestStatus();
     await refreshLlmStatus();
     await refreshStrategyQualityStatus();
-    const results = await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews(), refreshStrategyLab()]);
+    const results = await Promise.allSettled([refreshUniverse(), refreshRank(), refreshSignals(), refreshEquity(), refreshNews(), refreshStrategyLab(), refreshRecommendationQuality()]);
     const failed = results.filter((r) => r.status === 'rejected');
     if (failed.length) {
       showOperationStatus(`Экран обновлен частично: ${failed.length} блока недоступны. Подробности в журнале.`, 'warn');

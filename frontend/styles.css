@@ -1794,3 +1794,65 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
   border-left: 3px solid rgba(0, 227, 140, 0.65);
   padding-left: 10px;
 }
+
+/* V44: компактная панель качества завершённых рекомендаций по сегментам. */
+.quality-segments-panel { overflow: hidden; }
+.quality-segments {
+  display: grid;
+  gap: 10px;
+}
+.quality-assessment-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(84, 163, 255, 0.25);
+  border-radius: 14px;
+  color: var(--muted);
+  background: var(--blue-soft);
+  font-size: 12px;
+}
+.quality-assessment-note b {
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.quality-segment-card {
+  padding: 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.24);
+}
+.quality-segment-card h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.quality-segment-card.empty p { margin: 0; color: var(--muted-2); font-size: 12px; }
+.quality-segment-row {
+  display: grid;
+  grid-template-columns: minmax(82px, 1fr) 54px 48px minmax(84px, auto);
+  align-items: center;
+  gap: 8px;
+  min-height: 31px;
+  border-top: 1px solid rgba(148, 163, 184, 0.10);
+  font-size: 12px;
+}
+.quality-segment-row:first-of-type { border-top: 0; }
+.segment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.quality-segment-row b { color: var(--green); text-align: right; }
+.quality-segment-row span:not(.segment-name) { color: var(--muted); text-align: right; }
+.sample {
+  justify-self: end;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--stroke);
+  color: var(--muted);
+  background: rgba(15, 23, 42, 0.72);
+}
+.sample.high { color: var(--green); border-color: rgba(0, 227, 140, 0.30); background: var(--green-soft); }
+.sample.medium { color: var(--blue); border-color: rgba(84, 163, 255, 0.30); background: var(--blue-soft); }
+.sample.low, .sample.none { color: var(--amber); border-color: rgba(245, 185, 66, 0.32); background: var(--amber-soft); }

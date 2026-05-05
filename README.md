@@ -152,7 +152,11 @@ node --check frontend/app.js
 - directional validity SL/TP относительно LONG/SHORT;
 - сортируемой таблицы сырых сигналов во frontend;
 - фонового non-blocking Strategy Quality refresh без 45-секундного UI-timeout;
-- сохранения advisory-only frontend-контракта.
+- сохранения advisory-only frontend-контракта;
+- V44-защиты outcome evaluation от невалидных OHLC-свечей: плохие бары пропускаются, а результат получает `data_quality_issue`;
+- V44-сегментов качества рекомендаций по `symbol`, `strategy`, `confidence bucket`, `timeframe`, `direction` и `signal_type`;
+- V44-frontend панели качества похожих сигналов без сырых JSON и без пересчета торговой логики на клиенте;
+- V44-миграции целостности market data/liquidity/outcome metrics.
 
 ## Торговая логика
 
@@ -223,7 +227,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V40/V43
+## Recommendation API V40/V43/V44
 
 Канонические endpoints для витрины оператора:
 
@@ -236,16 +240,29 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V40/V43 additions
+### Recommendation API V40/V43/V44 additions
 
 - `contract_version = recommendation_v40`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
 - `price_actionability.is_price_actionable=true` возможен только в `entry_zone`; состояние `extended` означает ждать ретест, а не догонять цену.
 - `net_risk_reward` после fee/slippage участвует в review gate; слабый net R/R переводит сетап в hard/warn guardrail.
 - Контракт содержит `decision_source=server_enriched_contract_v40` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
-- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v43` с fallback на `v_recommendation_integrity_audit_v40`, если миграция применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction.
+- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v44` с fallback на `v_recommendation_integrity_audit_v43`/`v_recommendation_integrity_audit_v40`, если новая миграция еще не применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction; V44 добавляет аудит невалидных OHLC/liquidity/outcome-метрик и сегментное качество рекомендаций.
 
 
+
+## Market Data Integrity and Quality Segments V44
+
+V44 добавляет защитный слой вокруг качества исходных рыночных данных и интерпретации истории рекомендаций. Цель — не допустить, чтобы невалидная свеча, поврежденный liquidity snapshot или малая историческая выборка выглядели как полноценное подтверждение торгового решения.
+
+Что изменено:
+
+- `app/recommendation_outcomes.py` перед расчетом MFE/MAE/SL/TP проверяет OHLC-свечи на положительные конечные значения, `high >= low` и соответствие `open/close` диапазону свечи. Невалидные бары не участвуют в outcome calculation и маркируются в `notes` как `invalid_candles_skipped`; если валидных баров нет, outcome получает явную причину `no_valid_market_bars`.
+- `/api/recommendations/quality` теперь возвращает не только общий quality snapshot, но и сегменты `by_symbol`, `by_strategy`, `by_confidence_bucket`, `by_timeframe`, `by_direction`, `by_signal_type`. Для каждого сегмента добавлены `sample_confidence` и человекочитаемый `sample_warning`, чтобы оператор видел отличие между качеством стратегии, качеством конкретного сигнала и слабостью выборки.
+- `frontend/` показывает отдельную панель `Recommendation quality segments`: качество по рынкам, таймфреймам, направлениям и типам сигналов выводится рядом с MTF/evidence, без raw JSON и без торговых расчетов на клиенте.
+- `sql/migrations/20260505_v44_market_data_integrity_and_quality_segments.sql` добавляет `NOT VALID` CHECK-ограничения для OHLC/liquidity/outcome-метрик, индексы для integrity scan и views `v_recommendation_quality_segments_v44`, `v_recommendation_integrity_audit_v44`, `v_recommendation_contract_v44`. `NOT VALID` выбран намеренно: миграция безопасна для существующих БД, а очистку старых загрязненных строк можно выполнять отдельно до `VALIDATE CONSTRAINT`.
+
+Публичный контракт рекомендаций остается `recommendation_v40`, чтобы не ломать существующий frontend/API. V44 — это совместимое расширение integrity, quality diagnostics и operator UX.
 
 ## Loss quarantine V43
 

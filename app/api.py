@@ -377,6 +377,8 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "decision_source": DECISION_SOURCE,
         "decision_source_literal": "server_enriched_contract_v40",
         "operator_queue_policy": "operator_queue_consolidates_before_contract_enrichment",
+        "quality_segments": ["symbol", "timeframe", "direction", "confidence_bucket", "signal_type"],
+        "integrity_audit_view": "v_recommendation_integrity_audit_v44",
         "frontend_may_recalculate": False,
         "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction or risk math on the client",
     }
@@ -452,12 +454,36 @@ def _quality_outcome_status_counts(category: str, interval_filter: str | None = 
     )
 
 
-def _quality_segment_rows(category: str, interval_filter: str | None = None) -> dict[str, Any]:
+def _quality_segment_params(category: str, interval_filter: str | None = None) -> tuple[list[Any], str]:
     params: list[Any] = [category]
     interval_sql = ""
     if interval_filter:
         interval_sql = " AND s.interval=%s"
         params.append(interval_filter)
+    return params, interval_sql
+
+
+def _sample_warning(sample_size: int) -> str | None:
+    if sample_size >= 30:
+        return None
+    if sample_size <= 0:
+        return "Нет завершённых рекомендаций в сегменте; метрики нельзя использовать для решения о входе."
+    return f"Малая выборка: {sample_size} завершённых рекомендаций. Снижайте риск и не трактуйте winrate как устойчивую вероятность."
+
+
+def _add_segment_sample_context(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        sample_size = int(item.get("evaluated") or 0)
+        item["sample_confidence"] = _sample_confidence_label(sample_size)
+        item["sample_warning"] = _sample_warning(sample_size)
+        enriched.append(item)
+    return enriched
+
+
+def _quality_segment_rows(category: str, interval_filter: str | None = None) -> dict[str, Any]:
+    params, interval_sql = _quality_segment_params(category, interval_filter)
     by_symbol = fetch_all(
         f"""
         SELECT s.symbol, COUNT(*)::int AS evaluated,
@@ -518,7 +544,64 @@ def _quality_segment_rows(category: str, interval_filter: str | None = None) -> 
         """,
         tuple(params),
     )
-    return {"by_symbol": by_symbol, "by_strategy": by_strategy, "by_confidence_bucket": by_confidence}
+    by_timeframe = fetch_all(
+        f"""
+        SELECT s.interval, COUNT(*)::int AS evaluated,
+               AVG(o.realized_r)::float AS average_r,
+               SUM(CASE WHEN o.realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
+               SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor,
+               AVG(o.max_favorable_excursion_r)::float AS avg_mfe_r,
+               AVG(o.max_adverse_excursion_r)::float AS avg_mae_r
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s {interval_sql}
+          AND o.outcome_status <> 'open'
+        GROUP BY s.interval
+        ORDER BY evaluated DESC, s.interval
+        """,
+        tuple(params),
+    )
+    by_direction = fetch_all(
+        f"""
+        SELECT s.direction, COUNT(*)::int AS evaluated,
+               AVG(o.realized_r)::float AS average_r,
+               SUM(CASE WHEN o.realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
+               SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s {interval_sql}
+          AND o.outcome_status <> 'open'
+          AND s.direction IN ('long','short')
+        GROUP BY s.direction
+        ORDER BY evaluated DESC, s.direction
+        """,
+        tuple(params),
+    )
+    by_signal_type = fetch_all(
+        f"""
+        SELECT COALESCE(NULLIF(s.rationale->>'signal_type',''), NULLIF(s.rationale->>'setup_type',''), s.strategy) AS signal_type,
+               COUNT(*)::int AS evaluated,
+               AVG(o.realized_r)::float AS average_r,
+               SUM(CASE WHEN o.realized_r > 0 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS winrate,
+               SUM(GREATEST(o.realized_r,0))::float / NULLIF(ABS(SUM(LEAST(o.realized_r,0)))::float,0) AS profit_factor
+        FROM recommendation_outcomes o
+        JOIN signals s ON s.id=o.signal_id
+        WHERE s.category=%s {interval_sql}
+          AND o.outcome_status <> 'open'
+        GROUP BY signal_type
+        ORDER BY evaluated DESC, average_r DESC NULLS LAST
+        LIMIT 80
+        """,
+        tuple(params),
+    )
+    return {
+        "by_symbol": _add_segment_sample_context(by_symbol),
+        "by_strategy": _add_segment_sample_context(by_strategy),
+        "by_confidence_bucket": _add_segment_sample_context(by_confidence),
+        "by_timeframe": _add_segment_sample_context(by_timeframe),
+        "by_direction": _add_segment_sample_context(by_direction),
+        "by_signal_type": _add_segment_sample_context(by_signal_type),
+    }
 
 
 def _sample_confidence_label(sample_size: int) -> str:
@@ -1634,6 +1717,13 @@ def api_recommendation_quality(category: str = settings.default_category, interv
             "intrabar_warning": None if ambiguous_count == 0 else f"{ambiguous_count} завершённых рекомендаций ({ambiguous_rate:.1%}) имели одновременный SL/TP внутри одной OHLC-свечи и засчитаны как SL-first.",
             "intrabar_execution_model": "conservative_ohlc_stop_loss_first",
             "metric_semantics": "winrate/average_r/profit_factor описывают завершённые рекомендации; confidence_score не является вероятностью прибыли.",
+            "operator_guidance": (
+                "Выборка мала: использовать только пониженный риск и ручную проверку."
+                if evaluated < 30 else
+                "Выборка умеренная: сверяйте сегменты по symbol/TF/direction/confidence перед ручным входом."
+                if evaluated < 100 else
+                "Выборка достаточная для рабочего мониторинга, но не отменяет price/liquidity/veto gates."
+            ),
         }
         return {
             "ok": True,
@@ -1784,7 +1874,7 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
             integrity = []
             # Backward-compatible fallback keeps the historic V40 audit contract available.
             # Static contract test anchor: FROM v_recommendation_integrity_audit_v40
-            for audit_view in ("v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
+            for audit_view in ("v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
                 try:
                     integrity = fetch_all(
                         f"""

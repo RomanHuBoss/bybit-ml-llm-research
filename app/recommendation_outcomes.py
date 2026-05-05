@@ -38,6 +38,44 @@ def _outcome_payload(status: str, *, exit_price: float | None, exit_time: Any, r
     }
 
 
+
+
+def _valid_candle_range(candle: dict[str, Any]) -> tuple[float, float] | None:
+    """Вернуть high/low только для математически валидной OHLC-свечи.
+
+    Outcome evaluator не имеет права строить качество рекомендаций на битых
+    свечах: high ниже low, нулевые цены или NaN/Infinity должны быть явно
+    исключены и отражены в notes результата, а не молча искажать R-метрики.
+    """
+    open_f = finite(candle.get("open"))
+    high_f = finite(candle.get("high"))
+    low_f = finite(candle.get("low"))
+    close_f = finite(candle.get("close"))
+    values = [v for v in (open_f, high_f, low_f, close_f) if v is not None]
+    if high_f is None or low_f is None or high_f <= 0 or low_f <= 0 or high_f < low_f:
+        return None
+    if any(v <= 0 for v in values):
+        return None
+    if open_f is not None and not (low_f <= open_f <= high_f):
+        return None
+    if close_f is not None and not (low_f <= close_f <= high_f):
+        return None
+    return high_f, low_f
+
+
+def _with_data_quality_notes(payload: dict[str, Any], *, skipped_invalid_candles: int, valid_bars: int) -> dict[str, Any]:
+    notes = dict(payload.get("notes") or {})
+    if skipped_invalid_candles:
+        notes["data_quality_issue"] = True
+        notes["skipped_invalid_candles"] = skipped_invalid_candles
+        notes.setdefault("data_quality_reason", "invalid_ohlc_candles_skipped")
+    if valid_bars == 0 and payload.get("outcome_status") in {"expired", "open"}:
+        notes["data_quality_issue"] = True
+        notes["no_valid_bars_after_signal"] = True
+        notes.setdefault("data_quality_reason", "no_valid_ohlc_after_signal")
+    return {**payload, "notes": notes}
+
+
 def _ambiguous_stop_notes(direction: str) -> dict[str, Any]:
     # Same-bar SL/TP — не обычный стоп. Это методологически неоднозначная свеча,
     # поэтому outcome хранит отдельный флаг для quality dashboards и интерфейса.
@@ -78,14 +116,16 @@ def evaluate_signal_outcome(signal: dict[str, Any], candles: list[dict[str, Any]
     mfe = 0.0
     mae = 0.0
     bars = 0
+    skipped_invalid_candles = 0
     for candle in candles:
         ts = _parse_dt(candle.get("start_time") or candle.get("ts") or candle.get("time"))
         if expires_at is not None and ts is not None and ts > expires_at:
             break
-        high = finite(candle.get("high"))
-        low = finite(candle.get("low"))
-        if high is None or low is None:
+        candle_range = _valid_candle_range(candle)
+        if candle_range is None:
+            skipped_invalid_candles += 1
             continue
+        high, low = candle_range
         bars += 1
         if direction == "long":
             mfe = max(mfe, (high - entry) / risk)
@@ -93,26 +133,26 @@ def evaluate_signal_outcome(signal: dict[str, Any], candles: list[dict[str, Any]
             stop_hit = low <= stop
             target_hit = high >= target
             if stop_hit and target_hit:
-                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes=_ambiguous_stop_notes(direction))
+                return _with_data_quality_notes(_outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes=_ambiguous_stop_notes(direction)), skipped_invalid_candles=skipped_invalid_candles, valid_bars=bars)
             if stop_hit:
-                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "stop_loss", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL})
+                return _with_data_quality_notes(_outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "stop_loss", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL}), skipped_invalid_candles=skipped_invalid_candles, valid_bars=bars)
             if target_hit:
-                return _outcome_payload("hit_take_profit", exit_price=target, exit_time=ts, realized_r=reward_r, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "take_profit", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL})
+                return _with_data_quality_notes(_outcome_payload("hit_take_profit", exit_price=target, exit_time=ts, realized_r=reward_r, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "take_profit", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL}), skipped_invalid_candles=skipped_invalid_candles, valid_bars=bars)
         else:
             mfe = max(mfe, (entry - low) / risk)
             mae = min(mae, (entry - high) / risk)
             stop_hit = high >= stop
             target_hit = low <= target
             if stop_hit and target_hit:
-                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes=_ambiguous_stop_notes(direction))
+                return _with_data_quality_notes(_outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes=_ambiguous_stop_notes(direction)), skipped_invalid_candles=skipped_invalid_candles, valid_bars=bars)
             if stop_hit:
-                return _outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "stop_loss", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL})
+                return _with_data_quality_notes(_outcome_payload("hit_stop_loss", exit_price=stop, exit_time=ts, realized_r=-1.0, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "stop_loss", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL}), skipped_invalid_candles=skipped_invalid_candles, valid_bars=bars)
             if target_hit:
-                return _outcome_payload("hit_take_profit", exit_price=target, exit_time=ts, realized_r=reward_r, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "take_profit", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL})
+                return _with_data_quality_notes(_outcome_payload("hit_take_profit", exit_price=target, exit_time=ts, realized_r=reward_r, mfe=mfe, mae=mae, bars=bars, notes={"exit_reason": "take_profit", "intrabar_execution_model": INTRABAR_EXECUTION_MODEL}), skipped_invalid_candles=skipped_invalid_candles, valid_bars=bars)
 
     if expires_at is not None and now >= expires_at:
-        return _outcome_payload("expired", exit_price=None, exit_time=expires_at, realized_r=0.0, mfe=mfe, mae=mae, bars=bars)
-    return _outcome_payload("open", exit_price=None, exit_time=None, realized_r=None, mfe=mfe, mae=mae, bars=bars)
+        return _with_data_quality_notes(_outcome_payload("expired", exit_price=None, exit_time=expires_at, realized_r=0.0, mfe=mfe, mae=mae, bars=bars), skipped_invalid_candles=skipped_invalid_candles, valid_bars=bars)
+    return _with_data_quality_notes(_outcome_payload("open", exit_price=None, exit_time=None, realized_r=None, mfe=mfe, mae=mae, bars=bars), skipped_invalid_candles=skipped_invalid_candles, valid_bars=bars)
 
 
 def _due_signals(category: str, limit: int) -> list[dict[str, Any]]:
