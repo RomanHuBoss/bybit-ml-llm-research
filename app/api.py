@@ -67,7 +67,7 @@ from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .operator_queue import consolidate_operator_queue
 from .recommendation import annotate_recommendations, ensure_operator_decisions
-from .trade_contract import DECISION_SOURCE, RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
+from .trade_contract import COMPATIBLE_EXTENSIONS, DECISION_SOURCE, OPERATOR_CHECKLIST_EXTENSION, RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
 from .recommendation_outcomes import evaluate_due_recommendation_outcomes
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
@@ -314,8 +314,8 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "moved_away": moved_away,
         "contract": RECOMMENDATION_CONTRACT_VERSION,
         "previous_contract": "recommendation_v38",
-        "ui_contract_extension": "server_actionability_v46",
-        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45", "server_actionability_v46"],
+        "ui_contract_extension": OPERATOR_CHECKLIST_EXTENSION,
+        "compatible_extensions": COMPATIBLE_EXTENSIONS,
     }
 
 
@@ -366,10 +366,11 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "allowed_statuses": ["review_entry", "research_candidate", "wait", "blocked", "expired", "invalid", "missed_entry"],
         "allowed_price_statuses": ["entry_zone", "extended", "moved_away", "stale", "unknown", "no_setup"],
         "required_recommendation_fields": [
-            "symbol", "trade_direction", "entry", "stop_loss", "take_profit",
+            "category", "symbol", "interval", "strategy", "trade_direction",
+            "entry", "stop_loss", "take_profit",
             "risk_pct", "expected_reward_pct", "risk_reward", "net_risk_reward", "confidence_score",
             "expires_at", "checked_at", "ttl_status", "ttl_seconds_left",
-            "recommendation_explanation", "signal_breakdown",
+            "recommendation_explanation", "signal_breakdown", "operator_checklist",
             "price_actionability", "contract_health", "decision_source", "frontend_may_recalculate",
             "intrabar_execution_model", "same_bar_stop_first_reason",
             "signal_breakdown.outcome_quality",
@@ -381,8 +382,8 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "decision_source_literal": "server_enriched_contract_v40",
         "operator_queue_policy": "operator_queue_consolidates_before_contract_enrichment",
         "quality_segments": ["symbol", "timeframe", "direction", "confidence_bucket", "signal_type"],
-        "integrity_audit_view": "v_recommendation_integrity_audit_v46",
-        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45", "server_actionability_v46"],
+        "integrity_audit_view": "v_recommendation_integrity_audit_v47",
+        "compatible_extensions": COMPATIBLE_EXTENSIONS,
         "frontend_may_recalculate": False,
         "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction or risk math on the client",
     }
@@ -1641,7 +1642,7 @@ def api_active_recommendations(limit: int = 50, category: str = settings.default
             "summary": {**market_state["summary"], "contract_guardrails": contract_guardrails},
             "market_state": {**market_state, "contract_guardrails": contract_guardrails},
             "empty_state": None if recommendations else market_state["explanation"],
-            "ui_contract_extension": "server_actionability_v46",
+            "ui_contract_extension": OPERATOR_CHECKLIST_EXTENSION,
             "error": payload.get("error"),
         }
     except ValueError as exc:

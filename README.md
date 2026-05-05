@@ -369,3 +369,15 @@ UI реализует состояния loading, empty, error, stale data, API 
 ## Риск-дисклеймер
 
 Крипторынок высокорисковый. Проект предназначен для исследовательской и операторской поддержки принятия решений. Любые рекомендации должны проверяться человеком; ответственность за сделки и капитал остается на операторе.
+
+## V47: server-owned operator checklist и полный nested recommendation identity
+
+В этой ревизии усилен API/UI-контракт советующей системы:
+
+- nested `recommendation` теперь самодостаточно содержит `category`, `symbol`, `interval`, `strategy`, `created_at`, `bar_time`;
+- backend формирует `operator_checklist` со статусами `pass` / `warn` / `fail` для финального server gate, identity, direction, уровней, TTL, price gate, R/R, confidence, MTF, liquidity/spread, strategy quality и статистической уверенности;
+- frontend сначала отображает server-owned `operator_checklist` и использует локальный чек-лист только как legacy fallback для старых API-ответов;
+- `contract_health` теперь считает отсутствие `operator_checklist` ошибкой контракта и не позволяет `REVIEW_ENTRY` без зелёного server price gate в чек-листе;
+- SQL-миграция `20260505_v47_operator_checklist_contract.sql` публикует `v_recommendation_integrity_audit_v47` и `v_recommendation_contract_v47`.
+
+Это дополнительно снижает риск рассинхрона, при котором браузер мог заново интерпретировать risk/quality/freshness-поля и показывать оператору отличающийся от backend смысл рекомендации.

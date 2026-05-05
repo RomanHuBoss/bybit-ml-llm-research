@@ -1017,8 +1017,24 @@ function backtestEvidenceTitle(s) {
   return `Бэктест: ${fmt(trades, 0)} сделок, PF ${fmt(pf, 2)}, DD ${pct(dd, 1)}`;
 }
 
+function serverChecklistFor(s) {
+  const contract = contractFor(s);
+  const items = Array.isArray(contract?.operator_checklist) ? contract.operator_checklist : [];
+  return items
+    .filter((item) => item && typeof item === 'object')
+    .map((item, index) => ({
+      key: String(item.key || `server_check_${index}`),
+      status: ['pass', 'warn', 'fail'].includes(String(item.status || '').toLowerCase()) ? String(item.status).toLowerCase() : 'warn',
+      title: String(item.title || item.key || 'Server checklist'),
+      text: String(item.text || item.detail || ''),
+      source: 'server',
+    }));
+}
+
 function baseChecklistFor(s) {
   if (!s) return [];
+  const serverChecklist = serverChecklistFor(s);
+  if (serverChecklist.length) return serverChecklist;
   const rr = riskReward(s);
   const hasSpread = hasNumber(s.spread_pct);
   const spread = num(s.spread_pct, null);
@@ -1899,6 +1915,7 @@ function renderTicket(s) {
       <section class="detail-card"><b>Loss quarantine</b>${outcomeQualityHtml(contract)}</section>
       <section class="detail-card"><b>Исход рекомендации</b>${outcomeContractHtml(contract.outcome)}</section>
       <section class="detail-card"><b>Guardrails контракта</b>${contractHealthHtml(contract.contract_health)}<small>Уровни берутся из nested recommendation contract: entry ${priceFmt(contract.entry)}, SL ${priceFmt(contract.stop_loss)}, TP ${priceFmt(contract.take_profit)}.</small></section>
+      <section class="detail-card wide"><b>Серверный чек-лист</b>${checklistHtml(serverChecklistFor(s).length ? serverChecklistFor(s) : checklistFor(s, { includeLlm: false }))}</section>
       <section class="detail-card wide"><b>История похожих сигналов</b>${similarHistoryHtml(state.similarHistory, s.id)}</section>
       <section class="detail-card wide"><b>Индикаторы</b>${indicatorValuesHtml(contract.indicator_values || {})}</section>
       <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>
@@ -1915,6 +1932,15 @@ function renderTicket(s) {
       <p>${escapeHtml(llmVerdict.rationale || llmVerdict.summary)}</p>
       <small>${escapeHtml(llmVerdict.meta)}</small>
     </section>`;
+}
+
+function checklistHtml(checks) {
+  if (!Array.isArray(checks) || !checks.length) return '<div class="empty-state">Нет серверного чек-листа.</div>';
+  return `<div class="checklist-list embedded-checklist">${checks.map((item) => `
+    <div class="check-item ${escapeHtml(cssToken(item.status, 'warn'))}">
+      <span class="check-icon">${item.status === 'pass' ? '✓' : item.status === 'warn' ? '!' : '×'}</span>
+      <div><b>${escapeHtml(item.title)}</b><p>${escapeHtml(item.text)}</p></div>
+    </div>`).join('')}</div>`;
 }
 
 function renderChecklist(s) {

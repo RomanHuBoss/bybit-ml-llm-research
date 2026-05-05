@@ -12,6 +12,14 @@ DIRECTION_NO_TRADE = "no_trade"
 RECOMMENDATION_CONTRACT_VERSION = "recommendation_v40"
 DECISION_SOURCE = "server_enriched_contract_v40"
 INTRABAR_EXECUTION_MODEL = "conservative_ohlc_stop_loss_first"
+OPERATOR_CHECKLIST_EXTENSION = "operator_checklist_v47"
+COMPATIBLE_EXTENSIONS = [
+    "market_data_integrity_v44",
+    "quality_segments_v44",
+    "nested_trade_levels_v45",
+    "server_actionability_v46",
+    OPERATOR_CHECKLIST_EXTENSION,
+]
 SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
 NON_ENTRY_ACTIONS = {"NO_TRADE", "WAIT"}
@@ -614,6 +622,147 @@ def trading_signals(row: dict[str, Any]) -> list[dict[str, str]]:
     return out
 
 
+def _check_status(condition: bool, warn_condition: bool = False) -> str:
+    if condition:
+        return "pass"
+    if warn_condition:
+        return "warn"
+    return "fail"
+
+
+def operator_checklist(
+    row: dict[str, Any],
+    status: str,
+    trade_direction: str,
+    levels: dict[str, Any],
+    price: dict[str, Any],
+    price_gate: dict[str, Any],
+    sizing: dict[str, Any],
+    ttl: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Серверный чек-лист оператора для UI без пересчёта торговой логики.
+
+    Frontend может красиво отрисовать пункты и добавить LLM-строку, но не должен
+    заново решать, разрешён ли вход. Поэтому статусы pass/warn/fail формируются
+    здесь из уже обогащенного контракта: уровни, TTL, price gate, quality, MTF и
+    статистическая уверенность должны совпадать с recommendation_status.
+    """
+    hard = _factor_items(row, "operator_hard_reasons")
+    warnings = _factor_items(row, "operator_warnings")
+    evidence = _factor_items(row, "operator_evidence_notes")
+    rr = finite(levels.get("risk_reward"))
+    net_rr = finite(sizing.get("net_risk_reward"))
+    confidence = clamp(row.get("confidence"))
+    quality = str(row.get("quality_status") or "RESEARCH").upper()
+    mtf_status = str(row.get("mtf_status") or "").lower()
+    eligible = row.get("is_eligible")
+    spread = finite(row.get("spread_pct"))
+    stats = statistics_confidence(row)
+    price_status = str(price.get("price_status") or "unknown")
+    ttl_status = str(ttl.get("status") or "missing")
+    gate_reasons = price_gate.get("reasons") if isinstance(price_gate.get("reasons"), list) else []
+    direction_ok = trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and status in {"review_entry", "research_candidate"}
+    levels_ok = bool(levels.get("valid"))
+    ttl_ok = ttl_status in {"active", "expiring_soon"} and ttl.get("is_expired") is not True
+    price_ok = price_gate.get("is_price_actionable") is True
+    liquidity_unknown = eligible is None
+    liquidity_ok = eligible is True or not bool(settings.require_liquidity_for_signals)
+    spread_ok = spread is not None and spread <= settings.max_spread_pct
+    quality_ok = quality == "APPROVED" or str(row.get("operator_quality_mode") or "").lower() == "provisional"
+    mtf_ok = mtf_status not in {"context_only", "no_trade_conflict", "entry_tf_conflict", "invalid_direction"}
+    stats_level = str(stats.get("level") or "none")
+
+    out = [
+        {
+            "key": "server_final_gate",
+            "status": "pass" if status == "review_entry" and price_ok else "warn" if status in {"research_candidate", "wait"} else "fail",
+            "title": f"Финальный серверный gate: {status}",
+            "text": "; ".join(str(item.get("title") or item.get("code")) for item in hard[:3]) or "Hard-veto отсутствует; final status всё равно задаётся сервером, не браузером.",
+        },
+        {
+            "key": "identity",
+            "status": _check_status(bool(row.get("symbol")) and bool(row.get("interval")) and bool(row.get("strategy"))),
+            "title": "Инструмент, TF и стратегия определены",
+            "text": f"{row.get('category') or settings.default_category}:{row.get('symbol') or '—'} · TF {row.get('interval') or '—'} · {row.get('strategy') or '—'}.",
+        },
+        {
+            "key": "direction",
+            "status": _check_status(direction_ok, status in {"wait", "missed_entry"}),
+            "title": "Направление сделки разрешено только для directional-статусов",
+            "text": f"trade_direction={trade_direction}; raw_direction={row.get('direction') or '—'}. Для NO_TRADE/WAIT направление скрывается как no_trade.",
+        },
+        {
+            "key": "levels",
+            "status": _check_status(levels_ok),
+            "title": "Entry / SL / TP математически валидны",
+            "text": f"entry={levels.get('entry')}; stop_loss={levels.get('stop_loss')}; take_profit={levels.get('take_profit')}; reason={levels.get('reason') or 'ok'}.",
+        },
+        {
+            "key": "ttl",
+            "status": _check_status(ttl_ok, ttl_status == "expiring_soon"),
+            "title": f"TTL рекомендации: {ttl_status}",
+            "text": f"expires_at={to_iso(parse_datetime(price_gate.get('expires_at')))}; seconds_left={ttl.get('seconds_left')}. Просроченный сигнал нельзя использовать для входа.",
+        },
+        {
+            "key": "price_gate",
+            "status": _check_status(price_ok, price_status == "extended"),
+            "title": f"Price gate: {price_status}",
+            "text": "Цена должна быть внутри серверного entry-window. Блокировки: " + (", ".join(str(x) for x in gate_reasons) if gate_reasons else "нет"),
+        },
+        {
+            "key": "risk_reward",
+            "status": _check_status(rr is not None and rr >= 1.45 and (net_rr is None or net_rr > 1.0), rr is not None and rr >= 1.15),
+            "title": f"R/R {rr:.2f}" if rr is not None else "R/R недоступен",
+            "text": f"net R/R after fee/slippage={net_rr:.2f}" if net_rr is not None else "Net R/R не рассчитан; вход требует ручной проверки комиссий и проскальзывания.",
+        },
+        {
+            "key": "confidence",
+            "status": _check_status(confidence >= 0.58, confidence >= 0.52),
+            "title": f"Confidence {confidence:.0%}",
+            "text": "Это инженерный скоринг качества сетапа, а не точная вероятность прибыли.",
+        },
+        {
+            "key": "mtf",
+            "status": _check_status(mtf_ok, mtf_status in {"", "weak_alignment", "tactical_only"}),
+            "title": f"MTF status: {mtf_status or 'unknown'}",
+            "text": str(row.get("mtf_reason") or "Entry-TF, bias-TF и regime-TF должны быть непротиворечивы."),
+        },
+        {
+            "key": "liquidity",
+            "status": _check_status(liquidity_ok and spread_ok, liquidity_unknown or spread is None),
+            "title": "Ликвидность и spread",
+            "text": f"is_eligible={eligible}; spread_pct={spread}; limit={settings.max_spread_pct}. Нет snapshot — только warning, но не зелёный gate.",
+        },
+        {
+            "key": "strategy_quality",
+            "status": _check_status(quality_ok, quality in {"WATCHLIST", "RESEARCH"}),
+            "title": f"Strategy quality: {quality}",
+            "text": str(row.get("quality_reason") or "Quality gate отделён от качества конкретного сигнала."),
+        },
+        {
+            "key": "statistics_confidence",
+            "status": _check_status(stats_level in {"medium", "high"}, stats_level == "low"),
+            "title": f"Статистическая уверенность: {stats_level}",
+            "text": str(stats.get("explanation") or "Историческая выборка не должна подменять проверку текущего price gate."),
+        },
+    ]
+    if warnings:
+        out.append({
+            "key": "warnings",
+            "status": "warn",
+            "title": f"Жёлтые предупреждения: {len(warnings)}",
+            "text": "; ".join(str(item.get("title") or item.get("code")) for item in warnings[:4]),
+        })
+    if evidence and not hard:
+        out.append({
+            "key": "evidence",
+            "status": "pass" if status == "review_entry" else "warn",
+            "title": f"Evidence notes: {len(evidence)}",
+            "text": "; ".join(str(item.get("title") or item.get("code")) for item in evidence[:4]),
+        })
+    return out
+
+
 def next_actions(status: str, trade_direction: str, price: dict[str, Any]) -> list[dict[str, str]]:
     if status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT}:
         if str(price.get("price_status") or "unknown") != "entry_zone":
@@ -660,6 +809,12 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
     contract = {
         "contract_version": RECOMMENDATION_CONTRACT_VERSION,
         "recommendation_id": row.get("id"),
+        "category": row.get("category") or settings.default_category,
+        "symbol": row.get("symbol"),
+        "interval": row.get("interval"),
+        "strategy": row.get("strategy"),
+        "created_at": to_iso(parse_datetime(row.get("created_at"))),
+        "bar_time": to_iso(parse_datetime(row.get("bar_time"))),
         "recommendation_status": status,
         "recommended_action": action_map.get(status, "Ждать"),
         "trade_direction": trade_direction,
@@ -681,7 +836,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "fee_slippage_roundtrip_pct": sizing.get("fee_slippage_roundtrip_pct"),
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
-        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45", "server_actionability_v46"],
+        "compatible_extensions": COMPATIBLE_EXTENSIONS,
         "position_sizing": sizing,
         "level_validation": {"valid": levels.get("valid"), "reason": levels.get("reason")},
         "price_status": price.get("price_status"),
@@ -703,6 +858,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "timeframes_used": timeframes_used(row),
         "indicator_values": indicator_values(row),
         "trading_signals": trading_signals(row),
+        "operator_checklist": operator_checklist(row, status, trade_direction, levels, price, price_gate, sizing, ttl),
         "next_actions": next_actions(status, trade_direction, price),
         "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing},
         "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price_gate.get("is_price_actionable") is True and (sizing.get("net_risk_reward") is None or sizing.get("net_risk_reward") > 1.0),
@@ -725,10 +881,11 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
     without letting the browser infer missing guardrails by itself.
     """
     required = (
-        "recommendation_id", "recommendation_status", "trade_direction", "confidence_score",
+        "recommendation_id", "category", "symbol", "interval", "strategy",
+        "recommendation_status", "trade_direction", "confidence_score",
         "entry", "stop_loss", "take_profit", "expires_at",
         "risk_pct", "expected_reward_pct", "risk_reward",
-        "recommendation_explanation", "price_actionability", "signal_breakdown",
+        "recommendation_explanation", "price_actionability", "signal_breakdown", "operator_checklist",
     )
     problems: list[dict[str, str]] = []
     status = str(contract.get("recommendation_status") or "").lower()
@@ -773,6 +930,11 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
         factors_against = contract.get("factors_against")
         if not isinstance(factors_for, list) or not isinstance(factors_against, list):
             problems.append({"code": "factor_arrays_missing", "level": "error", "message": "Recommendation explanation factors must be structured arrays."})
+        checklist = contract.get("operator_checklist")
+        if not isinstance(checklist, list) or not checklist:
+            problems.append({"code": "operator_checklist_missing", "level": "error", "message": "Server-owned operator checklist is required so frontend does not recompute trade gates."})
+        elif status == "review_entry" and not any(isinstance(item, dict) and item.get("key") == "price_gate" and item.get("status") == "pass" for item in checklist):
+            problems.append({"code": "operator_checklist_price_gate_not_green", "level": "error", "message": "Review entry checklist must include a passing price gate."})
     price_gate = contract.get("price_actionability") if isinstance(contract.get("price_actionability"), dict) else {}
     if contract.get("is_actionable") is True and price_gate.get("is_price_actionable") is not True:
         problems.append({"code": "top_level_actionable_without_price_gate", "level": "error", "message": "Top-level is_actionable cannot be true while price gate is blocked."})
@@ -799,6 +961,11 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "contract_version": RECOMMENDATION_CONTRACT_VERSION,
         "recommendation_id": None,
         "category": category or settings.default_category,
+        "symbol": None,
+        "interval": None,
+        "strategy": None,
+        "created_at": None,
+        "bar_time": None,
         "recommendation_status": "blocked",
         "recommended_action": "Пропустить / ждать новый расчёт",
         "trade_direction": DIRECTION_NO_TRADE,
@@ -819,7 +986,7 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "net_risk_reward": None,
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
-        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45", "server_actionability_v46"],
+        "compatible_extensions": COMPATIBLE_EXTENSIONS,
         "price_status": "no_setup",
         "last_price": None,
         "last_price_time": None,
@@ -858,6 +1025,10 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "timeframes_used": [],
         "indicator_values": {},
         "trading_signals": [],
+        "operator_checklist": [
+            {"key": "no_active_recommendation", "status": "fail", "title": "Нет активной рекомендации", "text": reason},
+            {"key": "advisory_only", "status": "pass", "title": "Автоматическая торговля отключена", "text": "Система только советующая; ордера не отправляются."},
+        ],
         "next_actions": [
             {"action": "recalculate", "label": "Пересчитать рекомендации", "detail": "Синхронизировать рынок и построить сигналы заново."},
             {"action": "skip", "label": "Не открывать сделку", "detail": "Пустой список рекомендаций является защитным состоянием, а не ошибкой UI."},

@@ -41,8 +41,9 @@ def test_v46_contract_metadata_and_schema_publish_server_actionability() -> None
     schema = (ROOT / "sql" / "schema.sql").read_text(encoding="utf-8")
     api = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
 
-    assert metadata["integrity_audit_view"] == "v_recommendation_integrity_audit_v46"
+    assert metadata["integrity_audit_view"] == "v_recommendation_integrity_audit_v47"
     assert "server_actionability_v46" in metadata["compatible_extensions"]
+    assert "operator_checklist_v47" in metadata["compatible_extensions"]
     for source in (migration, schema):
         assert "v_recommendation_integrity_audit_v46" in source
         assert "v_recommendation_contract_v46" in source
@@ -54,5 +55,6 @@ def test_v46_contract_metadata_and_schema_publish_server_actionability() -> None
 def test_v46_summary_exposes_compatible_extension_list() -> None:
     summary = _recommendation_summary([])
 
-    assert summary["ui_contract_extension"] == "server_actionability_v46"
+    assert summary["ui_contract_extension"] == "operator_checklist_v47"
     assert "server_actionability_v46" in summary["compatible_extensions"]
+    assert "operator_checklist_v47" in summary["compatible_extensions"]
