@@ -654,6 +654,9 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "ttl_status": ttl.get("status"),
         "ttl_seconds_left": ttl.get("seconds_left"),
         "is_expired": ttl.get("is_expired"),
+        "entry": levels.get("entry"),
+        "stop_loss": levels.get("stop_loss"),
+        "take_profit": levels.get("take_profit"),
         "risk_pct": levels.get("risk_pct"),
         "expected_reward_pct": levels.get("expected_reward_pct"),
         "risk_reward": levels.get("risk_reward"),
@@ -705,7 +708,8 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
     """
     required = (
         "recommendation_id", "recommendation_status", "trade_direction", "confidence_score",
-        "expires_at", "risk_pct", "expected_reward_pct", "risk_reward",
+        "entry", "stop_loss", "take_profit", "expires_at",
+        "risk_pct", "expected_reward_pct", "risk_reward",
         "recommendation_explanation", "price_actionability", "signal_breakdown",
     )
     problems: list[dict[str, str]] = []
@@ -719,9 +723,18 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
         problems.append({"code": "confidence_score_range", "level": "error", "message": "confidence_score must be in [0,100] and is not a win probability."})
     rr = finite(contract.get("risk_reward"))
     net_rr = finite(contract.get("net_risk_reward"))
-    if status == "review_entry" and direction in {DIRECTION_LONG, DIRECTION_SHORT}:
+    levels = validate_trade_levels(direction, contract.get("entry"), contract.get("stop_loss"), contract.get("take_profit"))
+    if status in {"review_entry", "research_candidate"}:
+        # Вложенный recommendation contract обязан сам содержать уровни сделки.
+        # Иначе detail/explanation endpoints и frontend могут показать top-level
+        # fallback и скрыть рассинхрон между БД и серверным контрактом.
+        if direction not in {DIRECTION_LONG, DIRECTION_SHORT}:
+            problems.append({"code": "directional_status_without_direction", "level": "error", "message": "Directional recommendation status requires long/short trade_direction."})
+        if not levels.get("valid"):
+            problems.append({"code": str(levels.get("reason") or "invalid_levels"), "level": "error", "message": "Directional recommendation contract must contain ordered entry/SL/TP levels."})
         if rr is None or rr <= 0:
-            problems.append({"code": "invalid_risk_reward", "level": "error", "message": "Review entry requires positive risk_reward."})
+            problems.append({"code": "invalid_risk_reward", "level": "error", "message": "Directional recommendation requires positive risk_reward."})
+    if status == "review_entry" and direction in {DIRECTION_LONG, DIRECTION_SHORT}:
         if net_rr is None:
             problems.append({"code": "missing_net_risk_reward", "level": "warn", "message": "Net R/R after fee and slippage is unavailable."})
         elif net_rr <= 1.0:
@@ -731,6 +744,8 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
             problems.append({"code": str(price_gate.get("reason") or "price_gate_blocked"), "level": "error", "message": "Review entry is not actionable unless server price gate is green."})
     if direction == DIRECTION_NO_TRADE and contract.get("is_actionable") is True:
         problems.append({"code": "no_trade_marked_actionable", "level": "error", "message": "NO_TRADE cannot be actionable."})
+    if status in {"blocked", "wait", "expired", "invalid", "missed_entry"} and direction in {DIRECTION_LONG, DIRECTION_SHORT}:
+        problems.append({"code": "non_entry_status_exposes_direction", "level": "error", "message": "Blocked/wait/expired recommendations must expose trade_direction=no_trade to the operator."})
     if contract.get("frontend_may_recalculate") is not False:
         problems.append({"code": "frontend_recalculation_allowed", "level": "error", "message": "Frontend must render the server-enriched recommendation contract and must not recompute trade math."})
     if contract.get("decision_source") != DECISION_SOURCE:

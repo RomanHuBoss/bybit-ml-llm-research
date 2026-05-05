@@ -609,7 +609,7 @@ function levelsProblem(s) {
 }
 
 function riskReward(s) {
-  // V38: фронт не пересчитывает торговую математику. Он только отображает
+  // V45: фронт не пересчитывает торговую математику. Он только отображает
   // risk/reward, risk_pct и expected_reward_pct, рассчитанные и проверенные backend.
   const contract = contractFor(s);
   const serverRatio = num(contract.risk_reward, null);
@@ -1414,7 +1414,7 @@ function algorithmDecisionFor(s) {
     label: 'НЕТ ВХОДА',
     score: 0,
     title: `${s.symbol}: нет серверного recommendation contract`,
-    subtitle: 'Frontend v40 не пересчитывает торговое решение и risk/reward. Нужно обновить backend или открыть /api/recommendations/active: без server-enriched contract вход запрещён.',
+    subtitle: 'Frontend v40 не пересчитывает торговое решение и risk/reward. V45 дополнительно требует nested entry/SL/TP внутри recommendation contract. Нужно обновить backend или открыть /api/recommendations/active: без server-enriched contract вход запрещён.',
   };
 }
 
@@ -1898,7 +1898,7 @@ function renderTicket(s) {
       <section class="detail-card"><b>Выборка качества</b>${statisticsConfidenceHtml(contract.statistics_confidence)}</section>
       <section class="detail-card"><b>Loss quarantine</b>${outcomeQualityHtml(contract)}</section>
       <section class="detail-card"><b>Исход рекомендации</b>${outcomeContractHtml(contract.outcome)}</section>
-      <section class="detail-card"><b>Guardrails контракта</b>${contractHealthHtml(contract.contract_health)}</section>
+      <section class="detail-card"><b>Guardrails контракта</b>${contractHealthHtml(contract.contract_health)}<small>Уровни берутся из nested recommendation contract: entry ${priceFmt(contract.entry)}, SL ${priceFmt(contract.stop_loss)}, TP ${priceFmt(contract.take_profit)}.</small></section>
       <section class="detail-card wide"><b>История похожих сигналов</b>${similarHistoryHtml(state.similarHistory, s.id)}</section>
       <section class="detail-card wide"><b>Индикаторы</b>${indicatorValuesHtml(contract.indicator_values || {})}</section>
       <section class="detail-card wide"><b>Что дальше</b>${nextActionsHtml(contract.next_actions || [])}</section>
@@ -2440,7 +2440,7 @@ function bindControls() {
       try {
         await api('/api/llm/background/run-now', { method: 'POST' });
       } catch (err) {
-        console.warn('LLM background evaluation was skipped after signal build:', err);
+        log(`WARN LLM background evaluation skipped: ${err.message || err}`);
         showOperationStatus(`Сигналы построены; LLM-оценка временно недоступна: ${err.message || err}`, 'warn');
       }
       await refreshBacktestStatus();
