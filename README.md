@@ -152,6 +152,7 @@ python run.py app
 python -m pytest -q tests
 python run.py check
 node --check frontend/app.js
+python -m compileall -q app
 ```
 
 В текущей ревизии добавлены regression-проверки для:
@@ -176,6 +177,7 @@ node --check frontend/app.js
 - V49 operator cockpit: DOM без дублирующихся id, единичный trade-ticket, скрытый legacy market-context mirror, компактная очередь без повторного вывода entry/SL/TP и paper-action без автоматической торговли.
 - V51 operator action gate: `paper_opened` повторно проверяется backend и БД; unsafe paper-входы по blocked/missed/stale контрактам отклоняются сервером.
 - V52 operator risk disclosure: каждый server-owned recommendation contract содержит `operator_risk_disclosures`; frontend показывает дисклеймеры рядом с trade ticket, а legacy `paper_trades` защищены CHECK-ограничениями LONG/SHORT/flat и audit-view `v_recommendation_integrity_audit_v52`.
+- V53 market-context guardrails: directional-рекомендация получает серверный блок `market_context_guardrails` по volatility/risk distance/spread/liquidity/OI/funding/volume; hard-veto демотирует REVIEW_ENTRY в `blocked/no_trade`, frontend показывает отдельную карточку рыночного контекста, а SQL-аудит `v_recommendation_market_context_audit_v53` ловит non-finite numeric, out-of-range confidence и экстремальный ATR/risk distance.
 
 ## Торговая логика
 
@@ -246,7 +248,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V40/V43/V44/V45/V46/V51/V52
+## Recommendation API V40/V43/V44/V45/V46/V51/V52/V53
 
 Канонические endpoints для витрины оператора:
 
@@ -259,16 +261,38 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V40/V43/V44/V45/V46/V51/V52/V47/V48 additions
+### Recommendation API V40/V43/V44/V45/V46/V51/V52/V53/V47/V48 additions
 
 - `contract_version = recommendation_v40`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
 - `price_actionability.is_price_actionable=true` возможен только в `entry_zone`; состояние `extended` означает ждать ретест, а не догонять цену.
 - `net_risk_reward` после fee/slippage участвует в review gate; слабый net R/R переводит сетап в hard/warn guardrail.
 - Контракт содержит `decision_source=server_enriched_contract_v40` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
-- `GET /api/system/warnings` сначала пробует `v_recommendation_integrity_audit_v48`/`v_recommendation_integrity_audit_v47`, затем fallback на `v_recommendation_integrity_audit_v46` с fallback на `v_recommendation_integrity_audit_v45`/`v_recommendation_integrity_audit_v44`/`v_recommendation_integrity_audit_v43`/`v_recommendation_integrity_audit_v40`, если новая миграция еще не применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction; V44 добавляет аудит невалидных OHLC/liquidity/outcome-метрик и сегментное качество рекомендаций; V45 добавляет аудит неполного structured signal payload; V46 добавляет аудит активной цены вне entry-zone и runtime-demotion небезопасного directional review; V47 публикует server-owned checklist; V48 добавляет freshness-guard для reference price.
+- `GET /api/system/warnings` сначала пробует `v_recommendation_market_context_audit_v53`/`v_recommendation_integrity_audit_v52`/`v_recommendation_integrity_audit_v48`/`v_recommendation_integrity_audit_v47`, затем fallback на `v_recommendation_integrity_audit_v46` с fallback на `v_recommendation_integrity_audit_v45`/`v_recommendation_integrity_audit_v44`/`v_recommendation_integrity_audit_v43`/`v_recommendation_integrity_audit_v40`, если новая миграция еще не применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction; V44 добавляет аудит невалидных OHLC/liquidity/outcome-метрик и сегментное качество рекомендаций; V45 добавляет аудит неполного structured signal payload; V46 добавляет аудит активной цены вне entry-zone и runtime-demotion небезопасного directional review; V47 публикует server-owned checklist; V48 добавляет freshness-guard для reference price.
 
 
+
+
+## Market Context Guardrails V53
+
+V53 добавляет отдельный серверный слой проверки рыночного контекста. Он не заменяет стратегию и не даёт разрешение на автоматическую сделку; его задача — не позволить формально валидному `entry/SL/TP` выглядеть пригодным для ручного входа, если текущий рынок делает сетап непрактичным.
+
+Что проверяется в `app/trade_contract.py`:
+
+- ATR/entry и ширина стопа как практическая волатильность и distance-to-stop;
+- spread относительно `MAX_SPREAD_PCT`;
+- `turnover_24h` и `open_interest_value` относительно liquidity-настроек;
+- funding rate для `linear`/`inverse` рынков, включая direction-specific veto;
+- volume z-score как подтверждение/аномалия объёма;
+- отсутствие `NaN`/`Infinity` в критичных числах до API/UI.
+
+Если market-context даёт hard-veto, backend демотирует `REVIEW_ENTRY`/`RESEARCH_CANDIDATE` в `blocked`, скрывает направление как `trade_direction=no_trade`, добавляет `market_context_blocks_entry` в `operator_risk_disclosures` и публикует причины в `factors_against`, `operator_checklist`, `signal_breakdown.market_context` и `recommendation.market_context_guardrails`.
+
+Frontend показывает этот блок как отдельную карточку `Рыночный контекст` и как компактную метрику в trade ticket. Браузер не рассчитывает veto сам: он только отображает серверный контракт.
+
+PostgreSQL-миграция `sql/migrations/20260505_v53_market_context_guardrails.sql` добавляет `ck_signals_no_numeric_infinity_v53`, индекс `idx_signals_market_context_audit_v53` и view `v_recommendation_market_context_audit_v53` для аудита confidence, non-finite чисел, отсутствующего market timestamp, истекшего TTL, неверных уровней и экстремального ATR/risk distance.
+
+Принятое допущение V53: отсутствие optional funding/OI/volume snapshot создаёт `warn`, но само по себе не блокирует уже валидный `REVIEW_ENTRY`; известный плохой spread, экстремальная волатильность, слишком широкий стоп или direction-specific funding veto блокируют вход.
 
 ## Market Data Integrity and Quality Segments V44
 

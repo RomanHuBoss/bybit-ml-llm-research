@@ -1792,6 +1792,37 @@ function riskDisclosuresHtml(items) {
   }).join('')}</div>`;
 }
 
+
+function marketContextHtml(context) {
+  if (!context || typeof context !== 'object') {
+    return '<p class="muted-line">Сервер не передал market-context guardrails. Вход запрещён до восстановления контракта.</p>';
+  }
+  const items = Array.isArray(context.items) ? context.items.slice(0, 10) : [];
+  const summary = escapeHtml(context.summary || 'Рыночный контекст не содержит итогового объяснения.');
+  const status = cssToken(context.status || (context.blocks_entry ? 'fail' : 'warn'), 'warn');
+  const rows = items.length ? items.map((item) => {
+    const tone = cssToken(item.status || (item.blocks_entry ? 'fail' : 'warn'), 'warn');
+    const value = item.value === null || item.value === undefined ? '' : `<span>${escapeHtml(fmt(item.value, 4))}</span>`;
+    return `<div class="market-context-item ${escapeHtml(tone)}">
+      <div><b>${escapeHtml(item.title || item.key || 'market context')}</b><p>${escapeHtml(item.text || '')}</p></div>${value}
+    </div>`;
+  }).join('') : '<p class="muted-line">Market-context проверки не вернули отдельных пунктов.</p>';
+  const values = context.values && typeof context.values === 'object' ? context.values : {};
+  const chips = [
+    ['ATR%', pct(values.atr_pct, 2)],
+    ['Risk%', pct(values.risk_pct, 2)],
+    ['Spread', values.spread_pct === null || values.spread_pct === undefined ? '—' : `${fmt(values.spread_pct, 4)}%`],
+    ['Funding', pct(values.funding_rate, 3)],
+    ['OI', moneyFmt(values.open_interest_value)],
+    ['Volume z', fmt(values.volume_zscore, 2)],
+  ].map(([label, value]) => `<span class="market-context-chip"><b>${escapeHtml(label)}</b>${escapeHtml(value)}</span>`).join('');
+  return `<div class="market-context-box ${escapeHtml(status)}">
+    <p class="market-context-summary"><b>${escapeHtml(String(context.status || 'unknown').toUpperCase())}</b> · ${summary}</p>
+    <div class="market-context-chip-row">${chips}</div>
+    <div class="market-context-grid">${rows}</div>
+  </div>`;
+}
+
 function contractHealthHtml(health) {
   if (!health) return '<p class="muted-line">Contract health не передан сервером.</p>';
   const level = cssToken(health.level || (health.ok ? 'ok' : 'warn'), 'warn');
@@ -1952,6 +1983,7 @@ function renderTicket(s) {
       <div class="metric"><span>Checked at</span><strong>${escapeHtml(compactDateTime(contract.checked_at))}</strong></div>
       <div class="metric"><span>Price status</span><strong>${escapeHtml(contract.price_status || s.price_status || 'unknown')}</strong></div>
       <div class="metric"><span>Market freshness</span><strong>${escapeHtml(marketFreshnessText(s))}</strong><small>${escapeHtml(contract.market_freshness?.reason || 'reference price age guard v48')}</small></div>
+      <div class="metric market-context ${escapeHtml(cssToken(contract.market_context_guardrails?.status || (contract.market_context_guardrails?.blocks_entry ? 'fail' : 'warn'), 'warn'))}"><span>Market context</span><strong>${escapeHtml(String(contract.market_context_guardrails?.status || 'unknown').toUpperCase())}</strong><small>${escapeHtml(contract.market_context_guardrails?.summary || 'vol/funding/OI/volume guard')}</small></div>
       <div class="metric"><span>OHLC model</span><strong>${escapeHtml(contract.intrabar_execution_model || 'SL-first')}</strong><small>same-bar SL/TP ⇒ SL</small></div>
       <div class="metric"><span>Trust gate</span><strong>${escapeHtml(s.operator_trust_status || '—')}</strong></div>
       <div class="metric"><span>MTF</span><strong>${escapeHtml(mtfLabel(s))}</strong></div>
@@ -1974,6 +2006,7 @@ function renderTicket(s) {
       <section class="detail-card"><b>Исход рекомендации</b>${outcomeContractHtml(contract.outcome)}</section>
       <section class="detail-card"><b>Guardrails контракта</b>${contractHealthHtml(contract.contract_health)}<small>Уровни берутся из nested recommendation contract: entry ${priceFmt(contract.entry)}, SL ${priceFmt(contract.stop_loss)}, TP ${priceFmt(contract.take_profit)}.</small></section>
       <section class="detail-card warn"><b>Risk disclosure</b>${riskDisclosuresHtml(contract.operator_risk_disclosures || [])}</section>
+      <section class="detail-card wide"><b>Рыночный контекст</b>${marketContextHtml(contract.market_context_guardrails)}</section>
       <section class="detail-card wide"><b>Серверный чек-лист</b>${checklistHtml(serverChecklistFor(s).length ? serverChecklistFor(s) : checklistFor(s, { includeLlm: false }))}</section>
       <section class="detail-card wide"><b>История похожих сигналов</b>${similarHistoryHtml(state.similarHistory, s.id)}</section>
       <section class="detail-card wide"><b>Индикаторы</b>${indicatorValuesHtml(contract.indicator_values || {})}</section>

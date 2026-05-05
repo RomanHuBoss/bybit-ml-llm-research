@@ -16,6 +16,7 @@ OPERATOR_CHECKLIST_EXTENSION = "operator_checklist_v47"
 MARKET_FRESHNESS_EXTENSION = "market_price_freshness_v48"
 OPERATOR_ACTION_SERVER_GATE_EXTENSION = "operator_action_server_gate_v51"
 OPERATOR_RISK_DISCLOSURE_EXTENSION = "operator_risk_disclosure_v52"
+MARKET_CONTEXT_GUARD_EXTENSION = "market_context_guardrails_v53"
 COMPATIBLE_EXTENSIONS = [
     "market_data_integrity_v44",
     "quality_segments_v44",
@@ -25,6 +26,7 @@ COMPATIBLE_EXTENSIONS = [
     MARKET_FRESHNESS_EXTENSION,
     OPERATOR_ACTION_SERVER_GATE_EXTENSION,
     OPERATOR_RISK_DISCLOSURE_EXTENSION,
+    MARKET_CONTEXT_GUARD_EXTENSION,
 ]
 SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
@@ -266,6 +268,167 @@ def price_freshness(row: dict[str, Any], expires_at: datetime | None, levels: di
     }
 
 
+def _market_numeric(row: dict[str, Any], *keys: str) -> float | None:
+    """Берёт числовой market-context из row/rationale/indicators без NaN/Infinity."""
+    rationale = row.get("rationale") if isinstance(row.get("rationale"), dict) else {}
+    indicators = rationale.get("indicators") if isinstance(rationale.get("indicators"), dict) else {}
+    for key in keys:
+        for source in (row, indicators, rationale):
+            value = finite(source.get(key)) if isinstance(source, dict) else None
+            if value is not None:
+                return value
+    return None
+
+
+def market_context_guardrails(row: dict[str, Any], levels: dict[str, Any]) -> dict[str, Any]:
+    """Серверный guardrail рыночного контекста для advisory-рекомендации.
+
+    Это не самостоятельная стратегия и не причина открывать сделку. Блок нужен,
+    чтобы frontend показывал оператору понятную оценку волатильности, funding,
+    open interest, объёма, spread и ликвидности, а backend мог запретить вход при
+    явно опасном контексте даже при формально валидных entry/SL/TP.
+    """
+    direction = str(row.get("direction") or "").strip().lower()
+    category = str(row.get("category") or settings.default_category or "").strip().lower()
+    entry = finite(levels.get("entry"))
+    risk_pct = finite(levels.get("risk_pct"))
+    atr = _market_numeric(row, "atr", "atr_14", "atr_value")
+    spread_pct = _market_numeric(row, "spread_pct")
+    turnover_24h = _market_numeric(row, "turnover_24h")
+    open_interest_value = _market_numeric(row, "open_interest_value", "open_interest")
+    funding_rate = _market_numeric(row, "funding_rate")
+    volume_zscore = _market_numeric(row, "volume_zscore", "volume_z", "volume_z_score")
+    volatility_score = _market_numeric(row, "volatility_score")
+
+    items: list[dict[str, Any]] = []
+
+    def add(key: str, status: str, title: str, text: str, *, value: float | None = None, blocks_entry: bool = False) -> None:
+        items.append({
+            "key": key,
+            "status": status,
+            "title": title,
+            "text": text,
+            "value": value,
+            "blocks_entry": bool(blocks_entry),
+        })
+
+    atr_pct = atr / entry if entry and entry > 0 and atr is not None else None
+    if atr is None or atr <= 0:
+        add("volatility", "warn", "ATR/волатильность не подтверждены", "Нет корректного ATR: оператор должен вручную проверить диапазон свечей и размер стопа.", value=atr)
+    elif atr_pct is not None and atr_pct > 0.18:
+        add("volatility", "fail", "Экстремальная волатильность", f"ATR составляет {atr_pct:.2%} от entry; вход запрещён до стабилизации рынка.", value=atr_pct, blocks_entry=True)
+    elif atr_pct is not None and atr_pct > 0.10:
+        add("volatility", "warn", "Очень высокая волатильность", f"ATR составляет {atr_pct:.2%} от entry; риск по сделке должен быть снижен.", value=atr_pct)
+    elif atr_pct is not None and atr_pct < 0.0005:
+        add("volatility", "warn", "Слишком низкая измеренная волатильность", f"ATR всего {atr_pct:.3%} от entry; возможна ошибка данных или нереалистичный stop.", value=atr_pct)
+    else:
+        add("volatility", "pass", "Волатильность пригодна для расчёта", f"ATR/entry около {atr_pct:.2%}; стоп можно оценивать от текущего диапазона.", value=atr_pct)
+
+    if risk_pct is None:
+        add("position_risk", "warn", "Risk% не рассчитан", "Нет risk_pct после проверки уровней; сделку нельзя оценивать без SL.")
+    elif risk_pct > 0.15:
+        add("position_risk", "fail", "Стоп слишком далёкий", f"Риск до SL {risk_pct:.2%} от entry; такой сетап блокируется как непрактичный.", value=risk_pct, blocks_entry=True)
+    elif risk_pct > 0.08:
+        add("position_risk", "warn", "Стоп широкий", f"Риск до SL {risk_pct:.2%}; нужен меньший размер позиции или лучший entry.", value=risk_pct)
+    else:
+        add("position_risk", "pass", "Risk% в допустимом диапазоне", f"Риск до SL {risk_pct:.2%} от entry.", value=risk_pct)
+
+    if spread_pct is None:
+        add("spread", "warn", "Spread неизвестен", "Нет bid/ask snapshot; перед входом нужно проверить стакан Bybit.")
+    elif spread_pct > settings.max_spread_pct:
+        add("spread", "fail", "Spread шире лимита", f"Spread {spread_pct:.4f}% > лимита {settings.max_spread_pct:.4f}%; исполнимость входа плохая.", value=spread_pct, blocks_entry=True)
+    elif spread_pct > settings.max_spread_pct * 0.65:
+        add("spread", "warn", "Spread близок к лимиту", f"Spread {spread_pct:.4f}% близок к порогу; возможна потеря R/R на входе.", value=spread_pct)
+    else:
+        add("spread", "pass", "Spread приемлем", f"Spread {spread_pct:.4f}% не превышает лимит.", value=spread_pct)
+
+    if turnover_24h is None:
+        add("liquidity", "warn", "Оборот неизвестен", "Нет turnover_24h; размер позиции должен быть снижен до ручной проверки ликвидности.")
+    elif turnover_24h < settings.min_turnover_24h:
+        add("liquidity", "warn", "Оборот ниже рабочего лимита", f"Turnover 24h {turnover_24h:.0f} < {settings.min_turnover_24h:.0f}; возможны проскальзывание и плохие fills.", value=turnover_24h)
+    else:
+        add("liquidity", "pass", "Оборот достаточен", f"Turnover 24h {turnover_24h:.0f} >= {settings.min_turnover_24h:.0f}.", value=turnover_24h)
+
+    if category in {"linear", "inverse"}:
+        if open_interest_value is None:
+            add("open_interest", "warn", "Open interest неизвестен", "Для деривативов нет OI snapshot; оператор должен проверить глубину рынка вручную.")
+        elif open_interest_value < settings.min_open_interest_value:
+            add("open_interest", "warn", "Open interest ниже лимита", f"OI {open_interest_value:.0f} < {settings.min_open_interest_value:.0f}; сигнал менее надёжен.", value=open_interest_value)
+        else:
+            add("open_interest", "pass", "Open interest достаточен", f"OI {open_interest_value:.0f} >= {settings.min_open_interest_value:.0f}.", value=open_interest_value)
+
+        if funding_rate is None:
+            add("funding", "warn", "Funding неизвестен", "Funding rate не получен; нельзя оценить переплату за удержание позиции.")
+        elif direction == DIRECTION_LONG and funding_rate >= 0.003:
+            add("funding", "fail", "Funding против LONG", f"Funding {funding_rate:.3%} делает long дорогим; вход блокируется.", value=funding_rate, blocks_entry=True)
+        elif direction == DIRECTION_SHORT and funding_rate <= -0.003:
+            add("funding", "fail", "Funding против SHORT", f"Funding {funding_rate:.3%} делает short дорогим; вход блокируется.", value=funding_rate, blocks_entry=True)
+        elif direction == DIRECTION_LONG and funding_rate >= 0.001:
+            add("funding", "warn", "Funding ухудшает LONG", f"Funding {funding_rate:.3%}; удержание long требует осторожности.", value=funding_rate)
+        elif direction == DIRECTION_SHORT and funding_rate <= -0.001:
+            add("funding", "warn", "Funding ухудшает SHORT", f"Funding {funding_rate:.3%}; удержание short требует осторожности.", value=funding_rate)
+        else:
+            add("funding", "pass", "Funding не блокирует сделку", f"Funding {funding_rate:.3%} не создаёт явного veto.", value=funding_rate)
+
+    if volume_zscore is None:
+        add("volume", "warn", "Подтверждение объёмом неизвестно", "Нет volume z-score; нельзя отличить нормальный сигнал от тонкого рынка.")
+    elif volume_zscore < -1.5:
+        add("volume", "warn", "Объём слабее обычного", f"Volume z-score {volume_zscore:.2f}; подтверждение входа слабое.", value=volume_zscore)
+    elif volume_zscore > 4.0:
+        add("volume", "warn", "Аномальный всплеск объёма", f"Volume z-score {volume_zscore:.2f}; возможен новостной или ликвидационный импульс.", value=volume_zscore)
+    else:
+        add("volume", "pass", "Объём без аномалий", f"Volume z-score {volume_zscore:.2f}; экстремального volume-veto нет.", value=volume_zscore)
+
+    if volatility_score is not None:
+        if volatility_score > 0.9:
+            add("volatility_score", "warn", "Composite volatility score высокий", f"volatility_score={volatility_score:.2f}; снижайте риск или ждите ретест.", value=volatility_score)
+        else:
+            add("volatility_score", "pass", "Composite volatility score приемлем", f"volatility_score={volatility_score:.2f}.", value=volatility_score)
+
+    hard_count = sum(1 for item in items if item.get("status") == "fail")
+    warning_count = sum(1 for item in items if item.get("status") == "warn")
+    blocks_entry = any(bool(item.get("blocks_entry")) for item in items)
+    status = "fail" if hard_count else "warn" if warning_count else "pass"
+    if blocks_entry:
+        summary = "Рыночный контекст содержит hard-veto; вход запрещён до нового расчёта."
+    elif warning_count:
+        summary = f"Рыночный контекст требует ручной проверки: предупреждений {warning_count}."
+    else:
+        summary = "Рыночный контекст не содержит блокирующих факторов."
+    return {
+        "extension": MARKET_CONTEXT_GUARD_EXTENSION,
+        "status": status,
+        "blocks_entry": blocks_entry,
+        "hard_count": hard_count,
+        "warning_count": warning_count,
+        "summary": summary,
+        "items": items,
+        "values": {
+            "atr": atr,
+            "atr_pct": atr_pct,
+            "risk_pct": risk_pct,
+            "spread_pct": spread_pct,
+            "turnover_24h": turnover_24h,
+            "open_interest_value": open_interest_value,
+            "funding_rate": funding_rate,
+            "volume_zscore": volume_zscore,
+            "volatility_score": volatility_score,
+        },
+    }
+
+
+def _market_context_factor_items(context: dict[str, Any]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for item in context.get("items") or []:
+        if isinstance(item, dict) and item.get("status") in {"fail", "warn"}:
+            out.append({
+                "code": str(item.get("key") or "market_context"),
+                "title": str(item.get("title") or "Market context"),
+                "detail": str(item.get("text") or ""),
+            })
+    return out[:8]
+
+
 def operator_risk_disclosures(
     row: dict[str, Any],
     status: str,
@@ -273,6 +436,7 @@ def operator_risk_disclosures(
     levels: dict[str, Any],
     price: dict[str, Any],
     ttl: dict[str, Any],
+    market_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Структурированные предупреждения для оператора.
 
@@ -304,6 +468,24 @@ def operator_risk_disclosures(
             "text": "Оператор должен сверить текущую цену, spread, проскальзывание, ликвидность и отсутствие новостного импульса.",
         },
     ]
+
+    context = market_context if isinstance(market_context, dict) else {}
+    if context.get("blocks_entry") is True:
+        disclosures.append({
+            "code": "market_context_blocks_entry",
+            "severity": "critical",
+            "blocks_entry": True,
+            "title": "Рыночный контекст блокирует вход",
+            "text": str(context.get("summary") or "Волатильность, funding, OI, spread или volume дали hard-veto."),
+        })
+    elif context.get("status") == "warn":
+        disclosures.append({
+            "code": "market_context_requires_manual_check",
+            "severity": "warning",
+            "blocks_entry": False,
+            "title": "Рыночный контекст требует проверки",
+            "text": str(context.get("summary") or "Есть market-context предупреждения без hard-veto."),
+        })
 
     if status != "review_entry" or trade_direction not in {DIRECTION_LONG, DIRECTION_SHORT}:
         disclosures.append({
@@ -635,6 +817,9 @@ def signal_breakdown(row: dict[str, Any], levels: dict[str, Any], price: dict[st
             "liquidity_score": finite(row.get("liquidity_score")),
             "liquidity_status": row.get("liquidity_status"),
             "turnover_24h": finite(row.get("turnover_24h")),
+            "open_interest_value": finite(row.get("open_interest_value")),
+            "funding_rate": finite(row.get("funding_rate")),
+            "volume_zscore": _market_numeric(row, "volume_zscore", "volume_z", "volume_z_score"),
         },
         "quality": {
             "status": row.get("quality_status"),
@@ -798,6 +983,7 @@ def operator_checklist(
     price_gate: dict[str, Any],
     sizing: dict[str, Any],
     ttl: dict[str, Any],
+    market_context: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """Серверный чек-лист оператора для UI без пересчёта торговой логики.
 
@@ -820,6 +1006,7 @@ def operator_checklist(
     price_status = str(price.get("price_status") or "unknown")
     ttl_status = str(ttl.get("status") or "missing")
     gate_reasons = price_gate.get("reasons") if isinstance(price_gate.get("reasons"), list) else []
+    context = market_context if isinstance(market_context, dict) else {}
     direction_ok = trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and status in {"review_entry", "research_candidate"}
     levels_ok = bool(levels.get("valid"))
     ttl_ok = ttl_status in {"active", "expiring_soon"} and ttl.get("is_expired") is not True
@@ -878,6 +1065,12 @@ def operator_checklist(
                 f"max_age_sec={(price.get('market_freshness') or {}).get('max_age_seconds')}. "
                 "Старый last_price блокирует REVIEW_ENTRY даже при активном TTL."
             ),
+        },
+        {
+            "key": "market_context",
+            "status": "fail" if context.get("blocks_entry") else "warn" if context.get("status") == "warn" else "pass" if context.get("status") == "pass" else "warn",
+            "title": f"Рыночный контекст: {str(context.get('status') or 'unknown')}",
+            "text": str(context.get("summary") or "Проверка volatility/funding/OI/volume/spread не вернула итоговый статус."),
         },
         {
             "key": "risk_reward",
@@ -959,7 +1152,10 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
     expires_at = recommendation_expires_at(row, now=as_of)
     ttl = ttl_state(expires_at, now=as_of)
     price = price_freshness(row, expires_at, levels, now=as_of)
+    market_context = market_context_guardrails(row, levels)
     status = recommendation_status(row, levels, price)
+    if status in {"review_entry", "research_candidate"} and market_context.get("blocks_entry") is True:
+        status = "blocked"
     trade_direction = user_trade_direction(row, status)
     action_map = {
         "review_entry": f"Проверить ручной {trade_direction.upper()}-вход",
@@ -971,7 +1167,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "missed_entry": "Не догонять цену; ждать ретест",
     }
     factors_for = _factor_items(row, "operator_evidence_notes")
-    factors_against = _factor_items(row, "operator_hard_reasons") + _factor_items(row, "operator_warnings")
+    factors_against = _factor_items(row, "operator_hard_reasons") + _factor_items(row, "operator_warnings") + _market_context_factor_items(market_context)
     explanation_text = explanation(row, status, trade_direction, levels, price)
     invalidation = invalidation_condition(trade_direction, levels, expires_at) if levels.get("valid") else "Вход запрещён: уровни сделки не прошли серверную проверку."
     sizing = execution_plan(levels)
@@ -1007,7 +1203,8 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
-        "operator_risk_disclosures": operator_risk_disclosures(row, status, trade_direction, levels, price, ttl),
+        "market_context_guardrails": market_context,
+        "operator_risk_disclosures": operator_risk_disclosures(row, status, trade_direction, levels, price, ttl, market_context),
         "position_sizing": sizing,
         "level_validation": {"valid": levels.get("valid"), "reason": levels.get("reason")},
         "price_status": price.get("price_status"),
@@ -1032,9 +1229,9 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "timeframes_used": timeframes_used(row),
         "indicator_values": indicator_values(row),
         "trading_signals": trading_signals(row),
-        "operator_checklist": operator_checklist(row, status, trade_direction, levels, price, price_gate, sizing, ttl),
+        "operator_checklist": operator_checklist(row, status, trade_direction, levels, price, price_gate, sizing, ttl, market_context),
         "next_actions": next_actions(status, trade_direction, price),
-        "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing},
+        "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing, "market_context": market_context},
         "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price_gate.get("is_price_actionable") is True and (sizing.get("net_risk_reward") is None or sizing.get("net_risk_reward") > 1.0),
         "no_trade_reason": ((price_gate.get("reason") or "price_not_in_entry_zone") if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
     }
@@ -1060,7 +1257,7 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
         "entry", "stop_loss", "take_profit", "expires_at",
         "risk_pct", "expected_reward_pct", "risk_reward",
         "recommendation_explanation", "price_actionability", "signal_breakdown", "operator_checklist",
-        "operator_risk_disclosures",
+        "operator_risk_disclosures", "market_context_guardrails",
     )
     problems: list[dict[str, str]] = []
     status = str(contract.get("recommendation_status") or "").lower()
@@ -1074,6 +1271,7 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
     rr = finite(contract.get("risk_reward"))
     net_rr = finite(contract.get("net_risk_reward"))
     levels = validate_trade_levels(direction, contract.get("entry"), contract.get("stop_loss"), contract.get("take_profit"))
+    market_context = contract.get("market_context_guardrails") if isinstance(contract.get("market_context_guardrails"), dict) else {}
     if status in {"review_entry", "research_candidate"}:
         # Вложенный recommendation contract обязан сам содержать уровни сделки.
         # Иначе detail/explanation endpoints и frontend могут показать top-level
@@ -1084,6 +1282,10 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
             problems.append({"code": str(levels.get("reason") or "invalid_levels"), "level": "error", "message": "Directional recommendation contract must contain ordered entry/SL/TP levels."})
         if rr is None or rr <= 0:
             problems.append({"code": "invalid_risk_reward", "level": "error", "message": "Directional recommendation requires positive risk_reward."})
+        if not isinstance(market_context, dict) or not market_context:
+            problems.append({"code": "market_context_guardrails_missing", "level": "error", "message": "Directional recommendation must include server-owned market-context guardrails."})
+        elif market_context.get("blocks_entry") is True:
+            problems.append({"code": "market_context_blocks_directional_status", "level": "error", "message": "Market context hard-veto must demote directional statuses to blocked/no_trade."})
     if status == "review_entry" and direction in {DIRECTION_LONG, DIRECTION_SHORT}:
         if net_rr is None:
             problems.append({"code": "missing_net_risk_reward", "level": "warn", "message": "Net R/R after fee and slippage is unavailable."})
@@ -1167,6 +1369,16 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
+        "market_context_guardrails": {
+            "extension": MARKET_CONTEXT_GUARD_EXTENSION,
+            "status": "blocked",
+            "blocks_entry": True,
+            "hard_count": 1,
+            "warning_count": 0,
+            "summary": "Нет активной рекомендации: рыночный контекст не может разрешить вход без инструмента, цены и уровней.",
+            "items": [{"key": "no_active_recommendation", "status": "fail", "title": "Нет активной рекомендации", "text": reason, "value": None, "blocks_entry": True}],
+            "values": {},
+        },
         "operator_risk_disclosures": [
             {
                 "code": "advisory_only_no_auto_orders",
@@ -1254,6 +1466,14 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
             },
             "price": {"price_status": "no_setup"},
             "quality": {"quality_status": "NO_ACTIVE_RECOMMENDATION"},
+            "market_context": {
+                "extension": MARKET_CONTEXT_GUARD_EXTENSION,
+                "status": "blocked",
+                "blocks_entry": True,
+                "summary": "Нет активной рекомендации: market-context не оценивался.",
+                "items": [],
+                "values": {},
+            },
         },
         "is_actionable": False,
         "no_trade_reason": "no_active_recommendation",

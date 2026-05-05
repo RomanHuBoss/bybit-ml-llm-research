@@ -158,7 +158,10 @@ def classify_operator_action(row: dict[str, Any]) -> dict[str, Any]:
         elif net_rr < 1.25:
             _add_reason(warnings, "net_rr_moderate", "Net R/R после комиссий умеренный", f"После fee/slippage net R/R {net_rr:.2f}; нужен уменьшенный риск или лучший entry.")
 
-    confidence = _finite(row.get("confidence"), 0.0) or 0.0
+    confidence_raw = _finite(row.get("confidence"))
+    if confidence_raw is None or confidence_raw < 0.0 or confidence_raw > 1.0:
+        _add_reason(hard, "confidence_range", "Confidence вне диапазона", "Confidence должен быть конечным числом в диапазоне [0,1]; это инженерный скоринг, а не вероятность прибыли.")
+    confidence = max(0.0, min(1.0, confidence_raw if confidence_raw is not None else 0.0))
     if confidence < 0.52:
         _add_reason(hard, "confidence_low", "Confidence ниже входного минимума", f"Confidence {confidence:.2f} < 0.52.")
     elif confidence < 0.58:

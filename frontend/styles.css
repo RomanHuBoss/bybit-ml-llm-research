@@ -2457,3 +2457,61 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
   text-transform: uppercase;
 }
 .operator-cockpit-v52 .detail-card.warn .risk-disclosure-list { margin-top: 4px; }
+
+/* V53: market-context guardrails показывают оператору volatility/funding/OI/volume без клиентских пересчётов. */
+.metric.market-context { border-color: rgba(139, 92, 246, 0.28); background: rgba(88, 28, 135, 0.16); }
+.metric.market-context.pass { border-color: rgba(15, 185, 129, 0.28); background: rgba(15, 185, 129, 0.08); }
+.metric.market-context.warn { border-color: rgba(245, 185, 66, 0.34); background: var(--amber-soft); }
+.metric.market-context.fail,
+.metric.market-context.critical,
+.metric.market-context.error { border-color: rgba(255, 77, 109, 0.36); background: var(--red-soft); }
+.market-context-box { display: grid; gap: 10px; }
+.market-context-summary {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.5);
+  color: var(--text);
+}
+.market-context-box.pass .market-context-summary { border-color: rgba(15, 185, 129, 0.28); background: rgba(15, 185, 129, 0.08); }
+.market-context-box.warn .market-context-summary { border-color: rgba(245, 185, 66, 0.34); background: var(--amber-soft); }
+.market-context-box.fail .market-context-summary,
+.market-context-box.critical .market-context-summary,
+.market-context-box.error .market-context-summary { border-color: rgba(255, 77, 109, 0.34); background: var(--red-soft); }
+.market-context-chip-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 8px;
+}
+.market-context-chip {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.30);
+  color: var(--muted);
+  font-size: 12px;
+}
+.market-context-chip b { color: var(--text); }
+.market-context-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+.market-context-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 13px;
+  background: rgba(2, 6, 23, 0.28);
+}
+.market-context-item b { display: block; margin-bottom: 4px; }
+.market-context-item p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.market-context-item span { color: var(--text); font-size: 12px; font-weight: 800; white-space: nowrap; }
+.market-context-item.pass { border-color: rgba(15, 185, 129, 0.24); }
+.market-context-item.warn { border-color: rgba(245, 185, 66, 0.34); background: var(--amber-soft); }
+.market-context-item.fail,
+.market-context-item.critical,
+.market-context-item.error { border-color: rgba(255, 77, 109, 0.36); background: var(--red-soft); }
