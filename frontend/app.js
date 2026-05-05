@@ -418,6 +418,23 @@ function ttlTone(contract) {
   return 'unknown';
 }
 
+function marketFreshnessFor(s) {
+  const contract = contractFor(s);
+  const freshness = contract?.market_freshness || contract?.price_actionability?.market_freshness || {};
+  return freshness && typeof freshness === 'object' ? freshness : {};
+}
+
+function marketFreshnessText(s) {
+  const freshness = marketFreshnessFor(s);
+  const status = String(freshness.status || contractValue(s, 'price_status') || s?.data_status || 'unknown');
+  const ageSeconds = num(freshness.age_seconds, null);
+  const maxAgeSeconds = num(freshness.max_age_seconds, null);
+  const agePart = ageSeconds === null ? 'age —' : ageSeconds < 120 ? `${ageSeconds}s` : `${Math.round(ageSeconds / 60)}m`;
+  const maxPart = maxAgeSeconds === null ? 'max —' : maxAgeSeconds < 120 ? `${maxAgeSeconds}s` : `${Math.round(maxAgeSeconds / 60)}m`;
+  const source = freshness.source || 'server';
+  return `${status} · ${agePart}/${maxPart} · ${source}`;
+}
+
 function contractFor(s) {
   return s?.recommendation && typeof s.recommendation === 'object' ? s.recommendation : (s || {});
 }
@@ -480,6 +497,7 @@ function renderDecisionTelemetry(s, d) {
   const veto = hardVetoSummary(s);
   const rr = riskReward(s);
   const fresh = contractValue(s, 'price_status') || (s.fresh === true ? 'fresh' : s.fresh === false ? 'stale' : (s.data_status || 'unknown'));
+  const marketFreshness = marketFreshnessText(s);
   panel.className = `decision-telemetry ${cssToken(d?.level, 'reject')} ${cssToken(veto.tone, 'neutral')}`;
   setText('telemetryPrice', priceFmt(currentPrice(s)));
   setText('telemetryMove', `${expectedMoveText(s)} · ATR ${priceFmt(s.atr)}`);
@@ -487,7 +505,7 @@ function renderDecisionTelemetry(s, d) {
   setText('telemetryStop', priceFmt(contractValue(s, 'stop_loss')));
   setText('telemetryTake', priceFmt(contractValue(s, 'take_profit')));
   setText('telemetryFreshness', fresh === 'fresh' ? 'fresh' : fresh === 'stale' ? 'stale' : String(fresh));
-  setText('telemetryDataStatus', `${ageText(s.bar_closed_at || s.created_at)} · liq ${s.liquidity_status || 'unknown'} · TTL ${ttlText(contractFor(s))}`);
+  setText('telemetryDataStatus', `${marketFreshness} · liq ${s.liquidity_status || 'unknown'} · TTL ${ttlText(contractFor(s))}`);
   setText('telemetryVeto', d?.level === 'review' && veto.tone !== 'error' ? 'clear' : veto.label);
   setText('telemetryVetoReason', `${veto.reason} · R/R ${riskRewardFmt(rr)}`);
 }
@@ -1894,6 +1912,7 @@ function renderTicket(s) {
       <div class="metric ttl-state ${ttlTone(contract)}"><span>TTL</span><strong>${escapeHtml(ttlText(contract))}</strong><small>expires ${escapeHtml(compactDateTime(contract.expires_at || s.expires_at))}</small></div>
       <div class="metric"><span>Checked at</span><strong>${escapeHtml(compactDateTime(contract.checked_at))}</strong></div>
       <div class="metric"><span>Price status</span><strong>${escapeHtml(contract.price_status || s.price_status || 'unknown')}</strong></div>
+      <div class="metric"><span>Market freshness</span><strong>${escapeHtml(marketFreshnessText(s))}</strong><small>${escapeHtml(contract.market_freshness?.reason || 'reference price age guard v48')}</small></div>
       <div class="metric"><span>OHLC model</span><strong>${escapeHtml(contract.intrabar_execution_model || 'SL-first')}</strong><small>same-bar SL/TP ⇒ SL</small></div>
       <div class="metric"><span>Trust gate</span><strong>${escapeHtml(s.operator_trust_status || '—')}</strong></div>
       <div class="metric"><span>MTF</span><strong>${escapeHtml(mtfLabel(s))}</strong></div>

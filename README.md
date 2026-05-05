@@ -242,14 +242,14 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V40/V43/V44/V45/V46 additions
+### Recommendation API V40/V43/V44/V45/V46/V47/V48 additions
 
 - `contract_version = recommendation_v40`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
 - `price_actionability.is_price_actionable=true` возможен только в `entry_zone`; состояние `extended` означает ждать ретест, а не догонять цену.
 - `net_risk_reward` после fee/slippage участвует в review gate; слабый net R/R переводит сетап в hard/warn guardrail.
 - Контракт содержит `decision_source=server_enriched_contract_v40` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
-- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v46` с fallback на `v_recommendation_integrity_audit_v45`/`v_recommendation_integrity_audit_v44`/`v_recommendation_integrity_audit_v43`/`v_recommendation_integrity_audit_v40`, если новая миграция еще не применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction; V44 добавляет аудит невалидных OHLC/liquidity/outcome-метрик и сегментное качество рекомендаций; V45 добавляет аудит неполного structured signal payload; V46 добавляет аудит активной цены вне entry-zone и runtime-demotion небезопасного directional review.
+- `GET /api/system/warnings` сначала пробует `v_recommendation_integrity_audit_v48`/`v_recommendation_integrity_audit_v47`, затем fallback на `v_recommendation_integrity_audit_v46` с fallback на `v_recommendation_integrity_audit_v45`/`v_recommendation_integrity_audit_v44`/`v_recommendation_integrity_audit_v43`/`v_recommendation_integrity_audit_v40`, если новая миграция еще не применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction; V44 добавляет аудит невалидных OHLC/liquidity/outcome-метрик и сегментное качество рекомендаций; V45 добавляет аудит неполного structured signal payload; V46 добавляет аудит активной цены вне entry-zone и runtime-demotion небезопасного directional review; V47 публикует server-owned checklist; V48 добавляет freshness-guard для reference price.
 
 
 
@@ -381,3 +381,18 @@ UI реализует состояния loading, empty, error, stale data, API 
 - SQL-миграция `20260505_v47_operator_checklist_contract.sql` публикует `v_recommendation_integrity_audit_v47` и `v_recommendation_contract_v47`.
 
 Это дополнительно снижает риск рассинхрона, при котором браузер мог заново интерпретировать risk/quality/freshness-поля и показывать оператору отличающийся от backend смысл рекомендации.
+
+## V48: reference-price freshness guard
+
+V48 закрывает отдельный риск, который не покрывался одним `expires_at`: торговая идея могла оставаться в активном TTL, но reference price для server price gate уже был старым или без проверяемого timestamp. Теперь `REVIEW_ENTRY` требует не только валидные уровни и `price_status=entry_zone`, но и свежий `market_freshness.status=fresh`.
+
+Что изменено:
+
+- `app/trade_contract.py` добавляет совместимое расширение `market_price_freshness_v48` без смены публичного `recommendation_v40`.
+- В каждый nested `recommendation` добавлены `market_freshness`, `last_price_age_seconds`, `last_price_max_age_seconds`; эти поля показывают источник timestamp (`last_price_time`, `bar_time` или legacy fallback), фактический возраст цены и допустимый бюджет.
+- Если timestamp reference price отсутствует, находится в будущем или старше бюджета `2 × interval + 5 минут` с нижней границей 10 минут, runtime выставляет `price_status=stale`, блокирует `price_actionability` и демотирует потенциальный `REVIEW_ENTRY` в безопасный `NO_TRADE/expired`.
+- Серверный `operator_checklist` получил пункт `market_freshness`; frontend показывает его в карточке, ticket detail и telemetry без повторного расчета торговой логики.
+- `sql/migrations/20260505_v48_market_price_freshness_contract.sql` и `sql/schema.sql` публикуют `v_recommendation_integrity_audit_v48` и `v_recommendation_contract_v48`, чтобы БД-аудит находил активные рекомендации без свежей reference price.
+- `GET /api/recommendations/contract` публикует `market_freshness_extension=market_price_freshness_v48` и `market_freshness_audit_view=v_recommendation_integrity_audit_v48`; `/api/system/warnings` использует V48 при наличии миграции.
+
+Практическое правило V48: активный TTL не равен актуальной цене. Если price timestamp устарел или непроверяем, оператор видит блокировку входа, а не зелёную рекомендацию.

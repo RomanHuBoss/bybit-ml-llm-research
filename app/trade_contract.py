@@ -13,12 +13,14 @@ RECOMMENDATION_CONTRACT_VERSION = "recommendation_v40"
 DECISION_SOURCE = "server_enriched_contract_v40"
 INTRABAR_EXECUTION_MODEL = "conservative_ohlc_stop_loss_first"
 OPERATOR_CHECKLIST_EXTENSION = "operator_checklist_v47"
+MARKET_FRESHNESS_EXTENSION = "market_price_freshness_v48"
 COMPATIBLE_EXTENSIONS = [
     "market_data_integrity_v44",
     "quality_segments_v44",
     "nested_trade_levels_v45",
     "server_actionability_v46",
     OPERATOR_CHECKLIST_EXTENSION,
+    MARKET_FRESHNESS_EXTENSION,
 ]
 SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
@@ -164,14 +166,71 @@ def validate_trade_levels(direction: str | None, entry: Any, stop_loss: Any, tak
     }
 
 
+def market_price_freshness(row: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """Проверяет возраст reference price отдельно от TTL рекомендации.
+
+    TTL отвечает за срок жизни торговой идеи, но оператор может получить свежий
+    contract со старым last_price. Для advisory-системы это опаснее, чем обычный
+    warning: цена, price gate и entry-window должны считаться по проверяемому
+    timestamp. Если отдельного last_price_time нет, используем bar_time как
+    минимально допустимый legacy fallback и явно публикуем источник времени.
+    """
+    current = utc_now(now)
+    source = "last_price_time" if row.get("last_price_time") else "bar_time" if row.get("bar_time") else "created_at" if row.get("created_at") else "missing"
+    price_time = parse_datetime(row.get("last_price_time") or row.get("bar_time") or row.get("created_at"))
+    interval_seconds = max(60, int(interval_to_timedelta(str(row.get("interval") or "")).total_seconds()))
+    settings_cap_seconds = max(60, int(settings.max_signal_age_hours) * 3600)
+    # Для intraday-сигнала допускаем не более двух закрытых свечей плюс 5 минут
+    # задержки контура. Глобальный MAX_SIGNAL_AGE_HOURS остаётся верхней границей.
+    max_age_seconds = int(min(settings_cap_seconds, max(600, interval_seconds * 2 + 300)))
+    if price_time is None:
+        return {
+            "status": "missing_time",
+            "source": source,
+            "last_price_time": None,
+            "age_seconds": None,
+            "max_age_seconds": max_age_seconds,
+            "checked_at": to_iso(current),
+            "is_stale": True,
+            "reason": "missing_price_timestamp",
+        }
+    price_time = utc_now(price_time)
+    age_seconds = int((current - price_time).total_seconds())
+    if age_seconds < 0:
+        return {
+            "status": "future_time",
+            "source": source,
+            "last_price_time": to_iso(price_time),
+            "age_seconds": age_seconds,
+            "max_age_seconds": max_age_seconds,
+            "checked_at": to_iso(current),
+            "is_stale": True,
+            "reason": "price_timestamp_in_future",
+        }
+    stale = age_seconds > max_age_seconds
+    return {
+        "status": "stale" if stale else "fresh",
+        "source": source,
+        "last_price_time": to_iso(price_time),
+        "age_seconds": age_seconds,
+        "max_age_seconds": max_age_seconds,
+        "checked_at": to_iso(current),
+        "is_stale": stale,
+        "reason": "price_timestamp_too_old" if stale else None,
+    }
+
+
 def price_freshness(row: dict[str, Any], expires_at: datetime | None, levels: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
-    now = now or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+    now = utc_now(now)
+    freshness = market_price_freshness(row, now=now)
     if expires_at is not None and expires_at <= now:
         stale = True
     else:
-        stale = str(row.get("data_status") or row.get("freshness_status") or "").lower() in {"stale", "expired"} or row.get("fresh") is False
+        stale = (
+            str(row.get("data_status") or row.get("freshness_status") or "").lower() in {"stale", "expired"}
+            or row.get("fresh") is False
+            or freshness.get("is_stale") is True
+        )
 
     entry = finite(levels.get("entry"))
     last_price = finite(row.get("last_price"), finite(row.get("current_price"), finite(row.get("close"))))
@@ -192,11 +251,14 @@ def price_freshness(row: dict[str, Any], expires_at: datetime | None, levels: di
         status = "moved_away"
     return {
         "last_price": last_price,
-        "last_price_time": row.get("last_price_time") or row.get("bar_time"),
+        "last_price_time": freshness.get("last_price_time") or row.get("last_price_time") or row.get("bar_time"),
         "price_status": status,
         "price_drift_pct": drift_pct,
         "entry_zone_pct": entry_zone_pct,
         "is_stale": stale,
+        "market_freshness": freshness,
+        "last_price_age_seconds": freshness.get("age_seconds"),
+        "last_price_max_age_seconds": freshness.get("max_age_seconds"),
     }
 
 
@@ -237,7 +299,8 @@ def price_actionability(
     elif expires_at <= now:
         reasons.append("expired")
     if price.get("is_stale"):
-        reasons.append("stale_data")
+        freshness = price.get("market_freshness") if isinstance(price.get("market_freshness"), dict) else {}
+        reasons.append(str(freshness.get("reason") or "stale_data"))
     price_status = str(price.get("price_status") or "unknown")
     if price_status == "unknown":
         reasons.append("price_unknown")
@@ -259,6 +322,9 @@ def price_actionability(
         "last_price": last_price,
         "price_status": price_status,
         "price_drift_pct": price.get("price_drift_pct"),
+        "market_freshness": price.get("market_freshness"),
+        "last_price_age_seconds": price.get("last_price_age_seconds"),
+        "last_price_max_age_seconds": price.get("last_price_max_age_seconds"),
         "entry_window": entry_window,
         "expires_at": to_iso(expires_at),
         "checked_at": to_iso(now),
@@ -710,6 +776,17 @@ def operator_checklist(
             "text": "Цена должна быть внутри серверного entry-window. Блокировки: " + (", ".join(str(x) for x in gate_reasons) if gate_reasons else "нет"),
         },
         {
+            "key": "market_freshness",
+            "status": _check_status(not bool((price.get("market_freshness") or {}).get("is_stale"))),
+            "title": f"Свежесть reference price: {str((price.get('market_freshness') or {}).get('status') or 'unknown')}",
+            "text": (
+                f"source={(price.get('market_freshness') or {}).get('source') or 'unknown'}; "
+                f"age_sec={(price.get('market_freshness') or {}).get('age_seconds')}; "
+                f"max_age_sec={(price.get('market_freshness') or {}).get('max_age_seconds')}. "
+                "Старый last_price блокирует REVIEW_ENTRY даже при активном TTL."
+            ),
+        },
+        {
             "key": "risk_reward",
             "status": _check_status(rr is not None and rr >= 1.45 and (net_rr is None or net_rr > 1.0), rr is not None and rr >= 1.15),
             "title": f"R/R {rr:.2f}" if rr is not None else "R/R недоступен",
@@ -844,6 +921,9 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "entry_zone_pct": price.get("entry_zone_pct"),
         "last_price": price.get("last_price"),
         "last_price_time": price.get("last_price_time"),
+        "market_freshness": price.get("market_freshness"),
+        "last_price_age_seconds": price.get("last_price_age_seconds"),
+        "last_price_max_age_seconds": price.get("last_price_max_age_seconds"),
         "price_actionability": price_gate,
         "entry_window": price_gate.get("entry_window"),
         "confidence_semantics": "engineering_score_not_win_probability",
@@ -990,6 +1070,18 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "price_status": "no_setup",
         "last_price": None,
         "last_price_time": None,
+        "market_freshness": {
+            "status": "no_setup",
+            "source": "none",
+            "last_price_time": None,
+            "age_seconds": None,
+            "max_age_seconds": None,
+            "checked_at": to_iso(as_of),
+            "is_stale": True,
+            "reason": "no_active_recommendation",
+        },
+        "last_price_age_seconds": None,
+        "last_price_max_age_seconds": None,
         "price_actionability": {
             "status": "blocked",
             "is_price_actionable": False,
@@ -998,6 +1090,9 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
             "last_price": None,
             "price_status": "no_setup",
             "price_drift_pct": None,
+            "market_freshness": {"status": "no_setup", "reason": "no_active_recommendation"},
+            "last_price_age_seconds": None,
+            "last_price_max_age_seconds": None,
             "entry_window": None,
             "expires_at": None,
             "checked_at": to_iso(as_of),
