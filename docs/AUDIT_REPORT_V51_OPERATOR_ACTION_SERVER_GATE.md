@@ -62,3 +62,7 @@
 
 - Проект по-прежнему не исполняет реальные ордера и не имеет account reconciliation; это осознанное ограничение советующей СППР.
 - Для production-grade paper/live контроля желательно добавить отдельную таблицу paper positions с lifecycle `opened → managed → closed`, но это уже расширение домена, а не дефект текущего operator-action audit.
+
+## V51.1 migration hotfix
+
+После пользовательского прогона на существующей PostgreSQL-БД выявлена ошибка совместимости `CREATE OR REPLACE VIEW v_recommendation_integrity_audit_v51`: новые строки audit-view должны были сохранять порядок колонок `v_recommendation_integrity_audit_v48` (`detail text`, затем `created_at timestamptz`). Миграция исправлена: JSON details приводятся к `text AS detail`, а `a.created_at` остается последней колонкой. Дополнительно убраны небезопасные boolean-cast выражения из SQL-view/constraint и исправлен migration runner, чтобы он не маскировал первичную SQL-ошибку сообщением PostgreSQL о прерванной транзакции.

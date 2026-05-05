@@ -85,3 +85,15 @@ def test_v51_frontend_keeps_manual_review_available_but_marks_paper_gate_as_serv
     assert 'data-operator-action="manual_review">Взять в разбор</button>' in js
     assert "API повторно проверит это на сервере" in js
     assert "paper-вход дополнительно проходит V51 server gate" in js
+
+
+def test_v51_audit_view_preserves_v48_column_order_and_types():
+    migration = (ROOT / "sql" / "migrations" / "20260505_v51_operator_action_server_gate.sql").read_text(encoding="utf-8")
+
+    assert "SELECT * FROM v_recommendation_integrity_audit_v48" in migration
+    assert "AS detected_at" not in migration
+    assert "AS details" not in migration
+    assert "::text AS detail" in migration
+    assert "a.created_at" in migration
+    assert "(a.payload->>'is_actionable')::boolean" not in migration
+    assert "lower(COALESCE(a.payload->>'is_actionable', 'false')) <> 'true'" in migration

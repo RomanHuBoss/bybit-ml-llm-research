@@ -225,9 +225,18 @@ def apply_migrations(
                 print(f"Migration complete: applied={applied_count}, skipped={skipped_count}")
                 return 0
         finally:
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_ID,))
-            conn.commit()
+            # Важно: если SQL-миграция упала, PostgreSQL помечает текущую
+            # транзакцию как aborted. Перед снятием advisory lock нужно явно
+            # откатить транзакцию, иначе ошибка unlock замаскирует первопричину
+            # миграционного сбоя сообщением "current transaction is aborted".
+            try:
+                conn.rollback()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_ID,))
+                conn.commit()
+            except Exception as unlock_exc:
+                conn.rollback()
+                print(f"WARN    advisory lock unlock failed: {unlock_exc}", file=sys.stderr)
     except Exception as exc:
         conn.rollback()
         print(f"Migration failed: {exc}", file=sys.stderr)

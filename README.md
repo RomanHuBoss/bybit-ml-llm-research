@@ -391,7 +391,7 @@ V51 закрывает критичный разрыв между frontend UX и
 - `paper_opened` принимается только при `recommendation_status=review_entry`, `is_actionable=true`, `contract_health.ok=true`, `price_status=entry_zone`, торговом направлении `long/short` и отсутствии красных пунктов server-owned `operator_checklist`;
 - для paper-входа обязательна положительная цена аудита: `observed_price` из клиента или серверный `last_price`;
 - payload в `recommendation_operator_actions` сохраняет `is_actionable`, `contract_health_ok`, `price_status`, `market_freshness`, `net_risk_reward`;
-- миграция `20260505_v51_operator_action_server_gate.sql` добавляет DB CHECK-ограничения и audit-view `v_recommendation_integrity_audit_v51`;
+- миграция `20260505_v51_operator_action_server_gate.sql` добавляет DB CHECK-ограничения и audit-view `v_recommendation_integrity_audit_v51`; audit-view сохраняет порядок и типы колонок `v_recommendation_integrity_audit_v48`, поэтому безопасно накатывается поверх уже примененной V48;
 - `/api/system/warnings` сначала использует V51 audit-view;
 - frontend сообщает, что paper-вход повторно проверяется сервером, а `manual_review` остается доступным даже для blocked/research сетапов, потому что ручной разбор не является входом.
 
