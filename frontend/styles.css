@@ -2515,3 +2515,16 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .market-context-item.fail,
 .market-context-item.critical,
 .market-context-item.error { border-color: rgba(255, 77, 109, 0.36); background: var(--red-soft); }
+
+/* V54: главное следующее действие оператора приходит с backend-контракта. */
+.primary-next-action {
+  border: 1px solid rgba(99, 179, 237, 0.34);
+  background: rgba(30, 64, 175, 0.14);
+  border-radius: 12px;
+  padding: 8px 10px;
+}
+.primary-next-action b::before {
+  content: "Primary · ";
+  color: var(--accent-soft);
+  font-weight: 700;
+}

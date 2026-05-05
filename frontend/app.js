@@ -1835,7 +1835,7 @@ function contractHealthHtml(health) {
 
 function nextActionsHtml(items) {
   if (!Array.isArray(items) || !items.length) return '<p class="muted-line">Следующее действие не передано.</p>';
-  return `<ol>${items.map((item) => `<li><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
+  return `<ol>${items.map((item, index) => `<li class="${index === 0 ? 'primary-next-action' : ''}"><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
 }
 
 function similarHistoryHtml(history, signalId) {
@@ -1968,7 +1968,7 @@ function renderTicket(s) {
   $('ticketBody').innerHTML = `
     <div class="ticket-main">
       <div class="metric direction ${directionClass}"><span>Trade direction</span><strong>${escapeHtml(displayDirection)}</strong></div>
-      <div class="metric"><span>Action</span><strong>${escapeHtml(contract.recommended_action || s.operator_label || 'WAIT')}</strong></div>
+      <div class="metric"><span>Action</span><strong>${escapeHtml(contract.primary_next_action?.label || contract.recommended_action || s.operator_label || 'WAIT')}</strong><small>${escapeHtml(contract.primary_next_action?.detail || 'server-owned next action')}</small></div>
       <div class="metric"><span>Entry</span><strong>${priceFmt(contractValue(s, 'entry'))}</strong></div>
       <div class="metric"><span>Stop-loss</span><strong>${priceFmt(contractValue(s, 'stop_loss'))}</strong></div>
       <div class="metric"><span>Take-profit</span><strong>${priceFmt(contractValue(s, 'take_profit'))}</strong></div>

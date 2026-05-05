@@ -17,6 +17,7 @@ MARKET_FRESHNESS_EXTENSION = "market_price_freshness_v48"
 OPERATOR_ACTION_SERVER_GATE_EXTENSION = "operator_action_server_gate_v51"
 OPERATOR_RISK_DISCLOSURE_EXTENSION = "operator_risk_disclosure_v52"
 MARKET_CONTEXT_GUARD_EXTENSION = "market_context_guardrails_v53"
+OPERATOR_NEXT_ACTION_EXTENSION = "operator_next_action_v54"
 COMPATIBLE_EXTENSIONS = [
     "market_data_integrity_v44",
     "quality_segments_v44",
@@ -27,6 +28,7 @@ COMPATIBLE_EXTENSIONS = [
     OPERATOR_ACTION_SERVER_GATE_EXTENSION,
     OPERATOR_RISK_DISCLOSURE_EXTENSION,
     MARKET_CONTEXT_GUARD_EXTENSION,
+    OPERATOR_NEXT_ACTION_EXTENSION,
 ]
 SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
@@ -1136,6 +1138,7 @@ def next_actions(status: str, trade_direction: str, price: dict[str, Any]) -> li
             ]
         return [
             {"action": "manual_review", "label": "Открыть ручной разбор", "detail": "Проверить стакан, spread, актуальность entry и размер позиции до любой сделки."},
+            {"action": "paper_opened", "label": "Отметить paper-вход после ручного подтверждения", "detail": "Доступно только при зелёном server gate; API повторно проверит contract_health, entry-zone и свежесть цены. Это не отправляет ордер на Bybit."},
             {"action": "wait_confirmation", "label": "Ждать подтверждения", "detail": "Использовать при неполном MTF/сомнительной цене; рекомендация остается advisory-only."},
             {"action": "close_invalidated", "label": "Закрыть как неактуальную", "detail": "Использовать при уходе цены, hard veto или истечении TTL."},
         ]
@@ -1172,6 +1175,11 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
     invalidation = invalidation_condition(trade_direction, levels, expires_at) if levels.get("valid") else "Вход запрещён: уровни сделки не прошли серверную проверку."
     sizing = execution_plan(levels)
     price_gate = price_actionability(price, status, levels, expires_at, now=as_of)
+    next_action_items = next_actions(status, trade_direction, price)
+    if status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and str(price.get("price_status") or "unknown") == "entry_zone":
+        primary_next_action = {"action": "paper_opened", "label": "Отметить paper-вход после ручного подтверждения", "detail": "Доступно только при зелёном server gate; API повторно проверит contract_health, entry-zone и свежесть цены. Это не отправляет ордер на Bybit."}
+    else:
+        primary_next_action = next_action_items[0] if next_action_items else {"action": "skip", "label": "Пропустить", "detail": "Нет безопасного действия."}
     contract = {
         "contract_version": RECOMMENDATION_CONTRACT_VERSION,
         "recommendation_id": row.get("id"),
@@ -1203,6 +1211,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
+        "operator_next_action_extension": OPERATOR_NEXT_ACTION_EXTENSION,
         "market_context_guardrails": market_context,
         "operator_risk_disclosures": operator_risk_disclosures(row, status, trade_direction, levels, price, ttl, market_context),
         "position_sizing": sizing,
@@ -1230,7 +1239,8 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "indicator_values": indicator_values(row),
         "trading_signals": trading_signals(row),
         "operator_checklist": operator_checklist(row, status, trade_direction, levels, price, price_gate, sizing, ttl, market_context),
-        "next_actions": next_actions(status, trade_direction, price),
+        "primary_next_action": primary_next_action,
+        "next_actions": next_action_items,
         "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing, "market_context": market_context},
         "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price_gate.get("is_price_actionable") is True and (sizing.get("net_risk_reward") is None or sizing.get("net_risk_reward") > 1.0),
         "no_trade_reason": ((price_gate.get("reason") or "price_not_in_entry_zone") if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
@@ -1317,6 +1327,11 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
             problems.append({"code": "operator_checklist_missing", "level": "error", "message": "Server-owned operator checklist is required so frontend does not recompute trade gates."})
         elif status == "review_entry" and not any(isinstance(item, dict) and item.get("key") == "price_gate" and item.get("status") == "pass" for item in checklist):
             problems.append({"code": "operator_checklist_price_gate_not_green", "level": "error", "message": "Review entry checklist must include a passing price gate."})
+        primary = contract.get("primary_next_action")
+        if not isinstance(primary, dict) or not primary.get("action") or not primary.get("label"):
+            problems.append({"code": "primary_next_action_missing", "level": "error", "message": "Every recommendation must tell the operator the safest next action."})
+        elif status == "review_entry" and contract.get("is_actionable") is True and primary.get("action") != "paper_opened":
+            problems.append({"code": "actionable_review_without_paper_action", "level": "warn", "message": "Actionable review should expose paper_opened as the first auditable operator action, still without automatic order execution."})
     price_gate = contract.get("price_actionability") if isinstance(contract.get("price_actionability"), dict) else {}
     if contract.get("is_actionable") is True and price_gate.get("is_price_actionable") is not True:
         problems.append({"code": "top_level_actionable_without_price_gate", "level": "error", "message": "Top-level is_actionable cannot be true while price gate is blocked."})
@@ -1369,6 +1384,7 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
+        "operator_next_action_extension": OPERATOR_NEXT_ACTION_EXTENSION,
         "market_context_guardrails": {
             "extension": MARKET_CONTEXT_GUARD_EXTENSION,
             "status": "blocked",
@@ -1452,6 +1468,7 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
             {"key": "no_active_recommendation", "status": "fail", "title": "Нет активной рекомендации", "text": reason},
             {"key": "advisory_only", "status": "pass", "title": "Автоматическая торговля отключена", "text": "Система только советующая; ордера не отправляются."},
         ],
+        "primary_next_action": {"action": "recalculate", "label": "Пересчитать рекомендации", "detail": "Синхронизировать рынок и построить сигналы заново."},
         "next_actions": [
             {"action": "recalculate", "label": "Пересчитать рекомендации", "detail": "Синхронизировать рынок и построить сигналы заново."},
             {"action": "skip", "label": "Не открывать сделку", "detail": "Пустой список рекомендаций является защитным состоянием, а не ошибкой UI."},

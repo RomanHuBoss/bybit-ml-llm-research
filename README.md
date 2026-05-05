@@ -470,3 +470,25 @@ V48 закрывает отдельный риск, который не покр
 - `GET /api/recommendations/contract` публикует `market_freshness_extension=market_price_freshness_v48` и `market_freshness_audit_view=v_recommendation_integrity_audit_v48`; `/api/system/warnings` использует V48 при наличии миграции.
 
 Практическое правило V48: активный TTL не равен актуальной цене. Если price timestamp устарел или непроверяем, оператор видит блокировку входа, а не зелёную рекомендацию.
+
+## V54: quote freshness contract, deterministic quality drawdown и primary next action
+
+V54 закрывает три эксплуатационных риска советующей trading-СΠПР:
+
+- `/api/quotes/latest` больше не использует `MAX_SIGNAL_AGE_HOURS` как признак свежести цены. Quotes endpoint теперь публикует тот же interval-aware freshness payload, что и recommendation contract: `market_freshness`, `age_seconds`, `max_age_seconds`, `freshness_reason`, `data_status`. Практическое правило: свежесть reference price — это `2 закрытых бара + 5 минут`, а не общий TTL исследовательской идеи.
+- Recommendation quality drawdown стал детерминированным: R-кривая упорядочивается по `evaluated_at, signal_id`, чтобы несколько исходов с одинаковым timestamp не меняли max drawdown в зависимости от плана PostgreSQL.
+- Каждый outbound recommendation contract получил `primary_next_action`. Для actionable `REVIEW_ENTRY` это `paper_opened`, но только как аудируемая paper-отметка после ручной проверки; ордера на Bybit не отправляются. Список `next_actions` сохраняется для UI и обратной совместимости.
+
+Новые DB-объекты:
+
+- `v_market_quote_freshness_audit_v54` — аудит stale/future/invalid latest quotes по рынкам и таймфреймам;
+- `v_recommendation_quality_drawdown_v54` — recommendation-level drawdown в R с детерминированным порядком;
+- `v_recommendation_contract_v54` — справочный contract-view политики V54.
+
+Проверка V54:
+
+```bash
+python run.py migrate
+python -m pytest -q tests/test_v54_quote_freshness_and_quality_drawdown.py
+node --check frontend/app.js
+```

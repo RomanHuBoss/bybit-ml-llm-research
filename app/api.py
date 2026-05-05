@@ -67,7 +67,19 @@ from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .operator_queue import consolidate_operator_queue
 from .recommendation import annotate_recommendations, ensure_operator_decisions
-from .trade_contract import COMPATIBLE_EXTENSIONS, DECISION_SOURCE, MARKET_CONTEXT_GUARD_EXTENSION, MARKET_FRESHNESS_EXTENSION, OPERATOR_ACTION_SERVER_GATE_EXTENSION, OPERATOR_CHECKLIST_EXTENSION, OPERATOR_RISK_DISCLOSURE_EXTENSION, RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
+from .trade_contract import (
+    COMPATIBLE_EXTENSIONS,
+    DECISION_SOURCE,
+    MARKET_CONTEXT_GUARD_EXTENSION,
+    MARKET_FRESHNESS_EXTENSION,
+    OPERATOR_ACTION_SERVER_GATE_EXTENSION,
+    OPERATOR_CHECKLIST_EXTENSION,
+    OPERATOR_RISK_DISCLOSURE_EXTENSION,
+    OPERATOR_NEXT_ACTION_EXTENSION,
+    RECOMMENDATION_CONTRACT_VERSION,
+    market_price_freshness,
+    no_trade_decision_snapshot,
+)
 from .recommendation_outcomes import evaluate_due_recommendation_outcomes
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
@@ -275,23 +287,32 @@ def _symbol_csv(symbols: str | None) -> list[str]:
 
 
 def _latest_quote_rows(category: str, interval: str, symbols: list[str]) -> list[dict[str, Any]]:
-    return fetch_all(
+    rows = fetch_all(
         """
-        WITH latest AS (
-            SELECT DISTINCT ON (symbol)
-                   category, symbol, interval, start_time AS last_price_time, close AS last_price,
-                   open, high, low, close, volume, turnover,
-                   (start_time >= NOW() - (%s::text || ' hours')::interval) AS is_recent
-            FROM candles
-            WHERE category=%s AND interval=%s AND symbol = ANY(%s::text[])
-            ORDER BY symbol, start_time DESC
-        )
-        SELECT *, CASE WHEN is_recent THEN 'fresh' ELSE 'stale' END AS data_status
-        FROM latest
-        ORDER BY symbol
+        SELECT DISTINCT ON (symbol)
+               category, symbol, interval, start_time AS last_price_time, start_time AS bar_time,
+               close AS last_price, open, high, low, close, volume, turnover
+        FROM candles
+        WHERE category=%s AND interval=%s AND symbol = ANY(%s::text[])
+        ORDER BY symbol, start_time DESC
         """,
-        (settings.max_signal_age_hours, category, interval, symbols),
+        (category, interval, symbols),
     )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        # Quotes endpoint must not mark a 15m price as fresh for many hours just
+        # because MAX_SIGNAL_AGE_HOURS allows a research idea to exist that long.
+        # Reuse the same interval-aware freshness contract as recommendations so
+        # frontend can display stale-data state without client-side guesswork.
+        freshness = market_price_freshness(item)
+        item["market_freshness"] = freshness
+        item["data_status"] = "stale" if freshness.get("is_stale") else "fresh"
+        item["age_seconds"] = freshness.get("age_seconds")
+        item["max_age_seconds"] = freshness.get("max_age_seconds")
+        item["freshness_reason"] = freshness.get("reason")
+        out.append(item)
+    return out
 
 
 def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -373,7 +394,7 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
             "risk_pct", "expected_reward_pct", "risk_reward", "net_risk_reward", "confidence_score",
             "expires_at", "checked_at", "ttl_status", "ttl_seconds_left",
             "recommendation_explanation", "signal_breakdown", "operator_checklist", "operator_risk_disclosures",
-            "market_context_guardrails",
+            "primary_next_action", "next_actions", "market_context_guardrails",
             "price_actionability", "market_freshness", "last_price_age_seconds", "contract_health", "decision_source", "frontend_may_recalculate",
             "intrabar_execution_model", "same_bar_stop_first_reason",
             "signal_breakdown.outcome_quality",
@@ -395,9 +416,14 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "operator_risk_disclosure_extension": OPERATOR_RISK_DISCLOSURE_EXTENSION,
         "operator_risk_disclosure_policy": "each outbound recommendation must explain advisory-only mode, confidence semantics, manual price/liquidity checks and blockers",
         "operator_risk_audit_view": "v_recommendation_integrity_audit_v52",
+        "operator_next_action_extension": OPERATOR_NEXT_ACTION_EXTENSION,
+        "operator_next_action_policy": "every recommendation publishes one primary safest next action plus the auditable action list; paper_opened is still advisory-only and server-gated",
         "market_context_extension": MARKET_CONTEXT_GUARD_EXTENSION,
         "market_context_policy": "server validates volatility, risk distance, spread, turnover, open interest, funding and volume before exposing actionable review",
         "market_context_audit_view": "v_recommendation_market_context_audit_v53",
+        "quote_freshness_audit_view": "v_market_quote_freshness_audit_v54",
+        "recommendation_quality_drawdown_view": "v_recommendation_quality_drawdown_v54",
+        "quote_freshness_policy": "quotes/latest uses interval-aware freshness: two bars plus five minutes, not MAX_SIGNAL_AGE_HOURS",
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
         "frontend_may_recalculate": False,
         "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction or risk math on the client",
@@ -419,15 +445,15 @@ def _quality_drawdown_payload(category: str, interval_filter: str | None = None)
     row = fetch_one(
         f"""
         WITH ordered AS (
-            SELECT o.evaluated_at, COALESCE(o.realized_r, 0)::float AS realized_r,
+            SELECT o.signal_id, o.evaluated_at, COALESCE(o.realized_r, 0)::float AS realized_r,
                    SUM(COALESCE(o.realized_r, 0)::float) OVER (ORDER BY o.evaluated_at, o.signal_id) AS equity_r
             FROM recommendation_outcomes o
             JOIN signals s ON s.id=o.signal_id
             WHERE s.category=%s {interval_sql}
               AND o.outcome_status <> 'open'
         ), curve AS (
-            SELECT evaluated_at, realized_r, equity_r,
-                   MAX(equity_r) OVER (ORDER BY evaluated_at) AS peak_r
+            SELECT signal_id, evaluated_at, realized_r, equity_r,
+                   MAX(equity_r) OVER (ORDER BY evaluated_at, signal_id) AS peak_r
             FROM ordered
         )
         SELECT COUNT(*)::int AS evaluated,
@@ -1987,6 +2013,26 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
                     "code": f"recommendation_integrity_{item.get('issue_code')}",
                     "level": "fail" if item.get("severity") == "error" else "warn",
                     "message": f"Integrity audit: {item.get('issue_code')} × {item.get('count')}",
+                })
+        except Exception:
+            pass
+        try:
+            quote_integrity = fetch_all(
+                """
+                SELECT issue_code, severity, COUNT(*)::int AS count
+                FROM v_market_quote_freshness_audit_v54
+                WHERE category=%s
+                GROUP BY issue_code, severity
+                ORDER BY severity DESC, count DESC, issue_code
+                LIMIT 20
+                """,
+                (category,),
+            )
+            for item in quote_integrity:
+                warnings.append({
+                    "code": f"market_quote_{item.get('issue_code')}",
+                    "level": "fail" if item.get("severity") == "error" else "warn",
+                    "message": f"Quote freshness audit: {item.get('issue_code')} × {item.get('count')}",
                 })
         except Exception:
             pass
