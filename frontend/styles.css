@@ -2050,3 +2050,383 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
     top: auto;
   }
 }
+
+/* V50 operator layout repair: remove nested sticky offsets, prevent panel overlap, and make the cockpit responsive. */
+.operator-cockpit-v49.operator-cockpit-v50 {
+  overflow-x: hidden;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .app-main,
+.operator-cockpit-v49.operator-cockpit-v50 .terminal-shell,
+.operator-cockpit-v49.operator-cockpit-v50 .operator-grid,
+.operator-cockpit-v49.operator-cockpit-v50 .operator-left,
+.operator-cockpit-v49.operator-cockpit-v50 .operator-center,
+.operator-cockpit-v49.operator-cockpit-v50 .operator-right,
+.operator-cockpit-v49.operator-cockpit-v50 .panel,
+.operator-cockpit-v49.operator-cockpit-v50 .kpi-card {
+  min-width: 0;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .app-main {
+  overflow-x: clip;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .operator-topbar {
+  grid-template-columns: minmax(220px, 0.72fr) minmax(300px, 1fr) minmax(340px, 1.12fr);
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .terminal-shell.operator-workspace {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .operator-summary {
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 14px;
+  margin-bottom: 0;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .operator-grid {
+  grid-template-columns: minmax(320px, 400px) minmax(0, 1fr) minmax(360px, 500px);
+  gap: 14px;
+  align-items: start;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .operator-left,
+.operator-cockpit-v49.operator-cockpit-v50 .operator-right {
+  position: static !important;
+  top: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding-right: 0 !important;
+  align-content: start;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .queue-panel,
+.operator-cockpit-v49.operator-cockpit-v50 .context-card {
+  position: relative !important;
+  top: auto !important;
+  z-index: auto !important;
+  transform: none !important;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .queue-panel,
+.operator-cockpit-v49.operator-cockpit-v50 .ticket,
+.operator-cockpit-v49.operator-cockpit-v50 .mtf-panel {
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .queue-filters.segmented {
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .queue-header {
+  grid-template-columns: minmax(0, 1fr) minmax(86px, 98px) 44px 16px;
+  gap: 8px;
+  padding: 0 10px 8px;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .queue-header span:first-child {
+  grid-column: 1;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate-queue {
+  max-height: clamp(300px, 38vh, 500px);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate {
+  grid-template-columns: minmax(0, 1fr) minmax(86px, 98px) 44px 16px !important;
+  min-height: 76px;
+  gap: 8px;
+  align-items: center;
+  padding: 11px 10px;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate-star {
+  display: none !important;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate .symbol {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate .symbol em {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate-timeframe,
+.operator-cockpit-v49.operator-cockpit-v50 .candidate-metrics {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate .badge {
+  justify-self: stretch;
+  max-width: none;
+  min-width: 0;
+  padding: 5px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate-score {
+  min-width: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .candidate-chevron {
+  min-width: 0;
+  text-align: right;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .decision-board {
+  grid-template-columns: minmax(0, 1fr) minmax(164px, 220px);
+  gap: 12px;
+  align-items: start;
+  overflow: hidden;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .decision-main h2,
+.operator-cockpit-v49.operator-cockpit-v50 #decisionTitle {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 #decisionSubtitle,
+.operator-cockpit-v49.operator-cockpit-v50 .decision-subtitle {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .decision-meters {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .decision-telemetry {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .decision-telemetry span,
+.operator-cockpit-v49.operator-cockpit-v50 .decision-telemetry small,
+.operator-cockpit-v49.operator-cockpit-v50 .decision-telemetry strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .execution-map {
+  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .execution-level,
+.operator-cockpit-v49.operator-cockpit-v50 .metric,
+.operator-cockpit-v49.operator-cockpit-v50 .detail-card,
+.operator-cockpit-v49.operator-cockpit-v50 .check-item,
+.operator-cockpit-v49.operator-cockpit-v50 .reason-item,
+.operator-cockpit-v49.operator-cockpit-v50 .protocol-item,
+.operator-cockpit-v49.operator-cockpit-v50 .news-item {
+  min-width: 0;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .execution-level strong,
+.operator-cockpit-v49.operator-cockpit-v50 .metric strong,
+.operator-cockpit-v49.operator-cockpit-v50 .detail-card,
+.operator-cockpit-v49.operator-cockpit-v50 .check-item p,
+.operator-cockpit-v49.operator-cockpit-v50 .reason-item p,
+.operator-cockpit-v49.operator-cockpit-v50 .protocol-item p,
+.operator-cockpit-v49.operator-cockpit-v50 .news-item p {
+  overflow-wrap: anywhere;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .chart-stage,
+.operator-cockpit-v49.operator-cockpit-v50 canvas {
+  min-height: 260px;
+  height: 260px;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .ticket-main {
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .recommendation-detail-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .recommendation-detail-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .ticket-operator-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .context-card {
+  overflow: hidden;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .context-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  overflow: visible;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .context-tab {
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .context-tab-panel {
+  max-height: none;
+  overflow: visible;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .checklist-list,
+.operator-cockpit-v49.operator-cockpit-v50 .reason-list,
+.operator-cockpit-v49.operator-cockpit-v50 .protocol-list,
+.operator-cockpit-v49.operator-cockpit-v50 .news-list {
+  max-height: clamp(260px, 34vh, 500px);
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .llm-symbol-verdict,
+.operator-cockpit-v49.operator-cockpit-v50 .mtf-panel,
+.operator-cockpit-v49.operator-cockpit-v50 .quality-segments-panel {
+  width: 100%;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 #llmRecommendationLabel {
+  font-size: clamp(30px, 5vw, 42px);
+  overflow-wrap: anywhere;
+}
+
+.operator-cockpit-v49.operator-cockpit-v50 .raw-table-card,
+.operator-cockpit-v49.operator-cockpit-v50 .raw-log-card,
+.operator-cockpit-v49.operator-cockpit-v50 .raw-table-wrap {
+  min-width: 0;
+}
+
+@media (max-width: 1700px) {
+  .operator-cockpit-v49.operator-cockpit-v50 .operator-grid {
+    grid-template-columns: minmax(300px, 390px) minmax(0, 1fr);
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .operator-right {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+    gap: 14px;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .context-card {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1180px) {
+  .operator-cockpit-v49.operator-cockpit-v50 .operator-topbar,
+  .operator-cockpit-v49.operator-cockpit-v50 .operator-summary,
+  .operator-cockpit-v49.operator-cockpit-v50 .operator-grid,
+  .operator-cockpit-v49.operator-cockpit-v50 .operator-right,
+  .operator-cockpit-v49.operator-cockpit-v50 .decision-board,
+  .operator-cockpit-v49.operator-cockpit-v50 .technical-grid {
+    grid-template-columns: 1fr;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .market-strip,
+  .operator-cockpit-v49.operator-cockpit-v50 .top-status {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .context-card {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .operator-cockpit-v49.operator-cockpit-v50 .app-frame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .side-nav {
+    display: none;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .operator-topbar,
+  .operator-cockpit-v49.operator-cockpit-v50 .terminal-shell.operator-workspace {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .operation-toast {
+    margin-left: 10px;
+    margin-right: 10px;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .brand-copy h1 {
+    white-space: normal;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .queue-header {
+    display: none;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .candidate {
+    grid-template-columns: minmax(0, 1fr) minmax(74px, 88px) 42px !important;
+    min-height: 72px;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .candidate-chevron {
+    display: none;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .candidate-metrics {
+    display: none;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .decision-main h2 {
+    font-size: 34px;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .decision-meters,
+  .operator-cockpit-v49.operator-cockpit-v50 .decision-telemetry,
+  .operator-cockpit-v49.operator-cockpit-v50 .execution-map,
+  .operator-cockpit-v49.operator-cockpit-v50 .ticket-main,
+  .operator-cockpit-v49.operator-cockpit-v50 .recommendation-detail-grid,
+  .operator-cockpit-v49.operator-cockpit-v50 .ticket-operator-actions,
+  .operator-cockpit-v49.operator-cockpit-v50 .llm-verdict-top,
+  .operator-cockpit-v49.operator-cockpit-v50 .llm-recommendation-row,
+  .operator-cockpit-v49.operator-cockpit-v50 .tf-grid,
+  .operator-cockpit-v49.operator-cockpit-v50 .ops-body,
+  .operator-cockpit-v49.operator-cockpit-v50 .ops-actions,
+  .operator-cockpit-v49.operator-cockpit-v50 .secondary-actions {
+    grid-template-columns: 1fr;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .context-tabs {
+    display: flex;
+    overflow-x: auto;
+  }
+  .operator-cockpit-v49.operator-cockpit-v50 .context-tab {
+    flex: 0 0 auto;
+    min-width: 92px;
+  }
+}

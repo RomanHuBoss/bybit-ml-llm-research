@@ -285,7 +285,7 @@ def test_frontend_uses_compact_badges_without_clipping_full_operator_label():
     assert "const MTF_ACTION_COMPACT_LABELS" in js
     assert "compactMtfActionLabel(s)" in js
     assert "NO_TRADE_ENTRY_CONFLICT" in js
-    assert "styles.css?v=trading-cockpit-v39" in html
+    assert "styles.css?v=trading-cockpit-v50" in html
     assert "v13 trading UI hardening" in css
     assert ".candidate .badge" in css
     assert "text-overflow: ellipsis" in css
