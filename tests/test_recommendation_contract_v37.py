@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc)
 
 
-def test_v37_extended_price_is_not_actionable_even_when_review_entry():
+def test_v37_extended_price_is_demoted_to_missed_entry_no_trade():
     item = enrich_recommendation_row(
         base_row(
             entry=100,
@@ -28,13 +28,15 @@ def test_v37_extended_price_is_not_actionable_even_when_review_entry():
     contract = item["recommendation"]
 
     assert contract["contract_version"] == "recommendation_v40"
-    assert contract["recommendation_status"] == "review_entry"
+    assert contract["recommendation_status"] == "missed_entry"
+    assert contract["trade_direction"] == "no_trade"
     assert contract["price_status"] == "extended"
     assert contract["price_actionability"]["is_price_actionable"] is False
     assert contract["price_actionability"]["reason"] == "price_extended_wait_retest"
     assert contract["is_actionable"] is False
+    assert contract["no_trade_reason"] == "price_extended_wait_retest"
     assert contract["next_actions"][0]["action"] == "wait_confirmation"
-    assert contract["contract_health"]["level"] == "error"
+    assert contract["contract_health"]["ok"] is True
 
 
 def test_v37_net_rr_gate_blocks_fee_adjusted_bad_review_candidate():

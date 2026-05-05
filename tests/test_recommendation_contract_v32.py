@@ -4,13 +4,14 @@ from app.trade_contract import enrich_recommendation_row
 from tests.test_recommendation_contract_v28 import TEST_NOW, base_row
 
 
-def test_v32_unknown_price_is_not_actionable_even_for_review_entry():
+def test_v32_unknown_price_demotes_review_entry_to_wait_no_trade():
     item = enrich_recommendation_row(base_row(last_price=None, current_price=None, close=None), now=TEST_NOW)
 
-    assert item["recommendation_status"] == "review_entry"
+    assert item["recommendation_status"] == "wait"
     assert item["price_status"] == "unknown"
-    assert item["trade_direction"] == "long"
+    assert item["trade_direction"] == "no_trade"
     assert item["is_actionable"] is False
+    assert item["price_actionability"]["reason"] == "price_unknown"
 
 
 def test_v32_outcome_evaluator_rechecks_open_outcomes(monkeypatch):

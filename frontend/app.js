@@ -609,8 +609,8 @@ function levelsProblem(s) {
 }
 
 function riskReward(s) {
-  // V45: фронт не пересчитывает торговую математику. Он только отображает
-  // risk/reward, risk_pct и expected_reward_pct, рассчитанные и проверенные backend.
+  // V46: фронт не пересчитывает торговую математику и actionability. Он только отображает
+  // risk/reward, risk_pct, expected_reward_pct и price gate, рассчитанные backend.
   const contract = contractFor(s);
   const serverRatio = num(contract.risk_reward, null);
   const serverRisk = num(contract.risk_pct, null);
@@ -1395,7 +1395,7 @@ function algorithmDecisionFor(s) {
       blocked: { level: 'reject', label: 'НЕТ ВХОДА' },
       expired: { level: 'reject', label: 'ПРОСРОЧЕНО' },
       invalid: { level: 'reject', label: 'НЕВАЛИДНО' },
-      missed_entry: { level: 'reject', label: 'NO_TRADE · ENTRY УШЁЛ' },
+      missed_entry: { level: 'reject', label: 'NO_TRADE · ЖДАТЬ РЕТЕСТ' },
     };
     const mapped = statusMap[contractStatus] || { level: 'watch', label: contract.display_direction || 'WAIT' };
     const score = Math.round(num(s.operator_score, contract.confidence_score ?? 0) || 0);
@@ -1414,7 +1414,7 @@ function algorithmDecisionFor(s) {
     label: 'НЕТ ВХОДА',
     score: 0,
     title: `${s.symbol}: нет серверного recommendation contract`,
-    subtitle: 'Frontend v40 не пересчитывает торговое решение и risk/reward. V45 дополнительно требует nested entry/SL/TP внутри recommendation contract. Нужно обновить backend или открыть /api/recommendations/active: без server-enriched contract вход запрещён.',
+    subtitle: 'Frontend v40 не пересчитывает торговое решение, risk/reward и actionability. V46 требует server price gate: без /api/recommendations/active вход запрещён.',
   };
 }
 
@@ -1724,7 +1724,7 @@ function contractHealthHtml(health) {
   const level = cssToken(health.level || (health.ok ? 'ok' : 'warn'), 'warn');
   const problems = Array.isArray(health.problems) ? health.problems : [];
   if (!problems.length) {
-    return `<div class="contract-health ${level}"><b>OK</b><span>Серверный контракт согласован: уровни, TTL, price gate и net R/R прошли проверку.</span></div>`;
+    return `<div class="contract-health ${level}"><b>OK</b><span>Серверный контракт согласован: уровни, TTL, entry-zone price gate и net R/R прошли проверку.</span></div>`;
   }
   return `<div class="contract-health ${level}"><b>${escapeHtml(String(health.level || 'warn').toUpperCase())}</b><ul>${problems.slice(0, 6).map((p) => `<li><strong>${escapeHtml(p.code || p.level || 'guardrail')}</strong><span>${escapeHtml(p.message || '')}</span></li>`).join('')}</ul></div>`;
 }

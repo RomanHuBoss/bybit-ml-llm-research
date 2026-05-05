@@ -22,6 +22,7 @@ def base_row(**overrides):
         "take_profit": 104.0,
         "atr": 1.5,
         "bar_time": "2026-05-02T00:00:00+00:00",
+        "last_price": 100.0,
         "fresh": True,
         "operator_action": "REVIEW_ENTRY",
         "operator_label": "РУЧНАЯ ПРОВЕРКА ВХОДА",

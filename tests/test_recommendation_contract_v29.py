@@ -60,7 +60,7 @@ def test_frontend_uses_server_contract_and_renders_full_queue_card():
     css = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
     assert "const contractStatus = String(contract.recommendation_status" in js
-    assert "missed_entry: { level: 'reject', label: 'NO_TRADE · ENTRY УШЁЛ' }" in js
+    assert "missed_entry: { level: 'reject', label: 'NO_TRADE · ЖДАТЬ РЕТЕСТ' }" in js
     assert "contract.recommendation_explanation" in js
     assert "candidate-metrics" in js
     assert "R/R ${fmt(rr, 2)}" in js

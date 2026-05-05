@@ -334,10 +334,18 @@ def recommendation_status(row: dict[str, Any], levels: dict[str, Any], price: di
         return "blocked"
     if price.get("is_stale"):
         return "expired"
-    if price.get("price_status") == "moved_away" and action in {"REVIEW_ENTRY", "RESEARCH_CANDIDATE"}:
-        # Цена уже ушла из зоны ручного входа. Уровни оставляем для аудита,
-        # но торговое направление для пользователя переводим в NO_TRADE.
+    price_status = str(price.get("price_status") or "unknown")
+    if price_status in {"extended", "moved_away"} and action in {"REVIEW_ENTRY", "RESEARCH_CANDIDATE"}:
+        # REVIEW_ENTRY допустим только внутри серверного entry-window. Состояние
+        # extended раньше оставляло статус review_entry при заблокированном
+        # price_actionability, из-за чего UI одновременно показывал ручной вход
+        # и красный price gate. Теперь любой выход из entry_zone демотируется в
+        # missed_entry/NO_TRADE: оператор должен ждать ретест или пересчет.
         return "missed_entry"
+    if price_status == "unknown" and action in {"REVIEW_ENTRY", "RESEARCH_CANDIDATE"}:
+        # Если нет проверяемой текущей цены, нельзя оставлять directional review.
+        # Это не missed entry, а WAIT/NO_TRADE до восстановления quote feed.
+        return "wait"
     if action == "REVIEW_ENTRY":
         return "review_entry"
     if action == "RESEARCH_CANDIDATE":
@@ -396,7 +404,16 @@ def explanation(row: dict[str, Any], status: str, trade_direction: str, levels: 
     if status == "blocked":
         return f"{symbol}: NO_TRADE. Главная причина: {_reason_text(hard, 'есть hard veto')}. Entry/SL/TP оставлены только для аудита расчёта, открывать сделку нельзя."
     if status == "missed_entry":
-        return f"{symbol}: NO_TRADE. Цена ушла от зоны entry сильнее допустимого дрейфа ({price.get('price_drift_pct'):.2%} при лимите {price.get('entry_zone_pct'):.2%}). Не догонять рынок: ждать ретеста или пересчитать рекомендацию."
+        reason = "цена вышла из точной entry-зоны"
+        if price_status == "moved_away":
+            reason = "цена ушла далеко от entry-зоны"
+        elif price_status == "extended":
+            reason = "цена находится в расширенной зоне, где вход без ретеста запрещён"
+        drift = finite(price.get("price_drift_pct"))
+        zone = finite(price.get("entry_zone_pct"))
+        drift_text = "н/д" if drift is None else f"{drift:.2%}"
+        zone_text = "н/д" if zone is None else f"{zone:.2%}"
+        return f"{symbol}: NO_TRADE. {reason}; drift {drift_text} при допустимом окне {zone_text}. Не догонять рынок: ждать ретеста или пересчитать рекомендацию."
     if trade_direction in {DIRECTION_LONG, DIRECTION_SHORT}:
         side = "LONG" if trade_direction == DIRECTION_LONG else "SHORT"
         base = f"{symbol} {interval}: {side}-сценарий по {strategy}. Entry {levels['entry']:.8g}, SL {levels['stop_loss']:.8g}, TP {levels['take_profit']:.8g}, R/R {rr:.2f}."
@@ -664,6 +681,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "fee_slippage_roundtrip_pct": sizing.get("fee_slippage_roundtrip_pct"),
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
+        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45", "server_actionability_v46"],
         "position_sizing": sizing,
         "level_validation": {"valid": levels.get("valid"), "reason": levels.get("reason")},
         "price_status": price.get("price_status"),
@@ -688,7 +706,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "next_actions": next_actions(status, trade_direction, price),
         "signal_breakdown": {**signal_breakdown(row, levels, price), "position_sizing": sizing},
         "is_actionable": status == "review_entry" and trade_direction in {DIRECTION_LONG, DIRECTION_SHORT} and price_gate.get("is_price_actionable") is True and (sizing.get("net_risk_reward") is None or sizing.get("net_risk_reward") > 1.0),
-        "no_trade_reason": ("price_moved_away" if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
+        "no_trade_reason": ((price_gate.get("reason") or "price_not_in_entry_zone") if status == "missed_entry" else levels.get("reason") if status == "invalid" else None),
     }
     health = contract_health(contract)
     contract["contract_health"] = health
@@ -801,6 +819,7 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "net_risk_reward": None,
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
+        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45", "server_actionability_v46"],
         "price_status": "no_setup",
         "last_price": None,
         "last_price_time": None,

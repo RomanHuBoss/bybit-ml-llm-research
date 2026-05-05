@@ -26,7 +26,7 @@ app/backtest_background.py Фоновый backtest evidence
 app/db.py                 PostgreSQL helpers с ленивым импортом драйвера
 sql/schema.sql            PostgreSQL schema
 tests/                    Unit/static/integration regression tests
-docs/                     Отчеты аудита и эксплуатационные заметки
+docs/                     Отчеты аудита и эксплуатационные заметки, включая V46 actionability audit
 ```
 
 ## Технологии
@@ -157,7 +157,8 @@ node --check frontend/app.js
 - V44-сегментов качества рекомендаций по `symbol`, `strategy`, `confidence bucket`, `timeframe`, `direction` и `signal_type`;
 - V44-frontend панели качества похожих сигналов без сырых JSON и без пересчета торговой логики на клиенте;
 - V44-миграции целостности market data/liquidity/outcome metrics;
-- V45-расширения outbound-контракта: вложенный объект `recommendation` теперь самодостаточно содержит `entry`, `stop_loss`, `take_profit`, а системный аудит ловит неполный signal payload.
+- V45-расширения outbound-контракта: вложенный объект `recommendation` теперь самодостаточно содержит `entry`, `stop_loss`, `take_profit`, а системный аудит ловит неполный signal payload;
+- V46 server actionability: `REVIEW_ENTRY`/`RESEARCH_CANDIDATE` демотируются в `missed_entry`/`wait`, если цена не в `entry_zone` или текущая цена неизвестна.
 
 ## Торговая логика
 
@@ -228,7 +229,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V40/V43/V44/V45
+## Recommendation API V40/V43/V44/V45/V46
 
 Канонические endpoints для витрины оператора:
 
@@ -241,14 +242,14 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V40/V43/V44/V45 additions
+### Recommendation API V40/V43/V44/V45/V46 additions
 
 - `contract_version = recommendation_v40`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
 - `price_actionability.is_price_actionable=true` возможен только в `entry_zone`; состояние `extended` означает ждать ретест, а не догонять цену.
 - `net_risk_reward` после fee/slippage участвует в review gate; слабый net R/R переводит сетап в hard/warn guardrail.
 - Контракт содержит `decision_source=server_enriched_contract_v40` и `frontend_may_recalculate=false`; фронт больше не пересчитывает R/R и не повышает raw-сигнал до рекомендации.
-- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v45` с fallback на `v_recommendation_integrity_audit_v44`/`v_recommendation_integrity_audit_v43`/`v_recommendation_integrity_audit_v40`, если новая миграция еще не применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction; V44 добавляет аудит невалидных OHLC/liquidity/outcome-метрик и сегментное качество рекомендаций; V45 добавляет аудит неполного structured signal payload.
+- `GET /api/system/warnings` использует `v_recommendation_integrity_audit_v46` с fallback на `v_recommendation_integrity_audit_v45`/`v_recommendation_integrity_audit_v44`/`v_recommendation_integrity_audit_v43`/`v_recommendation_integrity_audit_v40`, если новая миграция еще не применена. V40 ловит чрезмерный TTL, конфликт активных LONG/SHORT по одному рынку/бару, слабый R/R, отсутствие объяснительного payload и отсутствие MTF-контекста; V43 дополнительно ловит недавнюю серию убыточных рекомендаций по тому же symbol/TF/strategy/direction; V44 добавляет аудит невалидных OHLC/liquidity/outcome-метрик и сегментное качество рекомендаций; V45 добавляет аудит неполного structured signal payload; V46 добавляет аудит активной цены вне entry-zone и runtime-demotion небезопасного directional review.
 
 
 
@@ -278,6 +279,21 @@ V45 устраняет рассинхрон между top-level legacy-поля
 - `frontend/app.js` явно показывает уровни из вложенного контракта в guardrails-блоке и больше не пишет handled LLM-background состояние как browser `console.warn`.
 
 Публичная версия контракта намеренно остается `recommendation_v40`, потому что это совместимое расширение без поломки существующих клиентов. Новые клиенты могут смотреть `compatible_extensions` и `ui_contract_extension=nested_trade_levels_v45`.
+
+## Server Actionability and Price Gate Demotion V46
+
+V46 закрывает UX/contract-рассинхрон: раньше `price_actionability` мог блокировать вход, но статус оставался `review_entry`. Теперь `REVIEW_ENTRY` существует только если текущая цена находится в серверной `entry_zone`.
+
+Что изменено:
+
+- `app/trade_contract.py` демотирует `price_status=extended` и `price_status=moved_away` в `missed_entry` с `trade_direction=no_trade`; оператор видит `NO_TRADE · ЖДАТЬ РЕТЕСТ`, а не ручной вход.
+- Если текущая цена неизвестна (`price_status=unknown`), directional review демотируется в `wait/no_trade` до восстановления quote feed.
+- `no_trade_reason` теперь получает конкретную причину price gate: `price_extended_wait_retest`, `price_moved_away` или `price_unknown`.
+- `app/api.py` публикует compatible extension `server_actionability_v46`; `/api/system/warnings` сначала использует `v_recommendation_integrity_audit_v46`.
+- `sql/migrations/20260505_v46_server_actionability_and_price_gate.sql` добавляет audit view для активных сигналов, где latest price уже вышла за server entry-zone.
+- Frontend больше не формулирует `missed_entry` как потенциально догоняемую сделку: правильное действие — ждать ретест или пересчитать.
+
+Практическое правило V46: `REVIEW_ENTRY` требует одновременно валидные уровни, неистекший TTL, `price_status=entry_zone`, `contract_health.ok=true` и приемлемый `net_risk_reward`. Всё остальное — не вход.
 
 ## Loss quarantine V43
 
@@ -329,6 +345,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 - Stale-сигнал определяется по `bar_time` рыночной свечи, а не только по времени пересчета `created_at`.
 - Для спорного рынка безопаснее показать `NO_TRADE` с причиной конфликта, чем выбирать между LONG/SHORT по случайному порядку обновления evidence.
 - При одновременном касании SL и TP внутри одной OHLC-свечи безопаснее считать SL-first, чем завышать качество стратегии за счет недоказуемого TP-first.
+- Если цена вышла из `entry_zone`, безопаснее демотировать directional review в `NO_TRADE/WAIT`, чем позволить оператору догонять рынок по устаревшей зоне входа.
 
 ## Известные ограничения
 
@@ -338,11 +355,12 @@ UI реализует состояния loading, empty, error, stale data, API 
 - ML evidence зависит от доступности истории и актуальности model_runs.
 - Полная production-эксплуатация требует мониторинга PostgreSQL, API rate limits, alerting и резервного восстановления.
 - OHLC-backtest не восстанавливает реальный внутрисвечный путь цены; неоднозначные SL/TP-свечи помечаются и штрафуются, но окончательная верификация требует более детальных данных.
+- V46 price-gate audit использует latest candle close как доступную публичную цену; для production-терминала желательно добавить websocket/mark-price feed, но без автоматического исполнения.
 
 ## Troubleshooting
 
 - Пустая очередь: проверьте свежесть свечей, MTF entry interval, liquidity filters, `MAX_SIGNAL_AGE_HOURS` и наличие хотя бы одного сетапа после `trend_continuation_setup`.
-- Все кандидаты `НЕТ ВХОДА`: откройте checklist/reasons; чаще всего причина в stale данных, MTF conflict, низком R/R или liquidity/spread.
+- Все кандидаты `НЕТ ВХОДА`: откройте checklist/reasons; чаще всего причина в stale данных, MTF conflict, низком R/R, liquidity/spread или выходе цены из entry-zone.
 - `Quality refresh` долго идет: это штатная фоновая операция; смотрите статус в Strategy Lab или `/api/strategies/quality/refresh/status`. Если часто видите `partial=true`, уменьшите `STRATEGY_QUALITY_REFRESH_LIMIT` или увеличьте `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`.
 - Ошибка Bybit: уменьшите число symbols/intervals/days, проверьте rate limits и сеть.
 - Ошибка PostgreSQL: проверьте `.env`, доступность БД и выполните `python run.py migrate --list`; для новой БД используйте `python run.py migrate --init-schema`.

@@ -314,7 +314,8 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "moved_away": moved_away,
         "contract": RECOMMENDATION_CONTRACT_VERSION,
         "previous_contract": "recommendation_v38",
-        "ui_contract_extension": "nested_trade_levels_v45",
+        "ui_contract_extension": "server_actionability_v46",
+        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45", "server_actionability_v46"],
     }
 
 
@@ -375,12 +376,13 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         ],
         "intrabar_execution_policy": "conservative_ohlc_stop_loss_first; same-bar SL/TP is marked as stop_loss_same_bar_ambiguous",
         "price_gate_policy": "entry_zone_only_for_actionable_review",
+        "server_actionability_policy": "review_entry_is_demoted_to_missed_entry_when price_status is extended or moved_away",
         "decision_source": DECISION_SOURCE,
         "decision_source_literal": "server_enriched_contract_v40",
         "operator_queue_policy": "operator_queue_consolidates_before_contract_enrichment",
         "quality_segments": ["symbol", "timeframe", "direction", "confidence_bucket", "signal_type"],
-        "integrity_audit_view": "v_recommendation_integrity_audit_v45",
-        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45"],
+        "integrity_audit_view": "v_recommendation_integrity_audit_v46",
+        "compatible_extensions": ["market_data_integrity_v44", "quality_segments_v44", "nested_trade_levels_v45", "server_actionability_v46"],
         "frontend_may_recalculate": False,
         "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction or risk math on the client",
     }
@@ -1639,7 +1641,7 @@ def api_active_recommendations(limit: int = 50, category: str = settings.default
             "summary": {**market_state["summary"], "contract_guardrails": contract_guardrails},
             "market_state": {**market_state, "contract_guardrails": contract_guardrails},
             "empty_state": None if recommendations else market_state["explanation"],
-            "ui_contract_extension": "nested_trade_levels_v45",
+            "ui_contract_extension": "server_actionability_v46",
             "error": payload.get("error"),
         }
     except ValueError as exc:
@@ -1877,7 +1879,7 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
             integrity = []
             # Backward-compatible fallback keeps the historic V40 audit contract available.
             # Static contract test anchor: FROM v_recommendation_integrity_audit_v40
-            for audit_view in ("v_recommendation_integrity_audit_v45", "v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
+            for audit_view in ("v_recommendation_integrity_audit_v46", "v_recommendation_integrity_audit_v45", "v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
                 try:
                     integrity = fetch_all(
                         f"""
