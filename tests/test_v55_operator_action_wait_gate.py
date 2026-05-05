@@ -43,7 +43,7 @@ def test_v55_frontend_renders_operator_buttons_from_server_next_actions_only() -
     js = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
     assert "function operatorActionButtonsHtml(contract)" in js
-    assert "paperGateOk = status === 'review_entry'" in js
+    assert "const paperGateOk = paperGateState(contract).ok;" in js
     assert "if (action === 'paper_opened' && !paperGateOk) return;" in js
     assert "${operatorActionButtonsHtml(contract)}" in js
     assert "button.disabled" in js

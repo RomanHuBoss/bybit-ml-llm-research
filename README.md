@@ -26,7 +26,7 @@ app/backtest_background.py Фоновый backtest evidence
 app/db.py                 PostgreSQL helpers с ленивым импортом драйвера
 sql/schema.sql            PostgreSQL schema
 tests/                    Unit/static/integration regression tests
-docs/                     Отчеты аудита и эксплуатационные заметки, включая V46/V52 actionability и risk-disclosure audit
+docs/                     Отчеты аудита и эксплуатационные заметки, включая V46/V52 actionability, risk-disclosure audit и V56 operator-action UX gate
 ```
 
 ## Технологии
@@ -145,6 +145,16 @@ python run.py app
 - добавлено действие `Отметить paper-вход`, которое фиксирует операторское действие, но не отправляет ордер.
 
 Каноническая торговая математика остается на backend: frontend только отображает `recommendation` contract и не пересчитывает `entry`, `stop_loss`, `take_profit`, `risk/reward` или `price_actionability`.
+
+
+## V56: operator-action UX hardening
+
+Эта ревизия закрывает практический сценарий, когда оператор мог получить сырой отказ `paper_opened_allowed_only_for_review_entry: current_status=wait`. Серверный запрет был корректным, но UX был недостаточно защищён от устаревшего DOM/состояния. Теперь:
+
+- `paper_opened` проверяется на клиенте через тот же набор условий, что и server gate: `review_entry`, LONG/SHORT, `is_actionable=true`, `contract_health.ok=true`, `price_status=entry_zone`;
+- при отказе frontend показывает торгово-понятное объяснение: статус WAIT/NO_TRADE/expired означает, что вход запрещён, безопасные действия — ждать, пропустить или пересчитать;
+- backend для отказов возвращает `user_message` и machine-readable `operator_action_gate`;
+- `recalculate` является рабочей UI-командой для expired/invalid next-action и вызывает `/api/recommendations/recalculate`, но не сохраняется как operator trade action.
 
 ## Тесты и проверки
 

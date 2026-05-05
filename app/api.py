@@ -417,7 +417,9 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "operator_risk_disclosure_policy": "each outbound recommendation must explain advisory-only mode, confidence semantics, manual price/liquidity checks and blockers",
         "operator_risk_audit_view": "v_recommendation_integrity_audit_v52",
         "operator_next_action_extension": OPERATOR_NEXT_ACTION_EXTENSION,
-        "operator_next_action_policy": "every recommendation publishes one primary safest next action plus the auditable action list; paper_opened is still advisory-only and server-gated",
+        "operator_next_action_policy": "every recommendation publishes one primary safest next action plus the auditable action list; paper_opened is still advisory-only and server-gated; recalculate is a frontend command that calls /api/recommendations/recalculate and is not persisted as an operator trade action",
+        "frontend_supported_operator_actions": ["skip", "wait_confirmation", "manual_review", "close_invalidated", "paper_opened", "recalculate"],
+        "paper_opened_failure_payload": ["user_message", "operator_action_gate", "recommendation_status"],
         "market_context_extension": MARKET_CONTEXT_GUARD_EXTENSION,
         "market_context_policy": "server validates volatility, risk distance, spread, turnover, open interest, funding and volume before exposing actionable review",
         "market_context_audit_view": "v_recommendation_market_context_audit_v53",
@@ -802,6 +804,47 @@ def _paper_entry_rejection_reason(contract: dict[str, Any]) -> str | None:
         return f"paper_opened_blocked_by_operator_checklist:{failed_check.get('key') or failed_check.get('title') or 'fail'}"
     return None
 
+
+
+def _paper_entry_user_message(reason: str | None, contract: dict[str, Any]) -> str:
+    status = str(contract.get("recommendation_status") or "unknown")
+    if not reason:
+        return "Paper-вход разрешен только после ручного подтверждения оператора; автоматическая отправка ордера не выполняется."
+    if reason.startswith("paper_opened_allowed_only_for_review_entry"):
+        return (
+            f"Paper-вход отклонен сервером: текущий статус рекомендации {status}, "
+            "а paper_opened допустим только для actionable REVIEW_ENTRY. "
+            "Безопасное действие: ждать подтверждения, пропустить или пересчитать рекомендацию."
+        )
+    if "entry_zone" in reason:
+        return "Paper-вход отклонен сервером: текущая цена не находится в entry-zone. Не догонять рынок; ждать ретест или пересчитать."
+    if "contract_health" in reason:
+        return "Paper-вход отклонен сервером: contract_health не OK. Сначала устранить ошибки контракта/данных."
+    if "is_actionable" in reason:
+        return "Paper-вход отклонен сервером: рекомендация не является actionable по server-owned контракту."
+    if "directional" in reason:
+        return "Paper-вход отклонен сервером: нет валидного направления LONG/SHORT и уровней сделки."
+    if "checklist" in reason:
+        return "Paper-вход отклонен сервером: серверный чек-лист содержит fail-пункт."
+    return f"Paper-вход отклонен сервером: {reason}"
+
+
+def _public_operator_action_gate(contract: dict[str, Any], rejection_reason: str | None = None) -> dict[str, Any]:
+    health = contract.get("contract_health") if isinstance(contract.get("contract_health"), dict) else {}
+    price_actionability = contract.get("price_actionability") if isinstance(contract.get("price_actionability"), dict) else {}
+    return {
+        "allowed": rejection_reason is None,
+        "reason": rejection_reason,
+        "user_message": _paper_entry_user_message(rejection_reason, contract),
+        "recommendation_status": contract.get("recommendation_status"),
+        "trade_direction": contract.get("trade_direction"),
+        "is_actionable": contract.get("is_actionable"),
+        "contract_health_ok": health.get("ok"),
+        "price_status": contract.get("price_status") or price_actionability.get("price_status"),
+        "price_gate_ok": price_actionability.get("is_price_actionable"),
+        "primary_next_action": contract.get("primary_next_action"),
+        "next_actions": contract.get("next_actions") or [],
+    }
 
 def _operator_action_observed_price(req: OperatorActionRequest, contract: dict[str, Any]) -> float | None:
     """Единая цена аудита действия оператора.
@@ -1898,24 +1941,31 @@ def api_recommendation_operator_action(signal_id: int, req: OperatorActionReques
         if req.action == "paper_opened":
             rejection_reason = _paper_entry_rejection_reason(contract)
             if rejection_reason:
+                gate = _public_operator_action_gate(contract, rejection_reason)
                 return {
                     "ok": False,
                     "recommendation_id": signal_id,
                     "action": req.action,
                     "status": "rejected_by_server_gate",
                     "error": rejection_reason,
+                    "user_message": gate["user_message"],
                     "recommendation_status": contract.get("recommendation_status"),
+                    "operator_action_gate": gate,
                 }
 
         observed_price = _operator_action_observed_price(req, contract)
         if req.action == "paper_opened" and observed_price is None:
+            rejection_reason = "paper_opened_requires_positive_observed_or_reference_price"
+            gate = _public_operator_action_gate(contract, rejection_reason)
             return {
                 "ok": False,
                 "recommendation_id": signal_id,
                 "action": req.action,
                 "status": "rejected_by_server_gate",
-                "error": "paper_opened_requires_positive_observed_or_reference_price",
+                "error": rejection_reason,
+                "user_message": gate["user_message"],
                 "recommendation_status": contract.get("recommendation_status"),
+                "operator_action_gate": gate,
             }
 
         payload = {
@@ -1952,13 +2002,16 @@ def api_recommendation_operator_action(signal_id: int, req: OperatorActionReques
                 """,
                 (int(signal_id), observed_price, {"source": "operator_action", "action": req.action, "note": req.notes}),
             )
-        return {
+        response = {
             "ok": True,
             "recommendation_id": signal_id,
             "action": req.action,
             "status": _operator_action_status(req.action),
             "recommendation_status": contract.get("recommendation_status"),
         }
+        if req.action == "paper_opened":
+            response["operator_action_gate"] = _public_operator_action_gate(contract, None)
+        return response
     except ValueError as exc:
         raise _bad_request(exc) from exc
     except Exception as exc:

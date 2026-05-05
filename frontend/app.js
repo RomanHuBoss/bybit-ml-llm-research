@@ -1838,14 +1838,68 @@ function nextActionsHtml(items) {
   return `<ol>${items.map((item, index) => `<li class="${index === 0 ? 'primary-next-action' : ''}"><b>${escapeHtml(item.label || item.action || 'action')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ol>`;
 }
 
+
+function paperGateState(contract) {
+  const status = String(contract?.recommendation_status || '').toLowerCase();
+  const direction = String(contract?.trade_direction || '').toLowerCase();
+  const priceStatus = String(contract?.price_status || contract?.price_actionability?.price_status || '').toLowerCase();
+  const healthOk = contract?.contract_health?.ok === true;
+  const priceOk = contract?.price_actionability?.is_price_actionable === true;
+  const isActionable = contract?.is_actionable === true;
+  const ok = status === 'review_entry' && ['long', 'short'].includes(direction) && isActionable && healthOk && priceOk && priceStatus === 'entry_zone';
+  let reason = null;
+  if (ok) reason = 'paper_opened разрешён: REVIEW_ENTRY, свежая цена в entry-zone и contract_health=ok.';
+  else if (status !== 'review_entry') reason = `Paper-вход запрещён: текущий статус ${status || 'unknown'}, а paper_opened допустим только для REVIEW_ENTRY.`;
+  else if (!['long', 'short'].includes(direction)) reason = 'Paper-вход запрещён: нет торгового направления LONG/SHORT.';
+  else if (!isActionable) reason = 'Paper-вход запрещён: серверный контракт не помечен как actionable.';
+  else if (!healthOk) reason = 'Paper-вход запрещён: contract_health содержит ошибку или не подтверждён.';
+  else if (!priceOk || priceStatus !== 'entry_zone') reason = `Paper-вход запрещён: цена не в entry-zone (${priceStatus || 'unknown'}).`;
+  return { ok, reason, status, direction, priceStatus, healthOk, priceOk, isActionable };
+}
+
+function operatorActionBlockedReason(action, contract) {
+  if (action === 'paper_opened') return paperGateState(contract).ok ? null : paperGateState(contract).reason;
+  return null;
+}
+
+function operatorActionErrorMessage(action, resultOrError) {
+  const raw = String(resultOrError?.user_message || resultOrError?.error || resultOrError?.message || '').trim();
+  if (action !== 'paper_opened') return raw || 'Сервер не сохранил действие оператора.';
+  if (raw.includes('paper_opened_allowed_only_for_review_entry')) {
+    const match = raw.match(/current_status=([^\s;]+)/);
+    const status = match ? match[1] : 'unknown';
+    return `Paper-вход не сохранён: текущий серверный статус ${status}. Это защитный отказ; используйте «Ждать подтверждения», «Пропустить» или пересчитайте рекомендацию.`;
+  }
+  if (raw.includes('entry_zone')) return 'Paper-вход не сохранён: цена не прошла серверный entry-zone gate. Не догонять рынок; ждать ретест или пересчитать.';
+  if (raw.includes('contract_health')) return 'Paper-вход не сохранён: серверный contract_health не OK. Сначала устранить guardrail/данные.';
+  if (raw.includes('is_actionable')) return 'Paper-вход не сохранён: рекомендация не actionable по серверному контракту.';
+  return raw || 'Paper-вход не сохранён: серверный gate не разрешил действие.';
+}
+
+async function recalculateRecommendationsFromCurrentSelection() {
+  validateInputs({ requireSymbols: true });
+  const jobCount = Math.max(1, selectedSymbols().length) * Math.max(1, intervals().length);
+  showOperationStatus(`Выполняется: пересчет рекомендаций (${jobCount} symbol×interval job).`, 'busy');
+  const data = await api('/api/recommendations/recalculate', {
+    method: 'POST',
+    body: JSON.stringify({ category: $('category').value, symbols: selectedSymbols(), interval: primaryInterval(), intervals: intervals() }),
+  }, signalBuildTimeoutMs());
+  await refreshRank();
+  await refreshSignals();
+  await refreshStrategyLab();
+  await refreshRecommendationQuality();
+  return { ok: Boolean(data?.ok ?? true), status: 'recommendations_recalculated', result: data.result || data };
+}
+
 function operatorActionButtonsHtml(contract) {
-  const allowedActions = new Set(['skip', 'wait_confirmation', 'manual_review', 'close_invalidated', 'paper_opened']);
+  const allowedActions = new Set(['skip', 'wait_confirmation', 'manual_review', 'close_invalidated', 'paper_opened', 'recalculate']);
   const labels = {
     skip: 'Пропустить',
     wait_confirmation: 'Ждать подтверждения',
     manual_review: 'Взять в разбор',
     close_invalidated: 'Закрыть как неактуальную',
     paper_opened: 'Отметить paper-вход',
+    recalculate: 'Пересчитать',
   };
   const classes = {
     skip: 'ghost small',
@@ -1853,14 +1907,9 @@ function operatorActionButtonsHtml(contract) {
     manual_review: 'secondary small',
     close_invalidated: 'danger small',
     paper_opened: 'primary small',
+    recalculate: 'secondary small',
   };
-  const status = String(contract?.recommendation_status || '').toLowerCase();
-  const direction = String(contract?.trade_direction || '').toLowerCase();
-  const priceStatus = String(contract?.price_status || contract?.price_actionability?.price_status || '').toLowerCase();
-  const healthOk = contract?.contract_health?.ok === true;
-  const priceOk = contract?.price_actionability?.is_price_actionable === true;
-  const isActionable = contract?.is_actionable === true;
-  const paperGateOk = status === 'review_entry' && ['long', 'short'].includes(direction) && isActionable && healthOk && priceOk && priceStatus === 'entry_zone';
+  const paperGateOk = paperGateState(contract).ok;
   const primaryAction = contract?.primary_next_action?.action || '';
   const source = Array.isArray(contract?.next_actions) && contract.next_actions.length
     ? contract.next_actions
@@ -1979,16 +2028,25 @@ function operatorActionPayload(action, candidate) {
 }
 
 async function postOperatorAction(action) {
-  const allowedActions = new Set(['skip', 'wait_confirmation', 'manual_review', 'close_invalidated', 'paper_opened']);
+  const allowedActions = new Set(['skip', 'wait_confirmation', 'manual_review', 'close_invalidated', 'paper_opened', 'recalculate']);
   if (!allowedActions.has(action)) throw new Error(`Неизвестное действие оператора: ${action}`);
+  if (action === 'recalculate') {
+    const result = await recalculateRecommendationsFromCurrentSelection();
+    state.lastOperatorAction = `${compactDateTime(new Date().toISOString())}: рекомендации пересчитаны`;
+    renderTicket(selectedCandidate());
+    return result;
+  }
   const candidate = selectedCandidate();
+  const contract = candidate?.recommendation || candidate;
+  const blockedReason = operatorActionBlockedReason(action, contract);
+  if (blockedReason) throw new Error(blockedReason);
   const payload = operatorActionPayload(action, candidate);
   const category = encodeURIComponent($('category')?.value || 'linear');
   const result = await api(`/api/recommendations/${encodeURIComponent(payload.signalId)}/operator-action?category=${category}`, {
     method: 'POST',
     body: JSON.stringify(payload.body),
   });
-  if (!result?.ok) throw new Error(result?.error || 'Сервер не сохранил действие оператора.');
+  if (!result?.ok) throw new Error(operatorActionErrorMessage(action, result));
   const actionLabels = {
     skip: 'пропуск сохранён',
     wait_confirmation: 'ожидание подтверждения сохранено',
@@ -2712,7 +2770,7 @@ function bindControls() {
     const action = button.dataset.operatorAction;
     await runOperation(`Действие оператора: ${action}`, async () => {
       const result = await postOperatorAction(action);
-      if (action === 'close_invalidated' || result?.status === 'rejected_by_server_gate') {
+      if (['close_invalidated', 'recalculate'].includes(action) || result?.status === 'rejected_by_server_gate') {
         await refreshRank();
         await refreshSignals();
       }
