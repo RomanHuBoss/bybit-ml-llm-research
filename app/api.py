@@ -67,7 +67,7 @@ from .llm import LLMUnavailable, market_brief
 from .llm_background import background_evaluator, evaluation_summary, latest_evaluations
 from .operator_queue import consolidate_operator_queue
 from .recommendation import annotate_recommendations, ensure_operator_decisions
-from .trade_contract import COMPATIBLE_EXTENSIONS, DECISION_SOURCE, MARKET_FRESHNESS_EXTENSION, OPERATOR_ACTION_SERVER_GATE_EXTENSION, OPERATOR_CHECKLIST_EXTENSION, RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
+from .trade_contract import COMPATIBLE_EXTENSIONS, DECISION_SOURCE, MARKET_FRESHNESS_EXTENSION, OPERATOR_ACTION_SERVER_GATE_EXTENSION, OPERATOR_CHECKLIST_EXTENSION, OPERATOR_RISK_DISCLOSURE_EXTENSION, RECOMMENDATION_CONTRACT_VERSION, no_trade_decision_snapshot
 from .recommendation_outcomes import evaluate_due_recommendation_outcomes
 from .research import rank_candidates, rank_candidates_multi
 from .safety import annotate_and_filter_fresh_signals
@@ -315,6 +315,7 @@ def _recommendation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "contract": RECOMMENDATION_CONTRACT_VERSION,
         "previous_contract": "recommendation_v38",
         "ui_contract_extension": OPERATOR_CHECKLIST_EXTENSION,
+        "risk_disclosure_extension": OPERATOR_RISK_DISCLOSURE_EXTENSION,
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
     }
 
@@ -370,7 +371,7 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
             "entry", "stop_loss", "take_profit",
             "risk_pct", "expected_reward_pct", "risk_reward", "net_risk_reward", "confidence_score",
             "expires_at", "checked_at", "ttl_status", "ttl_seconds_left",
-            "recommendation_explanation", "signal_breakdown", "operator_checklist",
+            "recommendation_explanation", "signal_breakdown", "operator_checklist", "operator_risk_disclosures",
             "price_actionability", "market_freshness", "last_price_age_seconds", "contract_health", "decision_source", "frontend_may_recalculate",
             "intrabar_execution_model", "same_bar_stop_first_reason",
             "signal_breakdown.outcome_quality",
@@ -388,6 +389,9 @@ def _recommendation_contract_metadata() -> dict[str, Any]:
         "market_freshness_audit_view": "v_recommendation_integrity_audit_v48",
         "operator_action_gate_extension": OPERATOR_ACTION_SERVER_GATE_EXTENSION,
         "operator_action_audit_view": "v_recommendation_integrity_audit_v51",
+        "operator_risk_disclosure_extension": OPERATOR_RISK_DISCLOSURE_EXTENSION,
+        "operator_risk_disclosure_policy": "each outbound recommendation must explain advisory-only mode, confidence semantics, manual price/liquidity checks and blockers",
+        "operator_risk_audit_view": "v_recommendation_integrity_audit_v52",
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
         "frontend_may_recalculate": False,
         "frontend_rule": "render only server-enriched recommendation contract fields; do not recompute final trade direction or risk math on the client",
@@ -1956,7 +1960,7 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
             integrity = []
             # Backward-compatible fallback keeps the historic V40 audit contract available.
             # Static contract test anchor: FROM v_recommendation_integrity_audit_v40
-            for audit_view in ("v_recommendation_integrity_audit_v51", "v_recommendation_integrity_audit_v48", "v_recommendation_integrity_audit_v47", "v_recommendation_integrity_audit_v46", "v_recommendation_integrity_audit_v45", "v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
+            for audit_view in ("v_recommendation_integrity_audit_v52", "v_recommendation_integrity_audit_v51", "v_recommendation_integrity_audit_v48", "v_recommendation_integrity_audit_v47", "v_recommendation_integrity_audit_v46", "v_recommendation_integrity_audit_v45", "v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
                 try:
                     integrity = fetch_all(
                         f"""

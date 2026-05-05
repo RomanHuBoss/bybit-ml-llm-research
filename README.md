@@ -26,7 +26,7 @@ app/backtest_background.py Фоновый backtest evidence
 app/db.py                 PostgreSQL helpers с ленивым импортом драйвера
 sql/schema.sql            PostgreSQL schema
 tests/                    Unit/static/integration regression tests
-docs/                     Отчеты аудита и эксплуатационные заметки, включая V46 actionability audit
+docs/                     Отчеты аудита и эксплуатационные заметки, включая V46/V52 actionability и risk-disclosure audit
 ```
 
 ## Технологии
@@ -175,6 +175,7 @@ node --check frontend/app.js
 - V46 server actionability: `REVIEW_ENTRY`/`RESEARCH_CANDIDATE` демотируются в `missed_entry`/`wait`, если цена не в `entry_zone` или текущая цена неизвестна.
 - V49 operator cockpit: DOM без дублирующихся id, единичный trade-ticket, скрытый legacy market-context mirror, компактная очередь без повторного вывода entry/SL/TP и paper-action без автоматической торговли.
 - V51 operator action gate: `paper_opened` повторно проверяется backend и БД; unsafe paper-входы по blocked/missed/stale контрактам отклоняются сервером.
+- V52 operator risk disclosure: каждый server-owned recommendation contract содержит `operator_risk_disclosures`; frontend показывает дисклеймеры рядом с trade ticket, а legacy `paper_trades` защищены CHECK-ограничениями LONG/SHORT/flat и audit-view `v_recommendation_integrity_audit_v52`.
 
 ## Торговая логика
 
@@ -245,7 +246,7 @@ Hard-veto срабатывает при:
 
 Синхронный режим сохранен только для CLI/малых диагностических прогонов: `POST /api/strategies/quality/refresh?wait=true&limit=10`. Любой refresh ограничен `STRATEGY_QUALITY_REFRESH_LIMIT` и soft-budget `STRATEGY_QUALITY_REFRESH_TIME_BUDGET_SEC`; при превышении бюджета возвращается `partial=true`, а UI показывает `refresh running/done/error/partial` вместо неинформативного `API timeout after 45s`.
 
-## Recommendation API V40/V43/V44/V45/V46/V51
+## Recommendation API V40/V43/V44/V45/V46/V51/V52
 
 Канонические endpoints для витрины оператора:
 
@@ -258,7 +259,7 @@ Hard-veto срабатывает при:
 История похожих сигналов не используется как точная вероятность прибыли текущей сделки. Это отдельный evidence-слой, который показывает размер выборки и качество похожих завершённых рекомендаций.
 
 
-### Recommendation API V40/V43/V44/V45/V46/V51/V47/V48 additions
+### Recommendation API V40/V43/V44/V45/V46/V51/V52/V47/V48 additions
 
 - `contract_version = recommendation_v40`.
 - `contract_health` в каждой рекомендации показывает, прошёл ли outbound-контракт серверные guardrails.
@@ -362,6 +363,7 @@ UI реализует состояния loading, empty, error, stale data, API 
 - Для спорного рынка безопаснее показать `NO_TRADE` с причиной конфликта, чем выбирать между LONG/SHORT по случайному порядку обновления evidence.
 - При одновременном касании SL и TP внутри одной OHLC-свечи безопаснее считать SL-first, чем завышать качество стратегии за счет недоказуемого TP-first.
 - Если цена вышла из `entry_zone`, безопаснее демотировать directional review в `NO_TRADE/WAIT`, чем позволить оператору догонять рынок по устаревшей зоне входа.
+- `confidence_score` — инженерный скоринг качества сетапа, а не точная вероятность прибыли; это явно возвращается backend и показывается во frontend в `operator_risk_disclosures`.
 
 ## Известные ограничения
 
@@ -396,6 +398,23 @@ V51 закрывает критичный разрыв между frontend UX и
 - frontend сообщает, что paper-вход повторно проверяется сервером, а `manual_review` остается доступным даже для blocked/research сетапов, потому что ручной разбор не является входом.
 
 Практическое правило V51: невозможно зафиксировать paper-вход через API, если серверный recommendation contract не разрешил actionable ручную проверку входа.
+
+## V52: operator risk disclosure и целостность legacy paper trades
+
+V52 закрывает два оставшихся риска советующей системы: оператор мог видеть сильный-looking сигнал без структурированного предупреждения о природе рекомендации, а legacy-таблица `paper_trades` могла принять математически невозможную бумажную сделку как аналитический факт.
+
+Что изменено:
+
+- `app/trade_contract.py` добавляет совместимое расширение `operator_risk_disclosure_v52` и поле `operator_risk_disclosures` в каждый outbound `recommendation` contract;
+- каждый контракт явно сообщает, что система не отправляет ордера на Bybit, `confidence_score` не является вероятностью прибыли, а перед входом нужен ручной контроль цены, spread, ликвидности и новостного риска;
+- для `NO_TRADE`, blocked, expired, stale, invalid и missing-TTL состояний disclosure получает `blocks_entry=true`, чтобы UI не оставлял двусмысленности;
+- empty/no-signal state теперь тоже имеет канонический `NO_TRADE` snapshot с risk disclosure, а не только пустой список;
+- frontend показывает блок `Risk disclosure` в деталях trade ticket и no-trade snapshot; если серверный `recommendation` contract отсутствует, UI помечает это как красный guardrail и не строит торговые выводы из legacy-полей;
+- `sql/migrations/20260505_v52_operator_risk_disclosure_and_paper_trade_integrity.sql` добавляет CHECK-ограничения `ck_paper_trades_direction_v52`, `ck_paper_trades_positive_numbers_v52`, `ck_paper_trades_level_side_v52`, индекс `idx_paper_trades_advisory_audit_v52` и audit-view `v_recommendation_integrity_audit_v52`;
+- `/api/recommendations/contract` публикует `operator_risk_disclosure_extension` и `operator_risk_audit_view`; `/api/system/warnings` сначала проверяет V52 audit-view.
+
+Практическое правило V52: frontend не имеет права превращать legacy/raw поля в торговую рекомендацию. Если сервер не вернул полный contract с disclosure/checklist/health, оператор видит защитное состояние и должен обновить данные или проверить backend.
+
 
 ## Риск-дисклеймер
 

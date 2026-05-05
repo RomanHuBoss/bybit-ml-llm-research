@@ -439,6 +439,11 @@ function contractFor(s) {
   return s?.recommendation && typeof s.recommendation === 'object' ? s.recommendation : (s || {});
 }
 
+function hasServerRecommendationContract(s) {
+  const contract = s?.recommendation;
+  return Boolean(contract && typeof contract === 'object' && contract.frontend_may_recalculate === false && contract.decision_source);
+}
+
 function contractValue(s, key) {
   const contract = contractFor(s);
   return contract?.[key] ?? s?.[key];
@@ -613,6 +618,7 @@ function enrichedSignal(signal) {
 
 function levelsProblem(s) {
   const contract = contractFor(s);
+  if (s && !hasServerRecommendationContract(s)) return 'server_contract_missing';
   if (contract.level_validation?.valid === true) return null;
   if (contract.level_validation?.valid === false) return contract.level_validation.reason || 'invalid_levels';
   const entry = num(contractValue(s, 'entry'));
@@ -646,6 +652,7 @@ function levelsProblemText(code) {
     short_levels_not_ordered: 'для SHORT требуется TP < entry < SL',
     invalid_direction: 'направление не является LONG/SHORT',
     invalid_levels: 'сервер отклонил уровни сделки',
+    server_contract_missing: 'нет серверного recommendation contract',
   }[code] || 'уровни не прошли проверку';
 }
 
@@ -1053,6 +1060,22 @@ function baseChecklistFor(s) {
   if (!s) return [];
   const serverChecklist = serverChecklistFor(s);
   if (serverChecklist.length) return serverChecklist;
+  if (!hasServerRecommendationContract(s)) {
+    return [
+      {
+        key: 'server_contract_missing',
+        status: 'fail',
+        title: 'Фронт не получил серверный recommendation contract',
+        text: 'Frontend v40 не строит торговые guardrails из legacy-полей; V52 добавляет risk disclosure. Обновите /api/recommendations/active или проверьте backend contract enrichment.',
+      },
+      {
+        key: 'advisory_only',
+        status: 'pass',
+        title: 'Автоматическая торговля отключена',
+        text: 'Даже при восстановлении контракта UI только показывает рекомендацию; ордера не отправляются.',
+      },
+    ];
+  }
   const rr = riskReward(s);
   const hasSpread = hasNumber(s.spread_pct);
   const spread = num(s.spread_pct, null);
@@ -1135,6 +1158,7 @@ function noTradeSnapshotHtml() {
         <div><span>Confidence</span><b>${escapeHtml(String(snapshot.confidence_score ?? 0))}/100</b></div>
       </div>
       ${blockers.length ? `<ul class="no-trade-contract__reasons">${blockers.slice(0, 4).map((item) => `<li><b>${escapeHtml(item.title || item.code || 'Блокер')}</b><span>${escapeHtml(item.detail || '')}</span></li>`).join('')}</ul>` : ''}
+      ${riskDisclosuresHtml(snapshot.operator_risk_disclosures || [])}
       ${next.length ? `<div class="no-trade-contract__actions">${next.slice(0, 3).map((item) => `<span title="${escapeHtml(item.detail || '')}">${escapeHtml(item.label || item.action || 'Действие')}</span>`).join('')}</div>` : ''}
     </article>`;
 }
@@ -1448,7 +1472,7 @@ function algorithmDecisionFor(s) {
     label: 'НЕТ ВХОДА',
     score: 0,
     title: `${s.symbol}: нет серверного recommendation contract`,
-    subtitle: 'Frontend v40 не пересчитывает торговое решение, risk/reward и actionability. V46 требует server price gate: без /api/recommendations/active вход запрещён.',
+    subtitle: 'Frontend v40 не пересчитывает торговое решение, risk/reward и actionability. V52 дополнительно требует operator risk disclosure; без server-enriched /api/recommendations/active вход запрещён.',
   };
 }
 
@@ -1753,6 +1777,21 @@ function outcomeContractHtml(outcome) {
   </div>`;
 }
 
+
+function riskDisclosuresHtml(items) {
+  if (!Array.isArray(items) || !items.length) {
+    return '<p class="muted-line">Сервер не передал risk disclosure. Вход запрещён до восстановления контракта.</p>';
+  }
+  return `<div class="risk-disclosure-list">${items.slice(0, 8).map((item) => {
+    const severity = cssToken(item.severity || (item.blocks_entry ? 'critical' : 'warning'), 'warning');
+    const blocks = item.blocks_entry ? '<span class="risk-disclosure-blocks">блокирует вход</span>' : '';
+    return `<div class="risk-disclosure-item ${escapeHtml(severity)}">
+      <b>${escapeHtml(item.title || item.code || 'Risk disclosure')}</b>${blocks}
+      <p>${escapeHtml(item.text || item.detail || '')}</p>
+    </div>`;
+  }).join('')}</div>`;
+}
+
 function contractHealthHtml(health) {
   if (!health) return '<p class="muted-line">Contract health не передан сервером.</p>';
   const level = cssToken(health.level || (health.ok ? 'ok' : 'warn'), 'warn');
@@ -1934,6 +1973,7 @@ function renderTicket(s) {
       <section class="detail-card"><b>Loss quarantine</b>${outcomeQualityHtml(contract)}</section>
       <section class="detail-card"><b>Исход рекомендации</b>${outcomeContractHtml(contract.outcome)}</section>
       <section class="detail-card"><b>Guardrails контракта</b>${contractHealthHtml(contract.contract_health)}<small>Уровни берутся из nested recommendation contract: entry ${priceFmt(contract.entry)}, SL ${priceFmt(contract.stop_loss)}, TP ${priceFmt(contract.take_profit)}.</small></section>
+      <section class="detail-card warn"><b>Risk disclosure</b>${riskDisclosuresHtml(contract.operator_risk_disclosures || [])}</section>
       <section class="detail-card wide"><b>Серверный чек-лист</b>${checklistHtml(serverChecklistFor(s).length ? serverChecklistFor(s) : checklistFor(s, { includeLlm: false }))}</section>
       <section class="detail-card wide"><b>История похожих сигналов</b>${similarHistoryHtml(state.similarHistory, s.id)}</section>
       <section class="detail-card wide"><b>Индикаторы</b>${indicatorValuesHtml(contract.indicator_values || {})}</section>

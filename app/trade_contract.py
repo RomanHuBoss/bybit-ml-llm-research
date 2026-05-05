@@ -15,6 +15,7 @@ INTRABAR_EXECUTION_MODEL = "conservative_ohlc_stop_loss_first"
 OPERATOR_CHECKLIST_EXTENSION = "operator_checklist_v47"
 MARKET_FRESHNESS_EXTENSION = "market_price_freshness_v48"
 OPERATOR_ACTION_SERVER_GATE_EXTENSION = "operator_action_server_gate_v51"
+OPERATOR_RISK_DISCLOSURE_EXTENSION = "operator_risk_disclosure_v52"
 COMPATIBLE_EXTENSIONS = [
     "market_data_integrity_v44",
     "quality_segments_v44",
@@ -23,6 +24,7 @@ COMPATIBLE_EXTENSIONS = [
     OPERATOR_CHECKLIST_EXTENSION,
     MARKET_FRESHNESS_EXTENSION,
     OPERATOR_ACTION_SERVER_GATE_EXTENSION,
+    OPERATOR_RISK_DISCLOSURE_EXTENSION,
 ]
 SAME_BAR_STOP_FIRST_REASON = "stop_loss_same_bar_ambiguous"
 REVIEW_ACTIONS = {"REVIEW_ENTRY"}
@@ -262,6 +264,95 @@ def price_freshness(row: dict[str, Any], expires_at: datetime | None, levels: di
         "last_price_age_seconds": freshness.get("age_seconds"),
         "last_price_max_age_seconds": freshness.get("max_age_seconds"),
     }
+
+
+def operator_risk_disclosures(
+    row: dict[str, Any],
+    status: str,
+    trade_direction: str,
+    levels: dict[str, Any],
+    price: dict[str, Any],
+    ttl: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Структурированные предупреждения для оператора.
+
+    Это часть серверного контракта, а не декоративный текст UI. Браузер обязан
+    показать эти предупреждения рядом с рекомендацией, чтобы оператор не путал
+    engineering confidence с вероятностью прибыли и не воспринимал REVIEW_ENTRY
+    как автоматический приказ.
+    """
+    disclosures: list[dict[str, Any]] = [
+        {
+            "code": "advisory_only_no_auto_orders",
+            "severity": "critical",
+            "blocks_entry": False,
+            "title": "Система советующая",
+            "text": "Backend не отправляет ордера на Bybit. Любой вход возможен только после ручной проверки оператором.",
+        },
+        {
+            "code": "confidence_not_win_probability",
+            "severity": "warning",
+            "blocks_entry": False,
+            "title": "Confidence не является вероятностью прибыли",
+            "text": "confidence_score — инженерный скоринг качества сетапа с учетом фильтров, а не обещанная вероятность TP.",
+        },
+        {
+            "code": "manual_price_liquidity_check_required",
+            "severity": "warning",
+            "blocks_entry": False,
+            "title": "Перед входом нужен контроль цены и стакана",
+            "text": "Оператор должен сверить текущую цену, spread, проскальзывание, ликвидность и отсутствие новостного импульса.",
+        },
+    ]
+
+    if status != "review_entry" or trade_direction not in {DIRECTION_LONG, DIRECTION_SHORT}:
+        disclosures.append({
+            "code": "not_actionable_no_trade",
+            "severity": "critical",
+            "blocks_entry": True,
+            "title": "Вход сейчас запрещён",
+            "text": f"Текущий серверный статус: {status}. Открывать сделку нельзя; допустимы только ожидание, пропуск или пересчет.",
+        })
+
+    if not levels.get("valid"):
+        disclosures.append({
+            "code": "invalid_trade_levels",
+            "severity": "critical",
+            "blocks_entry": True,
+            "title": "Уровни сделки невалидны",
+            "text": f"Причина проверки уровней: {levels.get('reason') or 'unknown'}. Entry/SL/TP нельзя использовать для ручного входа.",
+        })
+
+    freshness = price.get("market_freshness") if isinstance(price.get("market_freshness"), dict) else {}
+    if price.get("is_stale") is True or freshness.get("is_stale") is True:
+        disclosures.append({
+            "code": "stale_reference_price",
+            "severity": "critical",
+            "blocks_entry": True,
+            "title": "Reference price устарела",
+            "text": f"Price freshness: {freshness.get('reason') or price.get('price_status') or 'stale'}. Требуется пересчет перед любым действием.",
+        })
+
+    if ttl.get("is_expired") is True or ttl.get("status") in {"expired", "missing"}:
+        disclosures.append({
+            "code": "ttl_not_active",
+            "severity": "critical",
+            "blocks_entry": True,
+            "title": "Срок актуальности не активен",
+            "text": f"TTL status: {ttl.get('status') or 'missing'}. Рекомендация не должна использоваться для входа.",
+        })
+
+    stats = statistics_confidence(row)
+    if stats.get("level") in {"none", "low"}:
+        disclosures.append({
+            "code": "low_statistical_confidence",
+            "severity": "warning",
+            "blocks_entry": False,
+            "title": "Историческая выборка мала",
+            "text": str(stats.get("explanation") or "Недостаточно завершённых похожих сигналов для высокой статистической уверенности."),
+        })
+
+    return disclosures
 
 
 def price_actionability(
@@ -916,6 +1007,7 @@ def enrich_recommendation_row(row: dict[str, Any], *, now: datetime | None = Non
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
+        "operator_risk_disclosures": operator_risk_disclosures(row, status, trade_direction, levels, price, ttl),
         "position_sizing": sizing,
         "level_validation": {"valid": levels.get("valid"), "reason": levels.get("reason")},
         "price_status": price.get("price_status"),
@@ -968,6 +1060,7 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
         "entry", "stop_loss", "take_profit", "expires_at",
         "risk_pct", "expected_reward_pct", "risk_reward",
         "recommendation_explanation", "price_actionability", "signal_breakdown", "operator_checklist",
+        "operator_risk_disclosures",
     )
     problems: list[dict[str, str]] = []
     status = str(contract.get("recommendation_status") or "").lower()
@@ -1012,6 +1105,11 @@ def contract_health(contract: dict[str, Any]) -> dict[str, Any]:
         factors_against = contract.get("factors_against")
         if not isinstance(factors_for, list) or not isinstance(factors_against, list):
             problems.append({"code": "factor_arrays_missing", "level": "error", "message": "Recommendation explanation factors must be structured arrays."})
+        disclosures = contract.get("operator_risk_disclosures")
+        if not isinstance(disclosures, list) or not disclosures:
+            problems.append({"code": "operator_risk_disclosures_missing", "level": "error", "message": "Operator risk disclosures are required so the UI can show advisory-only and confidence semantics warnings."})
+        elif not any(isinstance(item, dict) and item.get("code") == "advisory_only_no_auto_orders" for item in disclosures):
+            problems.append({"code": "advisory_only_disclosure_missing", "level": "error", "message": "Every recommendation contract must explicitly disclose that the system does not send orders."})
         checklist = contract.get("operator_checklist")
         if not isinstance(checklist, list) or not checklist:
             problems.append({"code": "operator_checklist_missing", "level": "error", "message": "Server-owned operator checklist is required so frontend does not recompute trade gates."})
@@ -1069,6 +1167,22 @@ def no_trade_decision_snapshot(*, reason: str, category: str | None = None, as_o
         "intrabar_execution_model": INTRABAR_EXECUTION_MODEL,
         "same_bar_stop_first_reason": SAME_BAR_STOP_FIRST_REASON,
         "compatible_extensions": COMPATIBLE_EXTENSIONS,
+        "operator_risk_disclosures": [
+            {
+                "code": "advisory_only_no_auto_orders",
+                "severity": "critical",
+                "blocks_entry": False,
+                "title": "Система советующая",
+                "text": "Backend не отправляет ордера на Bybit; пустой список рекомендаций означает защитное NO_TRADE-состояние.",
+            },
+            {
+                "code": "no_active_recommendation",
+                "severity": "critical",
+                "blocks_entry": True,
+                "title": "Нет активной рекомендации",
+                "text": reason,
+            },
+        ],
         "price_status": "no_setup",
         "last_price": None,
         "last_price_time": None,
