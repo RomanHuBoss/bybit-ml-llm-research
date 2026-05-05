@@ -1926,7 +1926,7 @@ WITH latest_price AS (
     SELECT s.*, lp.last_price, lp.last_price_time,
            ABS(lp.last_price::numeric - s.entry::numeric) / NULLIF(s.entry, 0)::numeric AS price_drift_pct,
            CASE WHEN s.entry IS NOT NULL AND s.entry > 0 AND s.atr IS NOT NULL THEN s.atr::numeric / s.entry::numeric END AS atr_pct,
-           CASE WHEN s.entry IS NOT NULL AND s.entry > 0 AND s.stop_loss IS NOT NULL THEN ABS(s.entry::numeric - s.stop_loss::numeric) / s.entry::numeric END AS risk_pct
+           CASE WHEN s.entry IS NOT NULL AND s.entry > 0 AND s.stop_loss IS NOT NULL THEN ABS(s.entry::numeric - s.stop_loss::numeric) / s.entry::numeric END AS calc_risk_pct
     FROM signals s
     LEFT JOIN latest_price lp
       ON lp.category=s.category AND lp.symbol=s.symbol AND lp.interval=s.interval
@@ -1978,10 +1978,10 @@ WHERE entry IS NULL OR stop_loss IS NULL OR take_profit IS NULL
 UNION ALL
 SELECT id, category, symbol, interval, strategy, direction,
        'extreme_atr_distance_v53', 'warn',
-       jsonb_build_object('atr_pct', atr_pct, 'risk_pct', risk_pct)::text,
+       jsonb_build_object('atr_pct', atr_pct, 'risk_pct', calc_risk_pct)::text,
        created_at
 FROM active_directional
-WHERE atr_pct > 0.18 OR risk_pct > 0.15
+WHERE atr_pct > 0.18 OR calc_risk_pct > 0.15
 UNION ALL
 SELECT id, category, symbol, interval, strategy, direction,
        'unexplained_directional_payload_v53', 'warn',
