@@ -18,3 +18,11 @@
 ## Принятое допущение
 
 Frontend не рассчитывает торговую математику. Он только отображает server-owned recommendation contract и превращает серверные статусы в человекочитаемое действие.
+
+## Hotfix 2026-05-06: SQL compatibility
+
+При проверке реального применения миграции V57 выявлен дефект совместимости схемы: audit-view ошибочно ссылалась на несуществующие поля `signals.signal_score` и `signals.active`. Исправлено:
+
+- `signal_score` удалён из CTE, потому что view не использует это поле;
+- активность рекомендации определяется так же, как в существующем контракте проекта: `direction IN ('long','short')`, `bar_time IS NOT NULL`, `expires_at > NOW()` и отсутствие terminal outcome в `recommendation_outcomes`;
+- добавлены regression-assertions, запрещающие возвращение `signal_score` и `active IS TRUE` в V57 migration.

@@ -2099,9 +2099,20 @@ SELECT
 -- которые нельзя понятно показать оператору без догадок на фронте.
 CREATE OR REPLACE VIEW v_operator_decision_first_ui_contract_v57 AS
 WITH active_directional AS (
-    SELECT id, category, symbol, interval, strategy, direction, signal_score, confidence, entry, stop_loss, take_profit, risk_reward, expires_at, rationale, created_at
-    FROM signals
-    WHERE active IS TRUE AND direction IN ('long', 'short')
+    SELECT s.id, s.category, s.symbol, s.interval, s.strategy, s.direction,
+           s.confidence, s.entry, s.stop_loss, s.take_profit, s.risk_reward,
+           s.expires_at, s.rationale, s.created_at
+    FROM signals s
+    WHERE s.direction IN ('long', 'short')
+      AND s.bar_time IS NOT NULL
+      AND s.expires_at IS NOT NULL
+      AND s.expires_at > NOW()
+      AND NOT EXISTS (
+          SELECT 1
+          FROM recommendation_outcomes o
+          WHERE o.signal_id = s.id
+            AND o.outcome_status <> 'open'
+      )
 )
 SELECT id, category, symbol, interval, strategy, direction,
        'operator_explanation_missing_v57'::text AS issue_code,

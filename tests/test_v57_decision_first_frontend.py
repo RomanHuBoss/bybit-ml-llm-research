@@ -42,3 +42,7 @@ def test_v57_backend_and_sql_expose_operator_ui_audit_contract():
     assert "operator_explanation_missing_v57" in migration
     assert "operator_next_action_missing_v57" in migration
     assert "operator_signal_breakdown_missing_v57" in migration
+
+    assert "signal_score" not in migration
+    assert "active IS TRUE" not in migration
+    assert "recommendation_outcomes" in migration
