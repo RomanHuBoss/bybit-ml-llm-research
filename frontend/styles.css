@@ -2533,3 +2533,99 @@ th[data-sort].sort-active[aria-sort="ascending"]::after { content: "↑"; }
 .ticket-operator-actions .operator-primary-action {
   box-shadow: 0 0 0 1px rgba(99, 179, 237, 0.28), 0 10px 24px rgba(15, 23, 42, 0.24);
 }
+
+
+/* V57 operator decision-first cockpit: главный экран сначала отвечает, что делать оператору. */
+.operator-cockpit-v57 .next-action-chip {
+  border-color: rgba(84, 163, 255, 0.34);
+  background: rgba(84, 163, 255, 0.13);
+  color: var(--text);
+}
+.operator-cockpit-v57 .next-action-chip.long,
+.operator-cockpit-v57 .decision-brief-panel.long { border-color: rgba(0, 227, 140, 0.34); }
+.operator-cockpit-v57 .next-action-chip.short,
+.operator-cockpit-v57 .decision-brief-panel.short { border-color: rgba(255, 77, 109, 0.36); }
+.operator-cockpit-v57 .next-action-chip.watch,
+.operator-cockpit-v57 .decision-brief-panel.watch,
+.operator-cockpit-v57 .decision-brief-panel.research { border-color: rgba(245, 185, 66, 0.38); }
+.operator-cockpit-v57 .next-action-chip.reject,
+.operator-cockpit-v57 .decision-brief-panel.reject { border-color: rgba(255, 77, 109, 0.42); }
+.operator-cockpit-v57 .decision-brief-panel {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(5, 9, 18, 0.94)),
+    radial-gradient(circle at 92% 12%, rgba(84, 163, 255, 0.13), transparent 28%);
+}
+.operator-cockpit-v57 .decision-brief-main h2 {
+  margin: 0 0 6px;
+  font-size: clamp(26px, 3vw, 42px);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+}
+.operator-cockpit-v57 .decision-brief-main p { margin: 0; color: var(--muted); line-height: 1.45; }
+.operator-cockpit-v57 .decision-brief-strip {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(84px, 1fr));
+  gap: 8px;
+}
+.operator-cockpit-v57 .decision-brief-strip > div {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--stroke);
+  border-radius: 15px;
+  background: rgba(2, 6, 23, 0.42);
+}
+.operator-cockpit-v57 .decision-brief-strip span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted-2);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+}
+.operator-cockpit-v57 .decision-brief-strip b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.operator-cockpit-v57 .decision-brief-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.operator-cockpit-v57 .brief-warning { color: var(--amber); font-size: 12px; line-height: 1.35; }
+.operator-cockpit-v57 .decision-details-dialog {
+  width: min(1180px, calc(100vw - 34px));
+  max-height: min(880px, calc(100vh - 34px));
+  border: 1px solid var(--stroke-strong);
+  border-radius: 24px;
+  color: var(--text);
+  background: rgba(8, 13, 25, 0.98);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
+}
+.operator-cockpit-v57 .decision-details-dialog::backdrop { background: rgba(2, 6, 23, 0.72); backdrop-filter: blur(8px); }
+.operator-cockpit-v57 .decision-details-dialog form { padding: 20px; }
+.operator-cockpit-v57 .decision-detail-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.operator-cockpit-v57 .decision-detail-section { display: grid; gap: 12px; }
+.operator-cockpit-v57 .decision-detail-section h3 { margin: 0; font-size: 22px; }
+.operator-cockpit-v57 .decision-detail-section h4 { margin: 8px 0 0; color: var(--muted); }
+.operator-cockpit-v57 .details-table-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--stroke); border-radius: 16px; }
+.operator-cockpit-v57 .details-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.operator-cockpit-v57 .details-table th { position: sticky; top: 0; background: rgba(15, 23, 42, 0.98); color: var(--muted); text-align: left; z-index: 1; }
+.operator-cockpit-v57 .details-table th,
+.operator-cockpit-v57 .details-table td { padding: 9px 10px; border-bottom: 1px solid var(--stroke); vertical-align: top; }
+.operator-cockpit-v57 .modal-strip { grid-template-columns: repeat(6, minmax(90px, 1fr)); }
+@media (max-width: 1440px) {
+  .operator-cockpit-v57 .decision-brief-strip { grid-template-columns: repeat(4, minmax(90px, 1fr)); }
+}
+@media (max-width: 720px) {
+  .operator-cockpit-v57 .decision-brief-strip,
+  .operator-cockpit-v57 .modal-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .operator-cockpit-v57 .decision-brief-footer { align-items: stretch; flex-direction: column; }
+}

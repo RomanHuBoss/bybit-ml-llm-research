@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>Bybit Research Lab — Operator Trading Cockpit</title>
-  <link rel="stylesheet" href="/static/styles.css?v=trading-cockpit-v50" />
-  <!-- legacy cache marker: trading-cockpit-v39 -->
+  <link rel="stylesheet" href="/static/styles.css?v=trading-cockpit-v57" />
+  <!-- legacy cache marker: trading-cockpit-v39; active cache marker: trading-cockpit-v57; compatibility markers: styles.css?v=trading-cockpit-v50 app.js?v=trading-cockpit-v50 -->
 </head>
-<body class="trading-terminal dark-mode terminal-pro compact-ui operator-cockpit-v49 operator-cockpit-v50 operator-cockpit-v52">
+<body class="trading-terminal dark-mode terminal-pro compact-ui operator-cockpit-v49 operator-cockpit-v50 operator-cockpit-v52 operator-cockpit-v57">
   <div class="app-frame">
     <nav class="side-nav" aria-label="Основная навигация">
       <div class="side-logo" aria-label="Bybit Research Lab">B</div>
@@ -39,6 +39,7 @@
           <span id="activeTimeframeChip" class="market-chip">TF —</span>
           <span id="lastUpdateChip" class="market-chip">Update —</span>
           <span id="modeChip" class="market-chip safe-mode" title="Система не отправляет ордера автоматически">LIVE OFF</span>
+          <span id="nextActionChip" class="market-chip next-action-chip">Next —</span>
         </section>
 
         <section class="top-status" aria-label="Состояние сервисов">
@@ -190,6 +191,28 @@
               </div>
             </article>
 
+            <article class="panel decision-brief-panel" id="decisionBriefPanel" aria-label="Короткое решение для оператора">
+              <div class="decision-brief-main">
+                <p class="eyebrow">Operator next action</p>
+                <h2 id="decisionBriefAction">Не входить</h2>
+                <p id="decisionBriefReason">Нет выбранной рекомендации. До восстановления данных вход запрещен.</p>
+              </div>
+              <div class="decision-brief-strip" aria-label="Ключевые торговые уровни">
+                <div><span>Инструмент</span><b id="briefSymbol">—</b></div>
+                <div><span>Dir</span><b id="briefDirection">NO TRADE</b></div>
+                <div><span>Entry</span><b id="briefEntry">—</b></div>
+                <div><span>SL</span><b id="briefStop">—</b></div>
+                <div><span>TP</span><b id="briefTake">—</b></div>
+                <div><span>R/R</span><b id="briefRr">—</b></div>
+                <div><span>Conf</span><b id="briefConfidence">—</b></div>
+                <div><span>TTL</span><b id="briefTtl">—</b></div>
+              </div>
+              <div class="decision-brief-footer">
+                <span id="briefWarnings" class="brief-warning">Серверный contract не выбран.</span>
+                <button type="button" id="openDecisionDetailsBtn" class="secondary small">Подробности решения</button>
+              </div>
+            </article>
+
             <article class="panel chart-panel execution-panel">
               <div class="panel-head compact-head chart-head">
                 <div><p class="eyebrow">Execution map</p><h2>Карта сделки / equity</h2></div>
@@ -314,6 +337,13 @@
     </div>
   </div>
 
+  <dialog id="decisionDetailsDialog" class="decision-details-dialog">
+    <form method="dialog">
+      <button type="submit" class="dialog-close" aria-label="Закрыть">×</button>
+      <div id="decisionDetailsBody" class="decision-details-body empty-state">Выберите рекомендацию.</div>
+    </form>
+  </dialog>
+
   <dialog id="helpDialog" class="help-dialog">
     <form method="dialog">
       <button type="submit" class="dialog-close" aria-label="Закрыть">×</button>
@@ -328,6 +358,6 @@
     </form>
   </dialog>
 
-  <script src="/static/app.js?v=trading-cockpit-v50"></script>
+  <script src="/static/app.js?v=trading-cockpit-v57"></script>
 </body>
 </html>

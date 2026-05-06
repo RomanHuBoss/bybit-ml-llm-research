@@ -2045,7 +2045,7 @@ def api_system_warnings(category: str = settings.default_category) -> dict[str, 
             integrity = []
             # Backward-compatible fallback keeps the historic V40 audit contract available.
             # Static contract test anchor: FROM v_recommendation_integrity_audit_v40
-            for audit_view in ("v_recommendation_market_context_audit_v53", "v_recommendation_integrity_audit_v52", "v_recommendation_integrity_audit_v51", "v_recommendation_integrity_audit_v48", "v_recommendation_integrity_audit_v47", "v_recommendation_integrity_audit_v46", "v_recommendation_integrity_audit_v45", "v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
+            for audit_view in ("v_operator_decision_first_ui_contract_v57", "v_recommendation_market_context_audit_v53", "v_recommendation_integrity_audit_v52", "v_recommendation_integrity_audit_v51", "v_recommendation_integrity_audit_v48", "v_recommendation_integrity_audit_v47", "v_recommendation_integrity_audit_v46", "v_recommendation_integrity_audit_v45", "v_recommendation_integrity_audit_v44", "v_recommendation_integrity_audit_v43", "v_recommendation_integrity_audit_v40"):
                 try:
                     integrity = fetch_all(
                         f"""

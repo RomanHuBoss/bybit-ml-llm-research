@@ -22,6 +22,7 @@ const state = {
   strategyQualityRefresh: null,
   qualityRefreshPollTimer: null,
   contextTab: 'risk',
+  detailTab: 'summary',
   entryInterval: '15',
   recommendationIntervals: ['15'],
   contextIntervals: ['60', '240'],
@@ -484,6 +485,124 @@ function hardVetoSummary(s) {
   const hard = checks.find((item) => item.status === 'fail');
   if (!hard) return { label: 'нет hard veto', reason: 'проверить желтые пункты', tone: 'ok' };
   return { label: 'hard veto', reason: hard.title, tone: 'error' };
+}
+
+
+function primaryNextActionFor(s, d = decisionFor(s)) {
+  const contract = contractFor(s);
+  const direction = String(contract.trade_direction || s?.direction || 'no_trade').toLowerCase();
+  const status = String(contract.recommendation_status || '').toLowerCase();
+  const priceGate = contract.price_actionability || {};
+  const hardVeto = hardVetoSummary(s);
+  const ttl = String(contract.ttl_status || '').toLowerCase();
+  if (!s) {
+    return { code: 'no_signal', label: 'Не входить', tone: 'reject', reason: 'Нет выбранной рекомендации. Без server contract оператор не должен открывать сделку.' };
+  }
+  if (hardVeto.tone === 'error') {
+    return { code: 'blocked', label: 'Не входить', tone: 'reject', reason: `Hard-veto: ${hardVeto.reason}.` };
+  }
+  if (ttl === 'expired') {
+    return { code: 'recalculate', label: 'Пересчитать', tone: 'watch', reason: 'TTL рекомендации истек. Нужен свежий пересчет до любого входа.' };
+  }
+  if (priceGate.is_price_actionable === false) {
+    return { code: 'wait_price', label: 'Ждать цену', tone: 'watch', reason: priceGate.reason || 'Текущая цена вне разрешенной зоны входа.' };
+  }
+  if (status === 'review_entry' && ['long', 'short'].includes(direction)) {
+    return { code: 'review_entry', label: `Ручная проверка ${direction.toUpperCase()}`, tone: direction, reason: contract.recommendation_explanation || d.subtitle || 'Сервер разрешил только ручную проверку, без автоматической торговли.' };
+  }
+  if (status === 'research_candidate') {
+    return { code: 'research', label: 'Research only', tone: 'research', reason: 'Сетап пригоден для анализа, но не для входа оператором.' };
+  }
+  if (d.level === 'watch' || status === 'wait') {
+    return { code: 'wait', label: 'Ждать подтверждения', tone: 'watch', reason: contract.recommendation_explanation || d.subtitle || 'Подтверждение входа неполное.' };
+  }
+  return { code: 'no_trade', label: 'Не входить', tone: 'reject', reason: contract.recommendation_explanation || d.subtitle || 'Сервер не выдал actionable-рекомендацию.' };
+}
+
+function compactWarningText(s, action) {
+  if (!s) return 'API/данные не выбраны; по умолчанию вход запрещен.';
+  const contract = contractFor(s);
+  const warnings = [];
+  if (!hasServerRecommendationContract(s)) warnings.push('нет полного server contract');
+  if (contract.price_status && !['fresh', 'entry_zone'].includes(String(contract.price_status).toLowerCase())) warnings.push(`price ${contract.price_status}`);
+  if (contract.ttl_status && String(contract.ttl_status).toLowerCase() !== 'active') warnings.push(`TTL ${contract.ttl_status}`);
+  const riskItems = Array.isArray(contract.risk_disclosures) ? contract.risk_disclosures.filter((i) => i.blocks_entry || ['critical', 'error'].includes(String(i.severity || '').toLowerCase())) : [];
+  if (riskItems.length) warnings.push(`${riskItems.length} blocking risk disclosure`);
+  if (action?.code === 'review_entry' && !warnings.length) return 'Вход не автоматический: оператор обязан проверить уровни, размер позиции и биржевой стакан вручную.';
+  return warnings.length ? warnings.join(' · ') : 'Критичных блокировок в контракте не найдено.';
+}
+
+function renderDecisionBriefPanel(s, d) {
+  const panel = $('decisionBriefPanel');
+  if (!panel) return;
+  const contract = contractFor(s);
+  const action = primaryNextActionFor(s, d);
+  panel.className = `panel decision-brief-panel ${cssToken(action.tone, 'reject')}`;
+  setText('decisionBriefAction', action.label);
+  setText('decisionBriefReason', action.reason);
+  setText('briefSymbol', s?.symbol || '—');
+  setText('briefDirection', String(contract.display_direction || contract.trade_direction || s?.direction || 'NO_TRADE').toUpperCase());
+  setText('briefEntry', priceFmt(contract.entry));
+  setText('briefStop', priceFmt(contract.stop_loss));
+  setText('briefTake', priceFmt(contract.take_profit));
+  setText('briefRr', riskRewardFmt(riskReward(s)));
+  setText('briefConfidence', confidenceScoreFor(s) === null ? '—' : `${confidenceScoreFor(s)}%`);
+  setText('briefTtl', ttlText(contract));
+  setText('briefWarnings', compactWarningText(s, action));
+  setText('nextActionChip', `Next ${action.label}`);
+  const chip = $('nextActionChip');
+  if (chip) chip.className = `market-chip next-action-chip ${cssToken(action.tone, 'neutral')}`;
+}
+
+function signalBreakdownHtml(contract) {
+  const breakdown = contract?.signal_breakdown || {};
+  const rows = Array.isArray(breakdown.items) ? breakdown.items : Array.isArray(breakdown.signals) ? breakdown.signals : [];
+  if (!rows.length) return '<div class="empty-state">Сервер не передал детализированную таблицу signal_breakdown.</div>';
+  return `<div class="details-table-wrap"><table class="details-table"><thead><tr><th>Фактор</th><th>TF</th><th>Статус</th><th>Значение</th><th>Комментарий</th></tr></thead><tbody>${rows.slice(0, 24).map((item) => `<tr class="${escapeHtml(cssToken(item.status || item.direction || 'neutral', 'neutral'))}"><td>${escapeHtml(item.title || item.name || item.code || 'signal')}</td><td>${escapeHtml(item.interval || item.timeframe || '—')}</td><td>${escapeHtml(item.status || item.direction || '—')}</td><td>${escapeHtml(fmt(item.value ?? item.score, 4))}</td><td>${escapeHtml(item.text || item.detail || item.reason || '')}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function similarHistoryHtml() {
+  if (state.similarHistoryLoading) return '<div class="empty-state">Загружаю историю похожих сигналов…</div>';
+  if (state.similarHistoryError) return `<div class="empty-state error">История недоступна: ${escapeHtml(state.similarHistoryError)}</div>`;
+  const rows = Array.isArray(state.similarHistory?.items) ? state.similarHistory.items : Array.isArray(state.similarHistory?.history) ? state.similarHistory.history : [];
+  if (!rows.length) return '<div class="empty-state">Похожих завершенных сигналов пока нет. Статистическую уверенность следует считать низкой.</div>';
+  return `<div class="details-table-wrap"><table class="details-table"><thead><tr><th>Дата</th><th>Symbol</th><th>Outcome</th><th>R</th><th>MFE</th><th>MAE</th></tr></thead><tbody>${rows.slice(0, 20).map((item) => `<tr><td>${escapeHtml(compactDateTime(item.created_at || item.evaluated_at))}</td><td>${escapeHtml(item.symbol || '—')}</td><td>${escapeHtml(item.outcome_status || item.status || '—')}</td><td>${fmt(item.realized_r, 2)}</td><td>${fmt(item.max_favorable_excursion_r, 2)}</td><td>${fmt(item.max_adverse_excursion_r, 2)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function detailTabsHtml(active) {
+  const tabs = [
+    ['summary', 'Сводка'], ['risk', 'Risk'], ['signals', 'Факторы'], ['history', 'История'],
+  ];
+  return `<div class="decision-detail-tabs" role="tablist">${tabs.map(([key, label]) => `<button type="button" class="context-tab ${active === key ? 'active' : ''}" data-decision-detail-tab="${key}" role="tab" aria-selected="${active === key ? 'true' : 'false'}">${label}</button>`).join('')}</div>`;
+}
+
+function renderDecisionDetailsDialog() {
+  const box = $('decisionDetailsBody');
+  if (!box) return;
+  const s = selectedCandidate();
+  const d = decisionFor(s);
+  const contract = contractFor(s);
+  const action = primaryNextActionFor(s, d);
+  const active = state.detailTab || 'summary';
+  if (!s) {
+    box.className = 'decision-details-body empty-state';
+    box.innerHTML = `${detailTabsHtml(active)}<p>Выберите рекомендацию из очереди. До этого вход запрещен.</p>`;
+    return;
+  }
+  const summary = `<section class="decision-detail-section"><h3>${escapeHtml(s.symbol)} · ${escapeHtml(action.label)}</h3><p>${escapeHtml(action.reason)}</p><div class="decision-brief-strip modal-strip"><div><span>Entry</span><b>${priceFmt(contract.entry)}</b></div><div><span>SL</span><b>${priceFmt(contract.stop_loss)}</b></div><div><span>TP</span><b>${priceFmt(contract.take_profit)}</b></div><div><span>R/R</span><b>${riskRewardFmt(riskReward(s))}</b></div><div><span>Confidence</span><b>${confidenceScoreFor(s) === null ? '—' : `${confidenceScoreFor(s)}%`}</b></div><div><span>TTL</span><b>${escapeHtml(ttlText(contract))}</b></div></div><p class="muted-line">${escapeHtml(contract.recommendation_explanation || s.operator_explanation || 'Расширенное объяснение отсутствует.')}</p></section>`;
+  const risk = `<section class="decision-detail-section"><h3>Risk / veto</h3>${contractHealthHtml(contract.contract_health)}${riskDisclosuresHtml(contract.risk_disclosures)}${marketContextHtml(contract.market_context)}</section>`;
+  const signals = `<section class="decision-detail-section"><h3>Сигналы и индикаторы</h3>${signalBreakdownHtml(contract)}<h4>Таймфреймы</h4>${timeframeListHtml(contract.timeframes || contract.used_timeframes)}<h4>Raw indicators</h4>${indicatorValuesHtml(contract.indicator_values || s.indicators || {})}</section>`;
+  const history = `<section class="decision-detail-section"><h3>История похожих сигналов</h3>${similarHistoryHtml()}<h4>Outcome contract</h4>${outcomeContractHtml(contract.outcome)}</section>`;
+  const body = { summary, risk, signals, history }[active] || summary;
+  box.className = `decision-details-body ${cssToken(action.tone, 'neutral')}`;
+  box.innerHTML = `${detailTabsHtml(active)}${body}`;
+}
+
+function openDecisionDetailsDialog() {
+  renderDecisionDetailsDialog();
+  const dialog = $('decisionDetailsDialog');
+  if (dialog?.showModal) dialog.showModal();
+  else scrollToElement('ticketBody');
 }
 
 function renderDecisionTelemetry(s, d) {
@@ -1707,7 +1826,9 @@ function renderDecision() {
   updateTopContext(s);
   renderDecisionMeters(s, d);
   renderDecisionTelemetry(s, d);
+  renderDecisionBriefPanel(s, d);
   renderExecutionMap(s);
+  renderDecisionDetailsDialog();
 
   renderTicket(s);
   renderChecklist(s);
@@ -2608,6 +2729,7 @@ function bindClick(id, handler) {
 function bindControls() {
   bindRawTableSorting();
   bindClick('refreshAllBtn', async () => runOperation('Обновление экрана', refreshAll));
+  bindClick('openDecisionDetailsBtn', openDecisionDetailsDialog);
   const refreshQueueBtn = $('refreshQueueBtn');
   if (refreshQueueBtn) refreshQueueBtn.addEventListener('click', async () => runOperation('Обновление очереди', async () => { await refreshRank(); await refreshSignals(); return { ok: true }; }));
 
@@ -2765,6 +2887,12 @@ function bindControls() {
   });
 
   document.addEventListener('click', async (event) => {
+    const detailTab = event.target.closest('[data-decision-detail-tab]');
+    if (detailTab) {
+      state.detailTab = detailTab.dataset.decisionDetailTab || 'summary';
+      renderDecisionDetailsDialog();
+      return;
+    }
     const button = event.target.closest('[data-operator-action]');
     if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') return;
     const action = button.dataset.operatorAction;
